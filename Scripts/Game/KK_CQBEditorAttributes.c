@@ -276,6 +276,7 @@ class KK_CQBConfigFileAttribute : SCR_BaseEditorAttribute
 
 		if (var.GetInt() == 0)
 		{
+			ApplyOpenAttributes(manager);
 			mode.KK_ExportConfig();
 			return;
 		}
@@ -285,6 +286,31 @@ class KK_CQBConfigFileAttribute : SCR_BaseEditorAttribute
 
 		mode.KK_ImportConfig();
 		RefreshOpenAttributes(manager);
+	}
+
+	protected void ApplyOpenAttributes(SCR_AttributesManagerEditorComponent manager)
+	{
+		if (!manager)
+			return;
+
+		array<Managed> items = {};
+		if (manager.GetEditedItems(items) == 0)
+			return;
+
+		array<SCR_BaseEditorAttribute> attributes = {};
+		manager.GetEditedAttributes(attributes);
+
+		foreach (SCR_BaseEditorAttribute attribute : attributes)
+		{
+			if (!attribute || attribute == this)
+				continue;
+
+			SCR_BaseEditorAttributeVar value = attribute.GetVariable();
+			if (!value)
+				continue;
+
+			attribute.WriteVariable(items[0], value, manager, 0);
+		}
 	}
 
 	protected void RefreshOpenAttributes(SCR_AttributesManagerEditorComponent manager)
