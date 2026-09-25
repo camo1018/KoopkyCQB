@@ -17,6 +17,7 @@ class KK_DoorAssist
 	protected static float s_Reach = 2;
 
 	protected static ref TraceParam s_Trace;
+	protected static IEntity s_TraceUser;
 	protected static ref map<AIAgent, ref KK_DoorSearchStamp> s_mStamps =
 		new map<AIAgent, ref KK_DoorSearchStamp>();
 
@@ -152,17 +153,42 @@ class KK_DoorAssist
 		if (!s_Trace)
 			s_Trace = new TraceParam();
 
+		s_TraceUser = user;
 		s_Trace.Flags = TraceFlags.ENTS | TraceFlags.WORLD;
 		s_Trace.Exclude = user;
 		s_Trace.Start = start;
 		s_Trace.End = start + (toTarget * s_Reach);
 
-		float result = world.TraceMove(s_Trace, null);
+		float result = world.TraceMove(s_Trace, FilterDoorTrace);
+		s_TraceUser = null;
 		if (result >= 0.98)
 			return false;
 
 		ConsiderDoor(s_Trace.TraceEnt);
 		return s_Door != null;
+	}
+
+	protected static bool FilterDoorTrace(
+		IEntity entity,
+		vector start = "0 0 0",
+		vector dir = "0 0 0")
+	{
+		IEntity current = entity;
+		int depth;
+
+		while (current && depth < 8)
+		{
+			if (current == s_TraceUser)
+				return false;
+
+			if (ChimeraCharacter.Cast(current))
+				return false;
+
+			current = current.GetParent();
+			depth++;
+		}
+
+		return true;
 	}
 
 	protected static void ConsiderDoor(IEntity entity)

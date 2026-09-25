@@ -30,6 +30,9 @@ modded class SCR_BaseGameMode
 	[Attribute("0.25", UIWidgets.EditBox, "Seconds before a blocked line of sight to the same point is traced again", category: "Koopky CQB/Clear")]
 	protected float m_fKK_SightRetry;
 
+	[Attribute("1", UIWidgets.CheckBox, "Leave a clear point as soon as the sight check marks it done", category: "Koopky CQB/Clear")]
+	protected bool m_bKK_StopWhenSeen;
+
 	[Attribute("45", UIWidgets.EditBox, "Movement timeout in seconds", category: "Koopky CQB/Clear")]
 	protected float m_fKK_ClearMovementTimeout;
 
@@ -120,17 +123,11 @@ modded class SCR_BaseGameMode
 
 	void KK_ExportConfig()
 	{
-		if (!Replication.IsServer())
-			return;
-
 		KK_WriteConfig();
 	}
 
 	void KK_ImportConfig()
 	{
-		if (!Replication.IsServer())
-			return;
-
 		SCR_JsonLoadContext context = new SCR_JsonLoadContext();
 		if (!context.LoadFromFile(KK_CONFIG_PATH))
 		{
@@ -161,6 +158,7 @@ modded class SCR_BaseGameMode
 			KK_ReadFloat(context, "ArrivalRadius", m_fKK_ClearArrivalRadius);
 			KK_ReadFloat(context, "SightVisitRange", m_fKK_SightVisitRange);
 			KK_ReadFloat(context, "SightRetry", m_fKK_SightRetry);
+			KK_ReadBool(context, "StopWhenSeen", m_bKK_StopWhenSeen);
 			KK_ReadFloat(context, "MovementTimeout", m_fKK_ClearMovementTimeout);
 			KK_ReadFloat(context, "StuckTimeout", m_fKK_ClearStuckTimeout);
 			KK_ReadInt(context, "MaximumRetries", m_iKK_ClearMaximumRetries);
@@ -248,6 +246,7 @@ modded class SCR_BaseGameMode
 		context.WriteValue("ArrivalRadius", m_fKK_ClearArrivalRadius);
 		context.WriteValue("SightVisitRange", m_fKK_SightVisitRange);
 		context.WriteValue("SightRetry", m_fKK_SightRetry);
+		context.WriteValue("StopWhenSeen", m_bKK_StopWhenSeen);
 		context.WriteValue("MovementTimeout", m_fKK_ClearMovementTimeout);
 		context.WriteValue("StuckTimeout", m_fKK_ClearStuckTimeout);
 		context.WriteValue("MaximumRetries", m_iKK_ClearMaximumRetries);
@@ -339,6 +338,11 @@ modded class SCR_BaseGameMode
 	float KK_GetSightRetry()
 	{
 		return Math.Max(m_fKK_SightRetry, 0);
+	}
+
+	bool KK_GetStopWhenSeen()
+	{
+		return m_bKK_StopWhenSeen;
 	}
 
 	float KK_GetClearMovementTimeout()
@@ -456,6 +460,7 @@ modded class SCR_BaseGameMode
 	void KK_SetClearArrivalRadius(float value) { m_fKK_ClearArrivalRadius = value; }
 	void KK_SetSightVisitRange(float value) { m_fKK_SightVisitRange = value; }
 	void KK_SetSightRetry(float value) { m_fKK_SightRetry = value; }
+	void KK_SetStopWhenSeen(bool value) { m_bKK_StopWhenSeen = value; }
 	void KK_SetClearMovementTimeout(float value) { m_fKK_ClearMovementTimeout = value; }
 	void KK_SetClearStuckTimeout(float value) { m_fKK_ClearStuckTimeout = value; }
 	void KK_SetClearMaximumRetries(int value) { m_iKK_ClearMaximumRetries = value; }

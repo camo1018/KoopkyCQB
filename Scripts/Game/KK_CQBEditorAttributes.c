@@ -149,6 +149,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 4: return mode.KK_GetDebugDraw();
 			case 5: return mode.KK_GetOpenDoors();
 			case 6: return mode.KK_GetSharpCombat();
+			case 7: return mode.KK_GetStopWhenSeen();
 		}
 
 		return mode.KK_GetGarrisonAfterClear();
@@ -164,6 +165,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 4: mode.KK_SetDebugDraw(value); break;
 			case 5: mode.KK_SetOpenDoors(value); break;
 			case 6: mode.KK_SetSharpCombat(value); break;
+			case 7: mode.KK_SetStopWhenSeen(value); break;
 			default: mode.KK_SetGarrisonAfterClear(value); break;
 		}
 	}
@@ -189,6 +191,8 @@ class KK_CQBAttrClearArrivalRadius : KK_CQBFloatEditorAttribute {}
 class KK_CQBAttrSightVisitRange : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrSightRetry : KK_CQBFloatEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrStopWhenSeen : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrClearMovementTimeout : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
@@ -233,8 +237,11 @@ class KK_CQBAttrDoorSearchDistance : KK_CQBFloatEditorAttribute {}
 class KK_CQBAttrDebugDraw : KK_CQBBoolEditorAttribute {}
 
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
-class KK_CQBExportConfigAttribute : SCR_BaseEditorAttribute
+class KK_CQBConfigFileAttribute : SCR_BaseEditorAttribute
 {
+	[Attribute()]
+	protected ref array<ref SCR_EditorAttributeFloatStringValueHolder> m_aValues;
+
 	override SCR_BaseEditorAttributeVar ReadVariable(
 		Managed item,
 		SCR_AttributesManagerEditorComponent manager)
@@ -242,52 +249,66 @@ class KK_CQBExportConfigAttribute : SCR_BaseEditorAttribute
 		if (!IsGameMode(item))
 			return null;
 
-		return SCR_BaseEditorAttributeVar.CreateBool(false);
+		return SCR_BaseEditorAttributeVar.CreateInt(-1);
 	}
 
-	override void WriteVariable(
-		Managed item,
+	override void UpdateInterlinkedVariables(
 		SCR_BaseEditorAttributeVar var,
 		SCR_AttributesManagerEditorComponent manager,
-		int playerID)
+		bool isInit = false)
 	{
-		if (!var || !var.GetBool())
+		super.UpdateInterlinkedVariables(var, manager, isInit);
+
+		if (isInit || !var)
 			return;
 
 		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
 		if (!mode)
 			return;
 
-		mode.KK_ExportConfig();
-	}
-}
-
-[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
-class KK_CQBImportConfigAttribute : SCR_BaseEditorAttribute
-{
-	override SCR_BaseEditorAttributeVar ReadVariable(
-		Managed item,
-		SCR_AttributesManagerEditorComponent manager)
-	{
-		if (!IsGameMode(item))
-			return null;
-
-		return SCR_BaseEditorAttributeVar.CreateBool(false);
-	}
-
-	override void WriteVariable(
-		Managed item,
-		SCR_BaseEditorAttributeVar var,
-		SCR_AttributesManagerEditorComponent manager,
-		int playerID)
-	{
-		if (!var || !var.GetBool())
+		if (var.GetInt() == 0)
+		{
+			mode.KK_ExportConfig();
 			return;
+		}
 
-		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
-		if (!mode)
+		if (var.GetInt() != 1)
 			return;
 
 		mode.KK_ImportConfig();
+		RefreshOpenAttributes(manager);
+	}
+
+	protected void RefreshOpenAttributes(SCR_AttributesManagerEditorComponent manager)
+	{
+		if (!manager)
+			return;
+
+		array<Managed> items = {};
+		if (manager.GetEditedItems(items) == 0)
+			return;
+
+		array<SCR_BaseEditorAttribute> attributes = {};
+		manager.GetEditedAttributes(attributes);
+
+		foreach (SCR_BaseEditorAttribute attribute : attributes)
+		{
+			if (!attribute || attribute == this)
+				continue;
+
+			SCR_BaseEditorAttributeVar value = attribute.ReadVariable(items[0], manager);
+			if (!value)
+				continue;
+
+			attribute.SetVariable(value);
+			attribute.TelegraphChange(false);
+		}
+	}
+
+	override int GetEntries(notnull array<ref SCR_BaseEditorAttributeEntry> outEntries)
+	{
+		outEntries.Insert(new SCR_EditorAttributePresetEntry(2, false));
+		outEntries.Insert(new SCR_BaseEditorAttributeFloatStringValues(m_aValues));
+		return outEntries.Count();
 	}
 }

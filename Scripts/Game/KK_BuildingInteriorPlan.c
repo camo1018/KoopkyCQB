@@ -277,8 +277,6 @@ bool EnsureNavmeshLoaded(
 	
 		const float HORIZONTAL_MARGIN = 0.6;
 		const float VERTICAL_MARGIN = 0.25;
-		const float BORDER_INSET = 1.0;
-		const float MAX_HORIZONTAL_SNAP = 0.55;
 	
 		vector projectionExtents = Vector(
 			0.55,
@@ -402,42 +400,11 @@ bool EnsureNavmeshLoaded(
 						continue;
 					}
 	
-					float snapX =
-						queryPosition[0] - correctedPosition[0];
-					float snapZ =
-						queryPosition[2] - correctedPosition[2];
-					float horizontalSnap = Math.Sqrt(
-						(snapX * snapX) + (snapZ * snapZ)
-					);
-	
-					// A large horizontal snap usually means the
-					// sample jumped through a wall onto exterior
-					// sidewalk or eave navmesh.
-					if (horizontalSnap > MAX_HORIZONTAL_SNAP)
-					{
-						rejectedCount++;
-						continue;
-					}
-	
 					vector reachablePoint;
 					if (!navmesh.GetReachablePoint(
 						correctedPosition,
 						1.5,
 						reachablePoint
-					))
-					{
-						rejectedCount++;
-						continue;
-					}
-	
-					if (!IsLikelyInterior(
-						world,
-						building,
-						correctedPosition,
-						correctedLocal,
-						mins,
-						maxs,
-						BORDER_INSET
 					))
 					{
 						rejectedCount++;
@@ -549,20 +516,6 @@ bool EnsureNavmeshLoaded(
 		return true;
 	}	
 
-	protected bool IsInsetFromBounds(
-		vector point,
-		vector mins,
-		vector maxs,
-		float inset)
-	{
-		return point[0] >= mins[0] + inset &&
-			point[0] <= maxs[0] - inset &&
-			point[1] >= mins[1] - 0.2 &&
-			point[1] <= maxs[1] + 0.2 &&
-			point[2] >= mins[2] + inset &&
-			point[2] <= maxs[2] - inset;
-	}
-
 	protected void ExpandBoundsToEntitySize(
 		notnull IEntity building,
 		out vector mins,
@@ -593,151 +546,6 @@ bool EnsureNavmeshLoaded(
 		maxs[0] = Math.Max(maxs[0], Math.Max(cornerA[0], cornerB[0]));
 		maxs[1] = Math.Max(maxs[1], Math.Max(topLocal[1], bottomLocal[1]));
 		maxs[2] = Math.Max(maxs[2], Math.Max(cornerA[2], cornerB[2]));
-	}
-
-	protected bool IsLikelyInterior(
-		BaseWorld world,
-		notnull BaseBuilding building,
-		vector worldPosition,
-		vector localPosition,
-		vector mins,
-		vector maxs,
-		float borderInset)
-	{
-		bool enclosed = IsEnclosedByWalls(world, worldPosition);
-
-		// Stairwells sit against outer walls. Keep a smaller inset
-		// once the point is clearly enclosed.
-		float inset = borderInset;
-		if (enclosed)
-			inset = 0.35;
-
-		if (!IsInsetFromBounds(
-			localPosition,
-			mins,
-			maxs,
-			inset
-		))
-		{
-			return false;
-		}
-
-		if (IsOutsideAgainstWall(
-			world,
-			building,
-			worldPosition
-		))
-		{
-			return false;
-		}
-
-		if (enclosed)
-			return HasOverheadStructure(worldPosition, 8.0, false);
-
-		return HasOverheadStructure(worldPosition, 3.6, true);
-	}
-
-	protected bool IsOutsideAgainstWall(
-		BaseWorld world,
-		notnull BaseBuilding building,
-		vector worldPosition)
-	{
-		if (!world)
-			return true;
-
-		const float TOWARD_WALL = 1.0;
-		const float OPEN_YARD = 3.0;
-
-		vector start =
-			worldPosition + Vector(0, 1.1, 0);
-
-		vector center =
-			SCR_EntityHelper.GetEntityCenterWorld(building);
-		center[1] = start[1];
-
-		vector toCenter = center - start;
-		toCenter[1] = 0;
-
-		if (toCenter.Length() < 0.2)
-			return false;
-
-		toCenter.Normalize();
-
-		// Outside the facade: the exterior wall is immediately
-		// toward the building, and the opposite direction is open
-		// yard. Inside, the near wall is behind you.
-		float towardDistance = HorizontalTraceDistance(
-			world,
-			start,
-			toCenter,
-			TOWARD_WALL + 0.15
-		);
-
-		if (towardDistance >= TOWARD_WALL)
-			return false;
-
-		float awayDistance = HorizontalTraceDistance(
-			world,
-			start,
-			-toCenter,
-			OPEN_YARD
-		);
-
-		return awayDistance >= OPEN_YARD;
-	}
-
-	protected float HorizontalTraceDistance(
-		BaseWorld world,
-		vector start,
-		vector direction,
-		float distance)
-	{
-		autoptr TraceParam trace = new TraceParam();
-		trace.Flags = TraceFlags.ENTS | TraceFlags.WORLD;
-		trace.Start = start;
-		trace.End = start + (direction * distance);
-
-		float result = world.TraceMove(trace, null);
-		return result * distance;
-	}
-
-	protected bool IsEnclosedByWalls(
-		BaseWorld world,
-		vector worldPosition)
-	{
-		if (!world)
-			return false;
-
-		vector start =
-			worldPosition + Vector(0, 1.15, 0);
-
-		int hitCount;
-		float angle;
-
-		while (angle < 360.0)
-		{
-			float radians = angle * 0.0174533;
-			vector direction = Vector(
-				Math.Sin(radians),
-				0,
-				Math.Cos(radians)
-			);
-
-			autoptr TraceParam trace = new TraceParam();
-			trace.Flags = TraceFlags.ENTS | TraceFlags.WORLD;
-			trace.Start = start;
-			trace.End = start + (direction * 8.0);
-
-			float result = world.TraceMove(trace, null);
-			float hitDistance = result * 8.0;
-
-			if (result < 1.0 && hitDistance >= 0.25)
-				hitCount++;
-
-			angle += 45.0;
-		}
-
-		return hitCount >= 2;
 	}
 
 	protected bool ContainsNearbyTarget(
@@ -1198,34 +1006,6 @@ bool EnsureNavmeshLoaded(
 		}
 	}
 	
-	protected bool HasOverheadStructure(
-		vector position,
-		float maximumHeight = 3.6,
-		bool requireTypicalRoom = true)
-	{
-		BaseWorld world = GetGame().GetWorld();
-		if (!world)
-			return false;
-	
-		autoptr TraceParam trace = new TraceParam();
-		trace.Flags = TraceFlags.ENTS | TraceFlags.WORLD;
-		trace.Start = position + Vector(0, 0.4, 0);
-		trace.End = position + Vector(0, maximumHeight, 0);
-	
-		float result = world.TraceMove(trace, null);
-		if (result >= 1.0)
-			return false;
-
-		float ceilingHeight = result * maximumHeight;
-		if (ceilingHeight < 1.6)
-			return false;
-
-		if (requireTypicalRoom)
-			return ceilingHeight <= 3.5;
-
-		return true;
-	}
-
 	KK_InteriorTarget GetNextPendingTarget()
 	{
 		foreach (KK_InteriorTarget target : m_aTargets)

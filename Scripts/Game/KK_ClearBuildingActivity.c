@@ -53,6 +53,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 	protected ref array<ref Shape> m_aDebugShapes = {};
 	protected ref TraceParam m_SightTrace;
+	protected IEntity m_SightViewer;
 
 	protected bool m_bPlanReady;
 	protected bool m_bFinished;
@@ -146,6 +147,9 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		if (m_bFinished || m_bCancelled)
 			return 0;
 
+		// Arrival can put a unit on a node in this pass. Mark what
+		// that position can see before the next move turns them away.
+		MarkSeenTargets(currentTime);
 		FillAvailableAssignments(currentTime);
 
 		if (
@@ -739,6 +743,14 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			if (!IsTargetVisibleToSquad(target, agents, currentTime, sightRetryMs))
 				continue;
 
+			if (
+				!StopWhenSeen() &&
+				target.m_eState == KK_EInteriorTargetState.ACTIVE
+			)
+			{
+				continue;
+			}
+
 			target.m_eState =
 				KK_EInteriorTargetState.VISITED;
 
@@ -822,12 +834,14 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		if (!m_SightTrace)
 			m_SightTrace = new TraceParam();
 
+		m_SightViewer = viewer;
 		m_SightTrace.Flags = TraceFlags.ENTS | TraceFlags.WORLD;
 		m_SightTrace.Exclude = viewer;
 		m_SightTrace.Start = eyePosition;
 		m_SightTrace.End = aimPosition;
 
-		float result = world.TraceMove(m_SightTrace, null);
+		float result = world.TraceMove(m_SightTrace, FilterSightTrace);
+		m_SightViewer = null;
 		if (result >= 0.99)
 			return true;
 
@@ -836,6 +850,29 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 		target.m_mSightMissAt.Set(agent, currentTime);
 		return false;
+	}
+
+	protected bool FilterSightTrace(
+		IEntity entity,
+		vector start = "0 0 0",
+		vector dir = "0 0 0")
+	{
+		IEntity current = entity;
+		int depth;
+
+		while (current && depth < 8)
+		{
+			if (current == m_SightViewer)
+				return false;
+
+			if (ChimeraCharacter.Cast(current))
+				return false;
+
+			current = current.GetParent();
+			depth++;
+		}
+
+		return true;
 	}
 
 	protected bool IsInFieldOfView(
@@ -1106,6 +1143,15 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			return KK_AgentMove.SIGHT_VISIT_RANGE;
 
 		return mode.KK_GetSightVisitRange();
+	}
+
+	protected bool StopWhenSeen()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return true;
+
+		return mode.KK_GetStopWhenSeen();
 	}
 
 	protected bool HasWaypointBesides(
