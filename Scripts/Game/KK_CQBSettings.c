@@ -832,8 +832,7 @@ class KK_SquadCollision
 				saved.m_aGeomMasks.Insert(mask);
 		}
 
-		if (BlocksCharacters(physics))
-			physics.SetInteractionLayer(EPhysicsLayerDefs.CharNoCollide);
+		physics.SetInteractionLayer(EPhysicsLayerDefs.CharNoCollide);
 
 		int savedCount = saved.m_aGeomMasks.Count();
 		if (savedCount < geomCount)
@@ -841,7 +840,11 @@ class KK_SquadCollision
 
 		for (i = 0; i < geomCount; i++)
 		{
-			int stripped = WithoutCharacters(saved.m_aGeomMasks[i]);
+			int original = saved.m_aGeomMasks[i];
+			if ((original & EPhysicsLayerDefs.FireGeometry) == 0)
+				continue;
+
+			int stripped = WithoutCharacters(original);
 			if (stripped != physics.GetGeomInteractionLayer(i))
 				physics.SetGeomInteractionLayer(i, stripped);
 		}
