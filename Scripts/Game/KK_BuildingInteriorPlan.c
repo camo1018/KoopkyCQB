@@ -1728,7 +1728,9 @@ bool EnsureNavmeshLoaded(
 		if (material.IsEmpty())
 			return false;
 
-		return material.ToLower().Contains("glass");
+		string lower = material;
+		lower.ToLower();
+		return lower.Contains("glass");
 	}
 
 	protected void KeepClosestOpening(float edgeMargin)
