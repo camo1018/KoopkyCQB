@@ -781,6 +781,19 @@ class KK_SquadCollision
 	{
 		int previous = physics.GetInteractionLayer();
 		int next = WithoutCharacters(previous);
+		if ((next & EPhysicsLayerDefs.FireGeometry) == 0)
+		{
+			int savedCount = saved.m_aGeomMasks.Count();
+			for (int n = 0; n < savedCount; n++)
+			{
+				if ((saved.m_aGeomMasks[n] & EPhysicsLayerDefs.FireGeometry) == 0)
+					continue;
+
+				next |= EPhysicsLayerDefs.FireGeometry;
+				break;
+			}
+		}
+
 		if (next != previous)
 			physics.SetInteractionLayer(next);
 
@@ -795,9 +808,6 @@ class KK_SquadCollision
 			if (stripped != mask)
 				physics.SetGeomInteractionLayer(i, stripped);
 		}
-
-		if (BlocksCharacters(physics))
-			physics.SetInteractionLayer(EPhysicsLayerDefs.CharNoCollide);
 
 		saved.m_iAppliedMask = physics.GetInteractionLayer();
 
@@ -848,8 +858,10 @@ class KK_SquadCollision
 
 	protected static int WithoutCharacters(int mask)
 	{
+		int fire = mask & EPhysicsLayerDefs.FireGeometry;
+
 		if (IsCharacterLayer(mask))
-			return EPhysicsLayerDefs.CharNoCollide;
+			return EPhysicsLayerDefs.CharNoCollide | fire;
 
 		int characterBits =
 			EPhysicsLayerDefs.Character | EPhysicsLayerDefs.CharacterAI;
@@ -858,11 +870,12 @@ class KK_SquadCollision
 			return mask;
 
 		mask &= ~characterBits;
+		mask |= fire;
 		if ((EPhysicsLayerDefs.CharNoCollide & characterBits) == 0)
 			mask |= EPhysicsLayerDefs.CharNoCollide;
 
 		if (mask == 0)
-			return EPhysicsLayerDefs.CharNoCollide;
+			return EPhysicsLayerDefs.CharNoCollide | fire;
 
 		return mask;
 	}
