@@ -15,6 +15,9 @@ modded class SCR_BaseGameMode
 	[Attribute("0", UIWidgets.CheckBox, "Drop interior points that are not walk-connected to the squad, including upper floors", category: "Koopky CQB/Interior")]
 	protected bool m_bKK_FilterUnreachableIslands;
 
+	[Attribute("1", UIWidgets.CheckBox, "Drop points on grass, dirt, and other open ground. Floors, balconies, and roofs stay.", category: "Koopky CQB/Interior")]
+	protected bool m_bKK_FilterBuildingSurfaces;
+
 	[Attribute("1", UIWidgets.CheckBox, "Garrison after the last clear", category: "Koopky CQB/Clear")]
 	protected bool m_bKK_GarrisonAfterClear;
 
@@ -154,6 +157,7 @@ modded class SCR_BaseGameMode
 			KK_ReadFloat(context, "DeduplicateDistance", m_fKK_DeduplicateDistance);
 			KK_ReadFloat(context, "ClusterRadius", m_fKK_ClusterRadius);
 			KK_ReadBool(context, "FilterUnreachableIslands", m_bKK_FilterUnreachableIslands);
+			KK_ReadBool(context, "FilterBuildingSurfaces", m_bKK_FilterBuildingSurfaces);
 			context.EndObject();
 		}
 
@@ -246,6 +250,7 @@ modded class SCR_BaseGameMode
 		context.WriteValue("DeduplicateDistance", m_fKK_DeduplicateDistance);
 		context.WriteValue("ClusterRadius", m_fKK_ClusterRadius);
 		context.WriteValue("FilterUnreachableIslands", m_bKK_FilterUnreachableIslands);
+		context.WriteValue("FilterBuildingSurfaces", m_bKK_FilterBuildingSurfaces);
 		context.EndObject();
 
 		context.StartObject("Clear");
@@ -323,6 +328,11 @@ modded class SCR_BaseGameMode
 	bool KK_GetFilterUnreachableIslands()
 	{
 		return m_bKK_FilterUnreachableIslands;
+	}
+
+	bool KK_GetFilterBuildingSurfaces()
+	{
+		return m_bKK_FilterBuildingSurfaces;
 	}
 
 	bool KK_GetGarrisonAfterClear()
@@ -475,6 +485,7 @@ modded class SCR_BaseGameMode
 	void KK_SetDeduplicateDistance(float value) { m_fKK_DeduplicateDistance = value; }
 	void KK_SetClusterRadius(float value) { m_fKK_ClusterRadius = value; }
 	void KK_SetFilterUnreachableIslands(bool value) { m_bKK_FilterUnreachableIslands = value; }
+	void KK_SetFilterBuildingSurfaces(bool value) { m_bKK_FilterBuildingSurfaces = value; }
 	void KK_SetGarrisonAfterClear(bool value) { m_bKK_GarrisonAfterClear = value; }
 	void KK_SetClearSearchRadius(float value) { m_fKK_ClearSearchRadius = value; }
 	void KK_SetClearArrivalRadius(float value) { m_fKK_ClearArrivalRadius = value; }

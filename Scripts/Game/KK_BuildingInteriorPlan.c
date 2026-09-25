@@ -7,6 +7,14 @@ enum KK_EInteriorTargetState
 	DEFERRED
 }
 
+enum KK_ESurfaceVerdict
+{
+	BUILDING,
+	COVERED,
+	NATURAL,
+	OPEN
+}
+
 class KK_InteriorTarget
 {
 	vector m_vPosition;
@@ -156,6 +164,13 @@ class KK_BuildingInteriorPlan
 	protected ref array<ref KK_InteriorTarget> m_aTargets = {};
 	protected ref array<ref KK_InteriorCluster> m_aClusters = {};
 
+	protected ref TraceParam m_SurfaceTrace;
+	protected int m_iSurfaceBuilding;
+	protected int m_iSurfaceCovered;
+	protected int m_iSurfaceNatural;
+	protected int m_iSurfaceOpen;
+	protected ref array<string> m_aNotedMaterials;
+
 	BaseBuilding GetBuilding()
 	{
 		return m_Building;
@@ -233,7 +248,8 @@ bool EnsureNavmeshLoaded(
 		float verticalSpacing = 1.5,
 		float deduplicateDistance = 1.25,
 		float clusterRadius = 4.0,
-		bool filterUnreachableIslands = false)
+		bool filterUnreachableIslands = false,
+		bool filterBuildingSurfaces = true)
 	{
 		m_Building = building;
 		m_aTargets.Clear();
@@ -300,6 +316,12 @@ bool EnsureNavmeshLoaded(
 		int testedCount;
 		int projectedCount;
 		int rejectedCount;
+
+		m_iSurfaceBuilding = 0;
+		m_iSurfaceCovered = 0;
+		m_iSurfaceNatural = 0;
+		m_iSurfaceOpen = 0;
+		m_aNotedMaterials = {};
 	
 		BaseWorld world = GetGame().GetWorld();
 	
@@ -400,6 +422,19 @@ bool EnsureNavmeshLoaded(
 						rejectedCount++;
 						continue;
 					}
+
+					if (
+						filterBuildingSurfaces &&
+						!KeepBuildingSurface(
+							world,
+							building,
+							correctedPosition
+						)
+					)
+					{
+						rejectedCount++;
+						continue;
+					}
 	
 					vector reachablePoint;
 					if (!navmesh.GetReachablePoint(
@@ -446,6 +481,9 @@ bool EnsureNavmeshLoaded(
 			localY += verticalSpacing;
 		}
 	
+		if (filterBuildingSurfaces)
+			PrintSurfaceFilter();
+
 		if (m_aTargets.IsEmpty())
 		{
 			PrintFormat(
@@ -594,6 +632,229 @@ bool EnsureNavmeshLoaded(
 	
 		floorPosition[1] = floorPosition[1] + 0.15;
 		return floorPosition;
+	}
+
+	protected bool KeepBuildingSurface(
+		BaseWorld world,
+		notnull IEntity building,
+		vector position)
+	{
+		KK_ESurfaceVerdict verdict = ClassifySurface(
+			world,
+			building,
+			position
+		);
+
+		if (verdict == KK_ESurfaceVerdict.BUILDING)
+		{
+			m_iSurfaceBuilding++;
+			return true;
+		}
+
+		if (verdict == KK_ESurfaceVerdict.COVERED)
+		{
+			m_iSurfaceCovered++;
+			return true;
+		}
+
+		if (verdict == KK_ESurfaceVerdict.NATURAL)
+			m_iSurfaceNatural++;
+		else
+			m_iSurfaceOpen++;
+
+		return false;
+	}
+
+	protected KK_ESurfaceVerdict ClassifySurface(
+		BaseWorld world,
+		notnull IEntity building,
+		vector position)
+	{
+		if (!world)
+			return KK_ESurfaceVerdict.BUILDING;
+
+		float fraction = TraceVertical(
+			world,
+			position + Vector(0, 0.45, 0),
+			position - Vector(0, 0.8, 0)
+		);
+
+		if (fraction >= 1.0)
+			return KK_ESurfaceVerdict.OPEN;
+
+		if (m_SurfaceTrace.TraceEnt)
+		{
+			if (StandsOnBuilding(m_SurfaceTrace.TraceEnt, building))
+				return KK_ESurfaceVerdict.BUILDING;
+
+			return KK_ESurfaceVerdict.OPEN;
+		}
+
+		string material = m_SurfaceTrace.TraceMaterial;
+		if (MaterialIsNatural(material))
+			return KK_ESurfaceVerdict.NATURAL;
+
+		NoteTerrainMaterial(material, SurfaceSignal(m_SurfaceTrace.SurfaceProps));
+
+		if (HasBuildingOverhead(world, building, position))
+			return KK_ESurfaceVerdict.COVERED;
+
+		return KK_ESurfaceVerdict.OPEN;
+	}
+
+	protected bool StandsOnBuilding(IEntity hit, notnull IEntity building)
+	{
+		if (!hit)
+			return false;
+
+		if (hit == building)
+			return true;
+
+		BaseBuilding hitBuilding =
+			KK_BuildingResolver.ResolveBuildingRoot(hit);
+
+		return hitBuilding == building;
+	}
+
+	protected bool HasBuildingOverhead(
+		BaseWorld world,
+		notnull IEntity building,
+		vector position)
+	{
+		float fraction = TraceVertical(
+			world,
+			position + Vector(0, 0.3, 0),
+			position + Vector(0, 4.0, 0)
+		);
+
+		if (fraction >= 1.0 || !m_SurfaceTrace.TraceEnt)
+			return false;
+
+		return StandsOnBuilding(m_SurfaceTrace.TraceEnt, building);
+	}
+
+	protected float TraceVertical(
+		BaseWorld world,
+		vector from,
+		vector to)
+	{
+		if (!m_SurfaceTrace)
+			m_SurfaceTrace = new TraceParam();
+
+		m_SurfaceTrace.Flags = TraceFlags.ENTS | TraceFlags.WORLD;
+		m_SurfaceTrace.Exclude = null;
+		m_SurfaceTrace.TraceEnt = null;
+		m_SurfaceTrace.Start = from;
+		m_SurfaceTrace.End = to;
+
+		return world.TraceMove(m_SurfaceTrace, FilterSurfaceTrace);
+	}
+
+	protected bool FilterSurfaceTrace(
+		IEntity entity,
+		vector start = "0 0 0",
+		vector dir = "0 0 0")
+	{
+		if (ChimeraCharacter.Cast(entity))
+			return false;
+
+		return true;
+	}
+
+	protected bool MaterialIsNatural(string material)
+	{
+		if (material.IsEmpty())
+			return false;
+
+		string lower = material.ToLower();
+		return lower.Contains("grass") ||
+			lower.Contains("dirt") ||
+			lower.Contains("soil") ||
+			lower.Contains("mud") ||
+			lower.Contains("earth") ||
+			lower.Contains("forest") ||
+			lower.Contains("meadow") ||
+			lower.Contains("sand") ||
+			lower.Contains("gravel") ||
+			lower.Contains("clay") ||
+			lower.Contains("moss");
+	}
+
+	protected int SurfaceSignal(SurfaceProperties properties)
+	{
+		GameMaterial material = GameMaterial.Cast(properties);
+		if (!material)
+			return -1;
+
+		SoundInfo info = material.GetSoundInfo();
+		if (!info)
+			return -1;
+
+		return info.GetSignalValue();
+	}
+
+	protected void NoteTerrainMaterial(string material, int signal)
+	{
+		if (MaterialIsBuilt(material))
+			return;
+
+		if (!m_aNotedMaterials)
+			m_aNotedMaterials = {};
+
+		string note = material;
+		if (note.IsEmpty())
+			note = "(empty)";
+
+		note = string.Format("%1 signal=%2", note, signal);
+		if (m_aNotedMaterials.Contains(note))
+			return;
+
+		if (m_aNotedMaterials.Count() >= 8)
+			return;
+
+		m_aNotedMaterials.Insert(note);
+	}
+
+	protected bool MaterialIsBuilt(string material)
+	{
+		if (material.IsEmpty())
+			return false;
+
+		string lower = material.ToLower();
+		return lower.Contains("concrete") ||
+			lower.Contains("cement") ||
+			lower.Contains("asphalt") ||
+			lower.Contains("tarmac") ||
+			lower.Contains("paving") ||
+			lower.Contains("tile") ||
+			lower.Contains("wood") ||
+			lower.Contains("timber") ||
+			lower.Contains("metal") ||
+			lower.Contains("brick") ||
+			lower.Contains("stone") ||
+			lower.Contains("carpet");
+	}
+
+	protected void PrintSurfaceFilter()
+	{
+		PrintFormat(
+			"KK: Surface filter building=%1 coveredTerrain=%2 natural=%3 open=%4",
+			m_iSurfaceBuilding,
+			m_iSurfaceCovered,
+			m_iSurfaceNatural,
+			m_iSurfaceOpen
+		);
+
+		if (!m_aNotedMaterials)
+			return;
+
+		foreach (string material : m_aNotedMaterials)
+		{
+			PrintFormat(
+				"KK: Unclassified terrain material %1",
+				material
+			);
+		}
 	}
 
 	protected bool KeepReachableIsland(notnull SCR_AIGroup group)

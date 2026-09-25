@@ -154,6 +154,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 5: return mode.KK_GetOpenDoors();
 			case 6: return mode.KK_GetSharpCombat();
 			case 7: return mode.KK_GetStopWhenSeen();
+			case 8: return mode.KK_GetFilterBuildingSurfaces();
 		}
 
 		return mode.KK_GetGarrisonAfterClear();
@@ -170,6 +171,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 5: mode.KK_SetOpenDoors(value); break;
 			case 6: mode.KK_SetSharpCombat(value); break;
 			case 7: mode.KK_SetStopWhenSeen(value); break;
+			case 8: mode.KK_SetFilterBuildingSurfaces(value); break;
 			default: mode.KK_SetGarrisonAfterClear(value); break;
 		}
 	}
@@ -185,6 +187,8 @@ class KK_CQBAttrDeduplicateDistance : KK_CQBFloatEditorAttribute {}
 class KK_CQBAttrClusterRadius : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrFilterUnreachableIslands : KK_CQBBoolEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrFilterBuildingSurfaces : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrGarrisonAfterClear : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]

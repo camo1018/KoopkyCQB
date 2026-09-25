@@ -231,7 +231,8 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				m_GarrisonWaypoint.GetVerticalSpacing(),
 				m_GarrisonWaypoint.GetDeduplicateDistance(),
 				m_GarrisonWaypoint.GetClusterRadius(),
-				GetFilterUnreachableIslands()
+				GetFilterUnreachableIslands(),
+				GetFilterBuildingSurfaces()
 			))
 			{
 				break;
@@ -893,6 +894,15 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			return false;
 
 		return mode.KK_GetFilterUnreachableIslands();
+	}
+
+	protected bool GetFilterBuildingSurfaces()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return true;
+
+		return mode.KK_GetFilterBuildingSurfaces();
 	}
 
 	protected EMovementType GetApproachSpeed(vector worldPosition)

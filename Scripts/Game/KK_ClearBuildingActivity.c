@@ -253,7 +253,8 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				m_ClearWaypoint.GetVerticalSpacing(),
 				m_ClearWaypoint.GetDeduplicateDistance(),
 				m_ClearWaypoint.GetClusterRadius(),
-				GetFilterUnreachableIslands()
+				GetFilterUnreachableIslands(),
+				GetFilterBuildingSurfaces()
 			))
 			{
 				break;
@@ -1259,6 +1260,15 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			return false;
 
 		return mode.KK_GetFilterUnreachableIslands();
+	}
+
+	protected bool GetFilterBuildingSurfaces()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return true;
+
+		return mode.KK_GetFilterBuildingSurfaces();
 	}
 
 	protected float GetSightVisitRange()
