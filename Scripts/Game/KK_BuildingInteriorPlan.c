@@ -766,7 +766,8 @@ bool EnsureNavmeshLoaded(
 		if (material.IsEmpty())
 			return false;
 
-		string lower = material.ToLower();
+		string lower = material;
+		lower.ToLower();
 		return lower.Contains("grass") ||
 			lower.Contains("dirt") ||
 			lower.Contains("soil") ||
@@ -820,7 +821,8 @@ bool EnsureNavmeshLoaded(
 		if (material.IsEmpty())
 			return false;
 
-		string lower = material.ToLower();
+		string lower = material;
+		lower.ToLower();
 		return lower.Contains("concrete") ||
 			lower.Contains("cement") ||
 			lower.Contains("asphalt") ||

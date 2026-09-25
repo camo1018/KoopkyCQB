@@ -1,3 +1,11 @@
+enum KK_EClearSpareMode
+{
+	STACK,
+	PREVIOUS_ROOM,
+	STAGE_NEXT,
+	FREE_PAIRS
+}
+
 modded class SCR_BaseGameMode
 {
 	[Attribute("2.5", UIWidgets.EditBox, "Horizontal sample spacing", category: "Koopky CQB/Interior")]
@@ -20,6 +28,9 @@ modded class SCR_BaseGameMode
 
 	[Attribute("1", UIWidgets.CheckBox, "Garrison after the last clear", category: "Koopky CQB/Clear")]
 	protected bool m_bKK_GarrisonAfterClear;
+
+	[Attribute("3", UIWidgets.ComboBox, "What spare soldiers do while a pair clears a room", "", ParamEnumArray.FromEnum(KK_EClearSpareMode))]
+	protected KK_EClearSpareMode m_eKK_ClearSpareMode;
 
 	[Attribute("75", UIWidgets.EditBox, "Building search radius", category: "Koopky CQB/Clear")]
 	protected float m_fKK_ClearSearchRadius;
@@ -197,6 +208,9 @@ modded class SCR_BaseGameMode
 			KK_ReadInt(context, "MaximumRetries", m_iKK_ClearMaximumRetries);
 			KK_ReadInt(context, "DeferRetries", m_iKK_ClearDeferRetries);
 			KK_ReadBool(context, "FailCluster", m_bKK_ClearFailCluster);
+			int spareMode = m_eKK_ClearSpareMode;
+			KK_ReadInt(context, "SpareMode", spareMode);
+			m_eKK_ClearSpareMode = KK_ClampSpareMode(spareMode);
 			context.EndObject();
 		}
 
@@ -309,6 +323,7 @@ modded class SCR_BaseGameMode
 		context.WriteValue("MaximumRetries", m_iKK_ClearMaximumRetries);
 		context.WriteValue("DeferRetries", m_iKK_ClearDeferRetries);
 		context.WriteValue("FailCluster", m_bKK_ClearFailCluster);
+		context.WriteValue("SpareMode", m_eKK_ClearSpareMode);
 		context.EndObject();
 
 		context.StartObject("Garrison");
@@ -542,6 +557,24 @@ modded class SCR_BaseGameMode
 	void KK_SetClearMaximumRetries(int value) { m_iKK_ClearMaximumRetries = value; }
 	void KK_SetClearDeferRetries(int value) { m_iKK_ClearDeferRetries = value; }
 	void KK_SetClearFailCluster(bool value) { m_bKK_ClearFailCluster = value; }
+
+	int KK_GetClearSpareMode()
+	{
+		return KK_ClampSpareMode(m_eKK_ClearSpareMode);
+	}
+
+	void KK_SetClearSpareMode(int value)
+	{
+		m_eKK_ClearSpareMode = KK_ClampSpareMode(value);
+	}
+
+	protected KK_EClearSpareMode KK_ClampSpareMode(int value)
+	{
+		if (value < 0 || value > KK_EClearSpareMode.FREE_PAIRS)
+			return KK_EClearSpareMode.FREE_PAIRS;
+
+		return value;
+	}
 	void KK_SetGarrisonSearchRadius(float value) { m_fKK_GarrisonSearchRadius = value; }
 	void KK_SetGarrisonArrivalRadius(float value) { m_fKK_GarrisonArrivalRadius = value; }
 	void KK_SetHoldRadius(float value) { m_fKK_HoldRadius = value; }
