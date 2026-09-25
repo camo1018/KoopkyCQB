@@ -107,8 +107,11 @@ modded class SCR_BaseGameMode
 	[Attribute("1", UIWidgets.CheckBox, "Open a closed door in front of a clear or garrison move", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_OpenDoors;
 
-	[Attribute("0", UIWidgets.CheckBox, "Enable AI navigation improvements (experimental)", category: "Koopky CQB/Combat")]
+	[Attribute("0", UIWidgets.CheckBox, "Enable AI navigation improvements (Experimental)", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_NavImprovements;
+
+	[Attribute("0", UIWidgets.CheckBox, "While clearing or garrisoning, squad members pass through other characters", category: "Koopky CQB/Combat")]
+	protected bool m_bKK_IgnoreSquadCollision;
 
 	[Attribute("2", UIWidgets.EditBox, "How far ahead a door is searched, in metres", category: "Koopky CQB/Combat")]
 	protected float m_fKK_DoorReach;
@@ -239,6 +242,7 @@ modded class SCR_BaseGameMode
 			KK_ReadFloat(context, "PerceptionFactor", m_fKK_PerceptionFactor);
 			KK_ReadBool(context, "OpenDoors", m_bKK_OpenDoors);
 			KK_ReadBool(context, "NavImprovements", m_bKK_NavImprovements);
+			KK_ReadBool(context, "IgnoreSquadCollision", m_bKK_IgnoreSquadCollision);
 			KK_ReadFloat(context, "DoorReach", m_fKK_DoorReach);
 			KK_ReadFloat(context, "DoorSearchInterval", m_fKK_DoorSearchInterval);
 			KK_ReadFloat(context, "DoorSearchDistance", m_fKK_DoorSearchDistance);
@@ -349,6 +353,7 @@ modded class SCR_BaseGameMode
 		context.WriteValue("PerceptionFactor", m_fKK_PerceptionFactor);
 		context.WriteValue("OpenDoors", m_bKK_OpenDoors);
 		context.WriteValue("NavImprovements", m_bKK_NavImprovements);
+		context.WriteValue("IgnoreSquadCollision", m_bKK_IgnoreSquadCollision);
 		context.WriteValue("DoorReach", m_fKK_DoorReach);
 		context.WriteValue("DoorSearchInterval", m_fKK_DoorSearchInterval);
 		context.WriteValue("DoorSearchDistance", m_fKK_DoorSearchDistance);
@@ -529,6 +534,11 @@ modded class SCR_BaseGameMode
 		return m_bKK_NavImprovements;
 	}
 
+	bool KK_GetIgnoreSquadCollision()
+	{
+		return m_bKK_IgnoreSquadCollision;
+	}
+
 	float KK_GetDoorReach()
 	{
 		return Math.Max(m_fKK_DoorReach, 0.25);
@@ -600,10 +610,267 @@ modded class SCR_BaseGameMode
 	void KK_SetPerceptionFactor(float value) { m_fKK_PerceptionFactor = value; }
 	void KK_SetOpenDoors(bool value) { m_bKK_OpenDoors = value; }
 	void KK_SetNavImprovements(bool value) { m_bKK_NavImprovements = value; }
+	void KK_SetIgnoreSquadCollision(bool value) { m_bKK_IgnoreSquadCollision = value; }
 	void KK_SetDoorReach(float value) { m_fKK_DoorReach = value; }
 	void KK_SetDoorSearchInterval(float value) { m_fKK_DoorSearchInterval = value; }
 	void KK_SetDoorSearchDistance(float value) { m_fKK_DoorSearchDistance = value; }
 	void KK_SetDebugDraw(bool value) { m_bKK_DebugDraw = value; }
+}
+
+class KK_SavedCollision
+{
+	IEntity m_Entity;
+	int m_iBodyMask;
+	int m_iAppliedMask;
+	ref array<int> m_aGeomMasks = {};
+	bool m_bLogged;
+}
+
+class KK_SquadCollision
+{
+	protected static ref map<AIAgent, ref KK_SavedCollision> s_Saved =
+		new map<AIAgent, ref KK_SavedCollision>();
+
+	protected static bool s_bTicking;
+	protected static bool s_bLoggedOff;
+
+	static void Apply(notnull AIAgent agent)
+	{
+		if (!Enabled())
+		{
+			if (!s_bLoggedOff)
+			{
+				s_bLoggedOff = true;
+				Print("KK: Pass through characters is off");
+			}
+
+			Restore(agent);
+			return;
+		}
+
+		IEntity entity = agent.GetControlledEntity();
+		if (!entity || IsPlayer(entity))
+		{
+			Restore(agent);
+			return;
+		}
+
+		Physics physics = entity.GetPhysics();
+		if (!physics)
+			return;
+
+		KK_SavedCollision saved;
+		if (s_Saved.Contains(agent))
+			saved = s_Saved.Get(agent);
+
+		if (saved && saved.m_Entity != entity)
+		{
+			WriteBack(saved);
+			s_Saved.Remove(agent);
+			saved = null;
+		}
+
+		if (!saved)
+		{
+			saved = Capture(entity, physics);
+			s_Saved.Set(agent, saved);
+		}
+
+		Ghost(entity, physics, saved);
+		EnsureTick();
+	}
+
+	static void Restore(AIAgent agent)
+	{
+		if (!agent || !s_Saved.Contains(agent))
+			return;
+
+		KK_SavedCollision saved = s_Saved.Get(agent);
+		s_Saved.Remove(agent);
+
+		if (saved)
+			WriteBack(saved);
+	}
+
+	static void Tick()
+	{
+		if (s_Saved.Count() == 0)
+		{
+			GetGame().GetCallqueue().Remove(Tick);
+			s_bTicking = false;
+			return;
+		}
+
+		array<AIAgent> agents = {};
+		for (int i = 0; i < s_Saved.Count(); i++)
+			agents.Insert(s_Saved.GetKey(i));
+
+		foreach (AIAgent agent : agents)
+		{
+			if (!agent)
+			{
+				s_Saved.Remove(agent);
+				continue;
+			}
+
+			KK_SavedCollision saved = s_Saved.Get(agent);
+			IEntity entity = agent.GetControlledEntity();
+			if (!saved || !entity || entity != saved.m_Entity || IsPlayer(entity))
+			{
+				if (saved)
+					WriteBack(saved);
+
+				s_Saved.Remove(agent);
+				continue;
+			}
+
+			Physics physics = entity.GetPhysics();
+			if (!physics)
+				continue;
+
+			if (physics.GetInteractionLayer() == saved.m_iAppliedMask)
+				continue;
+
+			Ghost(entity, physics, saved);
+		}
+	}
+
+	protected static void EnsureTick()
+	{
+		if (s_bTicking)
+			return;
+
+		s_bTicking = true;
+		GetGame().GetCallqueue().CallLater(Tick, 0, true);
+	}
+
+	protected static KK_SavedCollision Capture(
+		notnull IEntity entity,
+		notnull Physics physics)
+	{
+		KK_SavedCollision saved = new KK_SavedCollision();
+		saved.m_Entity = entity;
+		saved.m_iBodyMask = physics.GetInteractionLayer();
+
+		int count = physics.GetNumGeoms();
+		for (int i = 0; i < count; i++)
+			saved.m_aGeomMasks.Insert(physics.GetGeomInteractionLayer(i));
+
+		return saved;
+	}
+
+	protected static void Ghost(
+		notnull IEntity entity,
+		notnull Physics physics,
+		notnull KK_SavedCollision saved)
+	{
+		int previous = physics.GetInteractionLayer();
+		int next = WithoutCharacters(previous);
+		if (next != previous)
+			physics.SetInteractionLayer(next);
+
+		int geomCount = physics.GetNumGeoms();
+		for (int i = 0; i < geomCount; i++)
+		{
+			int mask = physics.GetGeomInteractionLayer(i);
+			if (i >= saved.m_aGeomMasks.Count())
+				saved.m_aGeomMasks.Insert(mask);
+
+			int stripped = WithoutCharacters(mask);
+			if (stripped != mask)
+				physics.SetGeomInteractionLayer(i, stripped);
+		}
+
+		if (BlocksCharacters(physics))
+			physics.SetInteractionLayer(EPhysicsLayerDefs.CharNoCollide);
+
+		saved.m_iAppliedMask = physics.GetInteractionLayer();
+
+		if (saved.m_bLogged)
+			return;
+
+		saved.m_bLogged = true;
+		PrintFormat(
+			"KK: Pass through body %1 -> %2, still blocks characters=%3",
+			previous,
+			saved.m_iAppliedMask,
+			BlocksCharacters(physics)
+		);
+	}
+
+	protected static bool BlocksCharacters(notnull Physics physics)
+	{
+		return physics.HasInteractionEnabled(EPhysicsLayerDefs.Character)
+			|| physics.HasInteractionEnabled(EPhysicsLayerDefs.CharacterAI);
+	}
+
+	protected static bool Enabled()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return false;
+
+		return mode.KK_GetIgnoreSquadCollision();
+	}
+
+	protected static bool IsPlayer(notnull IEntity entity)
+	{
+		CharacterControllerComponent controller =
+			CharacterControllerComponent.Cast(
+				entity.FindComponent(CharacterControllerComponent)
+			);
+
+		return controller && controller.IsPlayerControlled();
+	}
+
+	protected static bool IsCharacterLayer(int mask)
+	{
+		return mask == EPhysicsLayerDefs.Character
+			|| mask == EPhysicsLayerDefs.CharacterAI
+			|| mask == EPhysicsLayerPresets.Character
+			|| mask == EPhysicsLayerPresets.CharacterAI;
+	}
+
+	protected static int WithoutCharacters(int mask)
+	{
+		if (IsCharacterLayer(mask))
+			return EPhysicsLayerDefs.CharNoCollide;
+
+		int characterBits =
+			EPhysicsLayerDefs.Character | EPhysicsLayerDefs.CharacterAI;
+
+		if ((mask & characterBits) == 0)
+			return mask;
+
+		mask &= ~characterBits;
+		if ((EPhysicsLayerDefs.CharNoCollide & characterBits) == 0)
+			mask |= EPhysicsLayerDefs.CharNoCollide;
+
+		if (mask == 0)
+			return EPhysicsLayerDefs.CharNoCollide;
+
+		return mask;
+	}
+
+	protected static void WriteBack(notnull KK_SavedCollision saved)
+	{
+		if (!saved.m_Entity)
+			return;
+
+		Physics physics = saved.m_Entity.GetPhysics();
+		if (!physics)
+			return;
+
+		physics.SetInteractionLayer(saved.m_iBodyMask);
+
+		int count = physics.GetNumGeoms();
+		int savedCount = saved.m_aGeomMasks.Count();
+		if (savedCount < count)
+			count = savedCount;
+
+		for (int i = 0; i < count; i++)
+			physics.SetGeomInteractionLayer(i, saved.m_aGeomMasks[i]);
+	}
 }
 
 class KK_PerceptionBoost
@@ -626,6 +893,8 @@ class KK_PerceptionBoost
 
 	static void Apply(notnull AIAgent agent, notnull map<AIAgent, float> saved)
 	{
+		KK_SquadCollision.Apply(agent);
+
 		SCR_AICombatComponent combat = Combat(agent);
 		if (!combat)
 			return;
@@ -646,6 +915,8 @@ class KK_PerceptionBoost
 
 	static void Restore(AIAgent agent, notnull map<AIAgent, float> saved)
 	{
+		KK_SquadCollision.Restore(agent);
+
 		if (!agent || !saved.Contains(agent))
 			return;
 

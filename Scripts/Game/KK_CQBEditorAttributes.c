@@ -157,6 +157,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 8: return mode.KK_GetFilterBuildingSurfaces();
 			case 9: return mode.KK_GetClassifyOpenings();
 			case 10: return mode.KK_GetNavImprovements();
+			case 11: return mode.KK_GetIgnoreSquadCollision();
 		}
 
 		return mode.KK_GetGarrisonAfterClear();
@@ -176,6 +177,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 8: mode.KK_SetFilterBuildingSurfaces(value); break;
 			case 9: mode.KK_SetClassifyOpenings(value); break;
 			case 10: mode.KK_SetNavImprovements(value); break;
+			case 11: mode.KK_SetIgnoreSquadCollision(value); break;
 			default: mode.KK_SetGarrisonAfterClear(value); break;
 		}
 	}
@@ -247,6 +249,8 @@ class KK_CQBAttrPerceptionFactor : KK_CQBFloatEditorAttribute {}
 class KK_CQBAttrOpenDoors : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrNavImprovements : KK_CQBBoolEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrIgnoreSquadCollision : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrDoorReach : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
