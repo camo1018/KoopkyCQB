@@ -14,7 +14,6 @@ enum KK_EWaypointAuthorAction
 	TOGGLE_FLOOR_5,
 	TOGGLE_FLOOR_6,
 	TOGGLE_FLOOR_7,
-	ENSURE_CACHE,
 	TOGGLE_ROOF,
 	DELETE_WAYPOINT,
 	ADD_NODE,
@@ -1130,9 +1129,6 @@ class KK_WaypointAuthorCommand : SCR_BaseGroupCommand
 
 			case KK_EWaypointAuthorAction.TOGGLE_DEBUG:
 				return KK_WaypointAuthoring.ToggleDebugDraw();
-
-			case KK_EWaypointAuthorAction.ENSURE_CACHE:
-				return KK_WaypointAuthoring.EnsureSampleCache(true);
 
 			case KK_EWaypointAuthorAction.DELETE_WAYPOINT:
 				return KK_WaypointAuthoring.DeleteWaypointHere();
