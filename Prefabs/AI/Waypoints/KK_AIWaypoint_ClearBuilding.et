@@ -1,0 +1,10 @@
+KK_ClearBuildingWaypoint : "{49CED34BBCD060F0}Prefabs/AI/Waypoints/AIWaypoint_Base.et" {
+ ID "663CBEF736DEBDE0"
+ Type "SearchAndDestroy"
+ Title "SearchAndDestroy Waypoint"
+ AIBehaviorTree "{D758F52A0BD562ED}AI/BehaviorTrees/Waypoints/KK_WP_ClearBuilding.bt"
+ AIBehaviorTreeMoveTo "{D758F52A0BD562ED}AI/BehaviorTrees/Waypoints/KK_WP_ClearBuilding.bt"
+ CompletionRadius 0
+ Autocomplete 0
+ CompletionType Any
+}

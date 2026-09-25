@@ -1,0 +1,11 @@
+KK_GarrisonBuildingWaypoint : "{49CED34BBCD060F0}Prefabs/AI/Waypoints/AIWaypoint_Base.et" {
+ ID "663CBEF736DEBDE1"
+ Type "Defend"
+ Title "Garrison Building Waypoint"
+ AIBehaviorTree "{D758F52A0BD562ED}AI/BehaviorTrees/Waypoints/KK_WP_ClearBuilding.bt"
+ AIBehaviorTreeMoveTo "{D758F52A0BD562ED}AI/BehaviorTrees/Waypoints/KK_WP_ClearBuilding.bt"
+ CompletionRadius 0
+ Autocomplete 0
+ CompletionType Any
+ m_bDebugDraw 0
+}

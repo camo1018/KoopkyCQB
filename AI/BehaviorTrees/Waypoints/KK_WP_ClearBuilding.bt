@@ -1,0 +1,15 @@
+BehaviorTree {
+ Name "AI/BehaviorTrees/Waypoints/KK_WP_ClearBuilding.bt"
+ Nodes {
+  RootNode Root {
+   Name "Root"
+   EditorPos -48 -48
+   Nodes {
+    KK_AIExecuteWaypointAndWait "KK_AI Execute Waypoint And Wait" {
+     Name "KK_AI Execute Waypoint And Wait"
+     EditorPos -40 89
+    }
+   }
+  }
+ }
+}

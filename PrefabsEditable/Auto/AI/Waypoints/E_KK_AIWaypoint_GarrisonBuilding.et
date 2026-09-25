@@ -1,0 +1,21 @@
+KK_GarrisonBuildingWaypoint : "{6A6969C011223344}Prefabs/AI/Waypoints/KK_AIWaypoint_GarrisonBuilding.et" {
+ ID "663CBEF736DEBDE1"
+ components {
+  SCR_EditableEntityVisibilityChildComponent "{6A6AA2B80E26DB08}" : "{CA7D13FC9D385E8F}Prefabs/Editor/Components/Waypoint_SCR_EditableEntityVisibilityChildComponent.ct" {
+  }
+  SCR_EditableWaypointComponent "{6A6AA2B80F0CEE9E}" : "{89CF6086B34A8800}Prefabs/Editor/Components/Waypoint_SCR_EditableEntityComponent.ct" {
+   m_UIInfo SCR_EditableEntityUIInfo "{5298E609432D192D}" {
+    Name "(KK_AIWaypoint_GarrisonBuilding)"
+    m_aAuthoredLabels {
+    }
+    m_aAutoLabels {
+     ENTITYTYPE_SYSTEM SIZE_XL
+    }
+   }
+  }
+  SCR_WaypointAreaMeshComponent "{6A6AA2B80E26D14F}" : "{3CE012874EA1DC23}Prefabs/Editor/Components/Waypoint_SCR_WaypointAreaMeshComponent.ct" {
+  }
+  RplComponent "{6A6AA2B80F0CE885}" : "{B193E926C1935A4C}Prefabs/Editor/Components/Default_RplComponent.ct" {
+  }
+ }
+}

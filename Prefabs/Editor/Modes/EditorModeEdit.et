@@ -1,0 +1,23 @@
+SCR_EditorModeEntity : "{E56F54E533ACE527}Prefabs/Editor/Modes/EditorModeBase.et" {
+ ID "54F0A77282A3AA3B"
+ components {
+  SCR_AttributesManagerEditorComponent "{54C8DACDCD4AE14E}" {
+   m_AttributeLists {
+    SCR_EditorAttributeList "{5606E7C45FE427EF}" : "{F3D6C6D25642352C}Configs/Editor/AttributeLists/Edit.conf" {
+    }
+   }
+   m_MenuPreset EditorAttributesDialog
+  }
+  SCR_PlacingEditorComponent "{5145484399BAA2E7}" {
+   m_Registries {
+    SCR_PlaceableEntitiesRegistry "{6A69690B786AAEB1}" : "{8ADE9418036A7418}Configs/Editor/PlaceableEntities/KK_Waypoints.conf" {
+     m_sAddon "KoopkyCQB"
+     m_Prefabs {
+      "{BFB02E608EDD10FB}PrefabsEditable/Auto/AI/Waypoints/E_KK_AIWaypoint_ClearBuilding.et"
+      "{6A6969C055667788}PrefabsEditable/Auto/AI/Waypoints/E_KK_AIWaypoint_GarrisonBuilding.et"
+     }
+    }
+   }
+  }
+ }
+}

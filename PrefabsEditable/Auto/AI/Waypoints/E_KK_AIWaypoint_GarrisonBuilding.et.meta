@@ -1,0 +1,17 @@
+MetaFileClass {
+ Name "{6A6969C055667788}PrefabsEditable/Auto/AI/Waypoints/E_KK_AIWaypoint_GarrisonBuilding.et"
+ Configurations {
+  EntityTemplateResourceClass PC {
+  }
+  EntityTemplateResourceClass XBOX_ONE : PC {
+  }
+  EntityTemplateResourceClass XBOX_SERIES : PC {
+  }
+  EntityTemplateResourceClass PS4 : PC {
+  }
+  EntityTemplateResourceClass PS5 : PC {
+  }
+  EntityTemplateResourceClass HEADLESS : PC {
+  }
+ }
+}
