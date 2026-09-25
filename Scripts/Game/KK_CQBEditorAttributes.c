@@ -56,6 +56,7 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 7: return mode.KK_GetClearMovementTimeout();
 			case 8: return mode.KK_GetClearStuckTimeout();
 			case 9: return mode.KK_GetClearMaximumRetries();
+			case 24: return mode.KK_GetClearDeferRetries();
 			case 10: return mode.KK_GetGarrisonSearchRadius();
 			case 11: return mode.KK_GetGarrisonArrivalRadius();
 			case 12: return mode.KK_GetHoldRadius();
@@ -65,6 +66,7 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 14: return mode.KK_GetGarrisonMovementTimeout();
 			case 15: return mode.KK_GetGarrisonStuckTimeout();
 			case 16: return mode.KK_GetGarrisonMaximumRetries();
+			case 25: return mode.KK_GetGarrisonDeferRetries();
 			case 19: return mode.KK_GetPerceptionFactor();
 		}
 
@@ -88,6 +90,7 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 7: mode.KK_SetClearMovementTimeout(value); break;
 			case 8: mode.KK_SetClearStuckTimeout(value); break;
 			case 9: mode.KK_SetClearMaximumRetries((int)Math.Round(value)); break;
+			case 24: mode.KK_SetClearDeferRetries((int)Math.Round(value)); break;
 			case 10: mode.KK_SetGarrisonSearchRadius(value); break;
 			case 11: mode.KK_SetGarrisonArrivalRadius(value); break;
 			case 12: mode.KK_SetHoldRadius(value); break;
@@ -97,6 +100,7 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 14: mode.KK_SetGarrisonMovementTimeout(value); break;
 			case 15: mode.KK_SetGarrisonStuckTimeout(value); break;
 			case 16: mode.KK_SetGarrisonMaximumRetries((int)Math.Round(value)); break;
+			case 25: mode.KK_SetGarrisonDeferRetries((int)Math.Round(value)); break;
 			case 19: mode.KK_SetPerceptionFactor(value); break;
 			default: mode.KK_SetHorizontalSpacing(value); break;
 		}
@@ -200,6 +204,8 @@ class KK_CQBAttrClearStuckTimeout : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrClearMaximumRetries : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrClearDeferRetries : KK_CQBFloatEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrClearFailCluster : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrGarrisonSearchRadius : KK_CQBFloatEditorAttribute {}
@@ -219,6 +225,8 @@ class KK_CQBAttrGarrisonMovementTimeout : KK_CQBFloatEditorAttribute {}
 class KK_CQBAttrGarrisonStuckTimeout : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrGarrisonMaximumRetries : KK_CQBFloatEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrGarrisonDeferRetries : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrGarrisonFailCluster : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]

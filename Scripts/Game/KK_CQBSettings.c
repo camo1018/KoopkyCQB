@@ -42,6 +42,9 @@ modded class SCR_BaseGameMode
 	[Attribute("1", UIWidgets.EditBox, "Attempts before a target is unreachable", category: "Koopky CQB/Clear")]
 	protected int m_iKK_ClearMaximumRetries;
 
+	[Attribute("1", UIWidgets.EditBox, "Times to retry held nodes after the rest are done", category: "Koopky CQB/Clear")]
+	protected int m_iKK_ClearDeferRetries;
+
 	[Attribute("1", UIWidgets.CheckBox, "If one node in a room is unreachable, fail the rest of that room", category: "Koopky CQB/Clear")]
 	protected bool m_bKK_ClearFailCluster;
 
@@ -71,6 +74,9 @@ modded class SCR_BaseGameMode
 
 	[Attribute("1", UIWidgets.EditBox, "Attempts before a hold is unreachable", category: "Koopky CQB/Garrison")]
 	protected int m_iKK_GarrisonMaximumRetries;
+
+	[Attribute("1", UIWidgets.EditBox, "Times to retry held posts after the rest are done", category: "Koopky CQB/Garrison")]
+	protected int m_iKK_GarrisonDeferRetries;
 
 	[Attribute("1", UIWidgets.CheckBox, "If one node in a room is unreachable, fail the rest of that room", category: "Koopky CQB/Garrison")]
 	protected bool m_bKK_GarrisonFailCluster;
@@ -162,6 +168,7 @@ modded class SCR_BaseGameMode
 			KK_ReadFloat(context, "MovementTimeout", m_fKK_ClearMovementTimeout);
 			KK_ReadFloat(context, "StuckTimeout", m_fKK_ClearStuckTimeout);
 			KK_ReadInt(context, "MaximumRetries", m_iKK_ClearMaximumRetries);
+			KK_ReadInt(context, "DeferRetries", m_iKK_ClearDeferRetries);
 			KK_ReadBool(context, "FailCluster", m_bKK_ClearFailCluster);
 			context.EndObject();
 		}
@@ -177,6 +184,7 @@ modded class SCR_BaseGameMode
 			KK_ReadFloat(context, "MovementTimeout", m_fKK_GarrisonMovementTimeout);
 			KK_ReadFloat(context, "StuckTimeout", m_fKK_GarrisonStuckTimeout);
 			KK_ReadInt(context, "MaximumRetries", m_iKK_GarrisonMaximumRetries);
+			KK_ReadInt(context, "DeferRetries", m_iKK_GarrisonDeferRetries);
 			KK_ReadBool(context, "FailCluster", m_bKK_GarrisonFailCluster);
 			context.EndObject();
 		}
@@ -250,6 +258,7 @@ modded class SCR_BaseGameMode
 		context.WriteValue("MovementTimeout", m_fKK_ClearMovementTimeout);
 		context.WriteValue("StuckTimeout", m_fKK_ClearStuckTimeout);
 		context.WriteValue("MaximumRetries", m_iKK_ClearMaximumRetries);
+		context.WriteValue("DeferRetries", m_iKK_ClearDeferRetries);
 		context.WriteValue("FailCluster", m_bKK_ClearFailCluster);
 		context.EndObject();
 
@@ -263,6 +272,7 @@ modded class SCR_BaseGameMode
 		context.WriteValue("MovementTimeout", m_fKK_GarrisonMovementTimeout);
 		context.WriteValue("StuckTimeout", m_fKK_GarrisonStuckTimeout);
 		context.WriteValue("MaximumRetries", m_iKK_GarrisonMaximumRetries);
+		context.WriteValue("DeferRetries", m_iKK_GarrisonDeferRetries);
 		context.WriteValue("FailCluster", m_bKK_GarrisonFailCluster);
 		context.EndObject();
 
@@ -360,6 +370,11 @@ modded class SCR_BaseGameMode
 		return m_iKK_ClearMaximumRetries;
 	}
 
+	int KK_GetClearDeferRetries()
+	{
+		return Math.Max(m_iKK_ClearDeferRetries, 0);
+	}
+
 	bool KK_GetClearFailCluster()
 	{
 		return m_bKK_ClearFailCluster;
@@ -408,6 +423,11 @@ modded class SCR_BaseGameMode
 	int KK_GetGarrisonMaximumRetries()
 	{
 		return m_iKK_GarrisonMaximumRetries;
+	}
+
+	int KK_GetGarrisonDeferRetries()
+	{
+		return Math.Max(m_iKK_GarrisonDeferRetries, 0);
 	}
 
 	bool KK_GetGarrisonFailCluster()
@@ -464,6 +484,7 @@ modded class SCR_BaseGameMode
 	void KK_SetClearMovementTimeout(float value) { m_fKK_ClearMovementTimeout = value; }
 	void KK_SetClearStuckTimeout(float value) { m_fKK_ClearStuckTimeout = value; }
 	void KK_SetClearMaximumRetries(int value) { m_iKK_ClearMaximumRetries = value; }
+	void KK_SetClearDeferRetries(int value) { m_iKK_ClearDeferRetries = value; }
 	void KK_SetClearFailCluster(bool value) { m_bKK_ClearFailCluster = value; }
 	void KK_SetGarrisonSearchRadius(float value) { m_fKK_GarrisonSearchRadius = value; }
 	void KK_SetGarrisonArrivalRadius(float value) { m_fKK_GarrisonArrivalRadius = value; }
@@ -474,6 +495,7 @@ modded class SCR_BaseGameMode
 	void KK_SetGarrisonMovementTimeout(float value) { m_fKK_GarrisonMovementTimeout = value; }
 	void KK_SetGarrisonStuckTimeout(float value) { m_fKK_GarrisonStuckTimeout = value; }
 	void KK_SetGarrisonMaximumRetries(int value) { m_iKK_GarrisonMaximumRetries = value; }
+	void KK_SetGarrisonDeferRetries(int value) { m_iKK_GarrisonDeferRetries = value; }
 	void KK_SetGarrisonFailCluster(bool value) { m_bKK_GarrisonFailCluster = value; }
 	void KK_SetSharpCombat(bool value) { m_bKK_SharpCombat = value; }
 	void KK_SetPerceptionFactor(float value) { m_fKK_PerceptionFactor = value; }

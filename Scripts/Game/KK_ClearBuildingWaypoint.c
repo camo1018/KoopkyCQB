@@ -31,6 +31,9 @@ class KK_ClearBuildingWaypoint : SCR_AIWaypoint
 	[Attribute("1", UIWidgets.EditBox, "Attempts before target is unreachable")]
 	protected int m_iMaximumRetries;
 
+	[Attribute("1", UIWidgets.EditBox, "Times to retry held nodes after the rest are done")]
+	protected int m_iDeferRetries;
+
 	[Attribute("1", UIWidgets.CheckBox, "If one node in a floor cluster is unreachable, fail the rest of that cluster")]
 	protected bool m_bFailClusterOnUnreachable = true;
 
@@ -88,6 +91,11 @@ class KK_ClearBuildingWaypoint : SCR_AIWaypoint
 		return m_iMaximumRetries;
 	}
 
+	int GetDeferRetries()
+	{
+		return Math.Max(m_iDeferRetries, 0);
+	}
+
 	bool GetFailClusterOnUnreachable()
 	{
 		return m_bFailClusterOnUnreachable;
@@ -120,6 +128,7 @@ class KK_ClearBuildingWaypoint : SCR_AIWaypoint
 		m_fMovementTimeout = mode.KK_GetClearMovementTimeout();
 		m_fStuckTimeout = mode.KK_GetClearStuckTimeout();
 		m_iMaximumRetries = mode.KK_GetClearMaximumRetries();
+		m_iDeferRetries = mode.KK_GetClearDeferRetries();
 		m_bFailClusterOnUnreachable = mode.KK_GetClearFailCluster();
 	}
 

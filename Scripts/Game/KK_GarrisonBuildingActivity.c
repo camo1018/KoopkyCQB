@@ -55,6 +55,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 	protected bool m_bPlanReady;
 	protected bool m_bFinished;
 	protected bool m_bCancelled;
+	protected int m_iDeferPassesUsed;
 
 	protected float m_fLastPlanningAttempt;
 
@@ -138,6 +139,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		}
 
 		PruneInvalidAssignments();
+		ReleaseDeferredTargets();
 		MaintainAssignments(currentTime);
 		FillAvailableAssignments(currentTime);
 
@@ -995,9 +997,24 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				assignment.m_Target.m_iRetries++;
 
 				if (
-					assignment.m_Target.m_iRetries >=
+					assignment.m_Target.m_iRetries <
 					m_GarrisonWaypoint.GetMaximumRetries()
 				)
+				{
+					assignment.m_Target.m_eState =
+						KK_EInteriorTargetState.PENDING;
+				}
+				else if (
+					m_iDeferPassesUsed <
+					m_GarrisonWaypoint.GetDeferRetries()
+				)
+				{
+					if (m_GarrisonWaypoint.GetFailClusterOnUnreachable())
+						DeferRestOfCluster(assignment.m_Target);
+					else
+						DeferTarget(assignment.m_Target);
+				}
+				else
 				{
 					assignment.m_Target.m_eState =
 						KK_EInteriorTargetState.UNREACHABLE;
@@ -1009,11 +1026,6 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 					if (m_GarrisonWaypoint.GetFailClusterOnUnreachable())
 						FailRestOfCluster(assignment.m_Target);
-				}
-				else
-				{
-					assignment.m_Target.m_eState =
-						KK_EInteriorTargetState.PENDING;
 				}
 			}
 			else if (
@@ -1029,6 +1041,107 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		int removeIndex = m_aAssignments.Find(assignment);
 		if (removeIndex >= 0)
 			m_aAssignments.Remove(removeIndex);
+	}
+
+	protected void DeferTarget(notnull KK_InteriorTarget failedTarget)
+	{
+		failedTarget.m_eState = KK_EInteriorTargetState.DEFERRED;
+
+		PrintFormat(
+			"KK: Garrison hold deferred %1 floor=%2 cluster=%3",
+			failedTarget.m_vPosition,
+			failedTarget.m_iFloor,
+			failedTarget.m_iCluster
+		);
+	}
+
+	protected void DeferRestOfCluster(notnull KK_InteriorTarget failedTarget)
+	{
+		DeferTarget(failedTarget);
+
+		if (!m_Plan)
+			return;
+
+		int deferredCount;
+		array<ref KK_InteriorTarget> targets = m_Plan.GetTargets();
+
+		foreach (KK_InteriorTarget target : targets)
+		{
+			if (
+				!target ||
+				target == failedTarget ||
+				target.m_iFloor != failedTarget.m_iFloor ||
+				target.m_iCluster != failedTarget.m_iCluster ||
+				target.IsFinished() ||
+				target.m_eState == KK_EInteriorTargetState.DEFERRED
+			)
+			{
+				continue;
+			}
+
+			target.m_eState = KK_EInteriorTargetState.DEFERRED;
+			deferredCount++;
+		}
+
+		for (int i = m_aAssignments.Count() - 1; i >= 0; i--)
+		{
+			KK_GarrisonAgentAssignment assignment = m_aAssignments[i];
+			if (
+				!assignment ||
+				!assignment.m_Target ||
+				assignment.m_Target == failedTarget ||
+				assignment.m_Target.m_iFloor != failedTarget.m_iFloor ||
+				assignment.m_Target.m_iCluster != failedTarget.m_iCluster
+			)
+			{
+				continue;
+			}
+
+			if (assignment.m_Agent)
+			{
+				KK_PerceptionBoost.Restore(
+					assignment.m_Agent,
+					m_mPerceptionFactors
+				);
+				CancelAgentOrder(assignment.m_Agent);
+			}
+
+			m_aAssignments.Remove(i);
+		}
+
+		PrintFormat(
+			"KK: Floor %1 cluster %2 deferred with the failed node, held %3 other nodes",
+			failedTarget.m_iFloor,
+			failedTarget.m_iCluster,
+			deferredCount
+		);
+	}
+
+	protected void ReleaseDeferredTargets()
+	{
+		if (!m_Plan || m_Plan.HasPending() || !m_Plan.HasDeferred())
+			return;
+
+		if (m_iDeferPassesUsed < m_GarrisonWaypoint.GetDeferRetries())
+		{
+			int released = m_Plan.ReleaseDeferred();
+			m_iDeferPassesUsed++;
+
+			PrintFormat(
+				"KK: Garrison retrying %1 deferred nodes, pass %2",
+				released,
+				m_iDeferPassesUsed
+			);
+
+			return;
+		}
+
+		int dropped = m_Plan.FinalizeDeferred();
+
+		PrintFormat(
+			"KK: Garrison dropped %1 deferred nodes",
+			dropped
+		);
 	}
 
 	protected void FailRestOfCluster(notnull KK_InteriorTarget failedTarget)
@@ -1256,6 +1369,14 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		)
 		{
 			return 0xFFFF3333;
+		}
+
+		if (
+			target.m_eState ==
+			KK_EInteriorTargetState.DEFERRED
+		)
+		{
+			return 0xFFCC66FF;
 		}
 
 		if (

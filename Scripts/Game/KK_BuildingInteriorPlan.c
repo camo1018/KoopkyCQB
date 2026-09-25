@@ -3,7 +3,8 @@ enum KK_EInteriorTargetState
 	PENDING,
 	ACTIVE,
 	VISITED,
-	UNREACHABLE
+	UNREACHABLE,
+	DEFERRED
 }
 
 class KK_InteriorTarget
@@ -1045,5 +1046,99 @@ bool EnsureNavmeshLoaded(
 
 			target.m_iRetries = 0;
 		}
+	}
+
+	bool HasPendingOrActive()
+	{
+		foreach (KK_InteriorTarget target : m_aTargets)
+		{
+			if (!target)
+				continue;
+
+			if (
+				target.m_eState == KK_EInteriorTargetState.PENDING ||
+				target.m_eState == KK_EInteriorTargetState.ACTIVE
+			)
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	bool HasPending()
+	{
+		foreach (KK_InteriorTarget target : m_aTargets)
+		{
+			if (
+				target &&
+				target.m_eState == KK_EInteriorTargetState.PENDING
+			)
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	bool HasDeferred()
+	{
+		foreach (KK_InteriorTarget target : m_aTargets)
+		{
+			if (
+				target &&
+				target.m_eState == KK_EInteriorTargetState.DEFERRED
+			)
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	int ReleaseDeferred()
+	{
+		int released;
+
+		foreach (KK_InteriorTarget target : m_aTargets)
+		{
+			if (
+				!target ||
+				target.m_eState != KK_EInteriorTargetState.DEFERRED
+			)
+			{
+				continue;
+			}
+
+			target.m_eState = KK_EInteriorTargetState.PENDING;
+			target.m_iRetries = 0;
+			released++;
+		}
+
+		return released;
+	}
+
+	int FinalizeDeferred()
+	{
+		int finalized;
+
+		foreach (KK_InteriorTarget target : m_aTargets)
+		{
+			if (
+				!target ||
+				target.m_eState != KK_EInteriorTargetState.DEFERRED
+			)
+			{
+				continue;
+			}
+
+			target.m_eState = KK_EInteriorTargetState.UNREACHABLE;
+			finalized++;
+		}
+
+		return finalized;
 	}
 }
