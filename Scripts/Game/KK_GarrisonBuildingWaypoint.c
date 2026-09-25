@@ -43,11 +43,11 @@ class KK_GarrisonBuildingWaypoint : SCR_AIWaypoint
 	[Attribute("1", UIWidgets.EditBox, "Attempts before a hold is unreachable")]
 	protected int m_iMaximumRetries;
 
-	[Attribute("1", UIWidgets.EditBox, "Times to retry held posts after the rest are done")]
-	protected int m_iDeferRetries;
-
 	[Attribute("1", UIWidgets.CheckBox, "If one node in a floor cluster is unreachable, fail the rest of that cluster")]
 	protected bool m_bFailClusterOnUnreachable = true;
+
+	[Attribute("0", UIWidgets.CheckBox, "Mark doors and windows and prefer those posts")]
+	protected bool m_bClassifyOpenings;
 
 	[Attribute("0", UIWidgets.CheckBox, "Draw interior debug points in Workbench")]
 	protected bool m_bDebugDraw;
@@ -129,14 +129,14 @@ class KK_GarrisonBuildingWaypoint : SCR_AIWaypoint
 		return m_iMaximumRetries;
 	}
 
-	int GetDeferRetries()
-	{
-		return Math.Max(m_iDeferRetries, 0);
-	}
-
 	bool GetFailClusterOnUnreachable()
 	{
 		return m_bFailClusterOnUnreachable;
+	}
+
+	bool GetClassifyOpenings()
+	{
+		return m_bClassifyOpenings;
 	}
 
 	bool GetDebugDraw()
@@ -170,8 +170,8 @@ class KK_GarrisonBuildingWaypoint : SCR_AIWaypoint
 		m_fMovementTimeout = mode.KK_GetGarrisonMovementTimeout();
 		m_fStuckTimeout = mode.KK_GetGarrisonStuckTimeout();
 		m_iMaximumRetries = mode.KK_GetGarrisonMaximumRetries();
-		m_iDeferRetries = mode.KK_GetGarrisonDeferRetries();
 		m_bFailClusterOnUnreachable = mode.KK_GetGarrisonFailCluster();
+		m_bClassifyOpenings = mode.KK_GetClassifyOpenings();
 	}
 
 	override SCR_AIWaypointState CreateWaypointState(

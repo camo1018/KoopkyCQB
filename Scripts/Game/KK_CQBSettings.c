@@ -92,11 +92,11 @@ modded class SCR_BaseGameMode
 	[Attribute("1", UIWidgets.EditBox, "Attempts before a hold is unreachable", category: "Koopky CQB/Garrison")]
 	protected int m_iKK_GarrisonMaximumRetries;
 
-	[Attribute("1", UIWidgets.EditBox, "Times to retry held posts after the rest are done", category: "Koopky CQB/Garrison")]
-	protected int m_iKK_GarrisonDeferRetries;
-
 	[Attribute("1", UIWidgets.CheckBox, "If one node in a room is unreachable, fail the rest of that room", category: "Koopky CQB/Garrison")]
 	protected bool m_bKK_GarrisonFailCluster;
+
+	[Attribute("0", UIWidgets.CheckBox, "Mark doors and windows and prefer those posts. Experimental.", category: "Koopky CQB/Garrison")]
+	protected bool m_bKK_ClassifyOpenings;
 
 	[Attribute("1", UIWidgets.CheckBox, "While clearing or garrisoning, suppression does not slow recognition and the first shot does not wait", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_SharpCombat;
@@ -225,8 +225,8 @@ modded class SCR_BaseGameMode
 			KK_ReadFloat(context, "MovementTimeout", m_fKK_GarrisonMovementTimeout);
 			KK_ReadFloat(context, "StuckTimeout", m_fKK_GarrisonStuckTimeout);
 			KK_ReadInt(context, "MaximumRetries", m_iKK_GarrisonMaximumRetries);
-			KK_ReadInt(context, "DeferRetries", m_iKK_GarrisonDeferRetries);
 			KK_ReadBool(context, "FailCluster", m_bKK_GarrisonFailCluster);
+			KK_ReadBool(context, "ClassifyOpenings", m_bKK_ClassifyOpenings);
 			context.EndObject();
 		}
 
@@ -336,8 +336,8 @@ modded class SCR_BaseGameMode
 		context.WriteValue("MovementTimeout", m_fKK_GarrisonMovementTimeout);
 		context.WriteValue("StuckTimeout", m_fKK_GarrisonStuckTimeout);
 		context.WriteValue("MaximumRetries", m_iKK_GarrisonMaximumRetries);
-		context.WriteValue("DeferRetries", m_iKK_GarrisonDeferRetries);
 		context.WriteValue("FailCluster", m_bKK_GarrisonFailCluster);
+		context.WriteValue("ClassifyOpenings", m_bKK_ClassifyOpenings);
 		context.EndObject();
 
 		context.StartObject("Combat");
@@ -494,14 +494,14 @@ modded class SCR_BaseGameMode
 		return m_iKK_GarrisonMaximumRetries;
 	}
 
-	int KK_GetGarrisonDeferRetries()
-	{
-		return Math.Max(m_iKK_GarrisonDeferRetries, 0);
-	}
-
 	bool KK_GetGarrisonFailCluster()
 	{
 		return m_bKK_GarrisonFailCluster;
+	}
+
+	bool KK_GetClassifyOpenings()
+	{
+		return m_bKK_ClassifyOpenings;
 	}
 
 	bool KK_GetSharpCombat()
@@ -584,8 +584,8 @@ modded class SCR_BaseGameMode
 	void KK_SetGarrisonMovementTimeout(float value) { m_fKK_GarrisonMovementTimeout = value; }
 	void KK_SetGarrisonStuckTimeout(float value) { m_fKK_GarrisonStuckTimeout = value; }
 	void KK_SetGarrisonMaximumRetries(int value) { m_iKK_GarrisonMaximumRetries = value; }
-	void KK_SetGarrisonDeferRetries(int value) { m_iKK_GarrisonDeferRetries = value; }
 	void KK_SetGarrisonFailCluster(bool value) { m_bKK_GarrisonFailCluster = value; }
+	void KK_SetClassifyOpenings(bool value) { m_bKK_ClassifyOpenings = value; }
 	void KK_SetSharpCombat(bool value) { m_bKK_SharpCombat = value; }
 	void KK_SetPerceptionFactor(float value) { m_fKK_PerceptionFactor = value; }
 	void KK_SetOpenDoors(bool value) { m_bKK_OpenDoors = value; }

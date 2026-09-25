@@ -15,6 +15,13 @@ enum KK_ESurfaceVerdict
 	OPEN
 }
 
+enum KK_EInteriorOpening
+{
+	NONE,
+	DOOR,
+	WINDOW
+}
+
 class KK_InteriorTarget
 {
 	vector m_vPosition;
@@ -23,8 +30,14 @@ class KK_InteriorTarget
 	int m_iFloor;
 	int m_iCluster;
 	int m_iRetries;
+	int m_iOpeningHeading;
+
+	float m_fOpeningDistance;
+
+	vector m_vFacing;
 
 	KK_EInteriorTargetState m_eState;
+	KK_EInteriorOpening m_eOpening;
 	ref map<AIAgent, float> m_mSightMissAt;
 
 	void KK_InteriorTarget(
@@ -37,7 +50,11 @@ class KK_InteriorTarget
 		m_iFloor = floorIndex;
 		m_iCluster = -1;
 		m_iRetries = 0;
+		m_iOpeningHeading = -1;
+		m_fOpeningDistance = 0;
+		m_vFacing = vector.Zero;
 		m_eState = KK_EInteriorTargetState.PENDING;
+		m_eOpening = KK_EInteriorOpening.NONE;
 	}
 
 	bool IsFinished()
@@ -165,6 +182,14 @@ class KK_BuildingInteriorPlan
 	protected ref array<ref KK_InteriorCluster> m_aClusters = {};
 
 	protected ref TraceParam m_SurfaceTrace;
+	protected ref TraceParam m_OpeningTrace;
+
+	protected static const float OPENING_RAY_LENGTH = 4.0;
+	protected static const float OPENING_WALL_DISTANCE = 1.5;
+	protected static const float OPENING_KNEE_HEIGHT = 0.4;
+	protected static const float OPENING_CHEST_HEIGHT = 1.5;
+	protected static const float OPENING_CLUSTER_GAP = 3.5;
+	protected static const int OPENING_HEADINGS = 8;
 	protected int m_iSurfaceBuilding;
 	protected int m_iSurfaceCovered;
 	protected int m_iSurfaceNatural;
@@ -249,7 +274,8 @@ bool EnsureNavmeshLoaded(
 		float deduplicateDistance = 1.25,
 		float clusterRadius = 4.0,
 		bool filterUnreachableIslands = false,
-		bool filterBuildingSurfaces = true)
+		bool filterBuildingSurfaces = true,
+		bool classifyOpenings = false)
 	{
 		m_Building = building;
 		m_aTargets.Clear();
@@ -507,6 +533,9 @@ bool EnsureNavmeshLoaded(
 		AssignFloorIndices();
 		BuildClusters(clusterRadius);
 		OrderTargets(group.GetCenterOfMass());
+
+		if (classifyOpenings)
+			ClassifyOpenings(horizontalSpacing);
 	
 		float minLocalY = 10000.0;
 		float maxLocalY = -10000.0;
@@ -1403,5 +1432,352 @@ bool EnsureNavmeshLoaded(
 		}
 
 		return finalized;
+	}
+
+	protected void ClassifyOpenings(float horizontalSpacing)
+	{
+		BaseWorld world = GetGame().GetWorld();
+		if (!world)
+			return;
+
+		float edgeMargin = Math.Max(horizontalSpacing, 1.5);
+		ref array<int> floors = {};
+
+		foreach (KK_InteriorTarget floorTarget : m_aTargets)
+		{
+			if (!floorTarget)
+				continue;
+
+			if (floors.Find(floorTarget.m_iFloor) >= 0)
+				continue;
+
+			floors.Insert(floorTarget.m_iFloor);
+		}
+
+		foreach (int floorIndex : floors)
+		{
+			float minX;
+			float maxX;
+			float minZ;
+			float maxZ;
+			FloorFootprint(floorIndex, minX, maxX, minZ, maxZ);
+
+			foreach (KK_InteriorTarget target : m_aTargets)
+			{
+				if (!target || target.m_iFloor != floorIndex)
+					continue;
+
+				if (!IsOpeningCandidate(target, minX, maxX, minZ, maxZ, edgeMargin))
+					continue;
+
+				ProbeOpening(world, target);
+			}
+		}
+
+		KeepClosestOpening(edgeMargin);
+
+		int doorCount;
+		int windowCount;
+
+		foreach (KK_InteriorTarget counted : m_aTargets)
+		{
+			if (!counted)
+				continue;
+
+			if (counted.m_eOpening == KK_EInteriorOpening.DOOR)
+				doorCount++;
+			else if (counted.m_eOpening == KK_EInteriorOpening.WINDOW)
+				windowCount++;
+		}
+
+		PrintFormat(
+			"KK: Opening marks doors=%1 windows=%2",
+			doorCount,
+			windowCount
+		);
+	}
+
+	protected void FloorFootprint(
+		int floorIndex,
+		out float minX,
+		out float maxX,
+		out float minZ,
+		out float maxZ)
+	{
+		minX = 10000.0;
+		maxX = -10000.0;
+		minZ = 10000.0;
+		maxZ = -10000.0;
+
+		foreach (KK_InteriorTarget target : m_aTargets)
+		{
+			if (!target || target.m_iFloor != floorIndex)
+				continue;
+
+			minX = Math.Min(minX, target.m_vLocalPosition[0]);
+			maxX = Math.Max(maxX, target.m_vLocalPosition[0]);
+			minZ = Math.Min(minZ, target.m_vLocalPosition[2]);
+			maxZ = Math.Max(maxZ, target.m_vLocalPosition[2]);
+		}
+	}
+
+	protected bool IsOpeningCandidate(
+		notnull KK_InteriorTarget target,
+		float minX,
+		float maxX,
+		float minZ,
+		float maxZ,
+		float edgeMargin)
+	{
+		float localX = target.m_vLocalPosition[0];
+		float localZ = target.m_vLocalPosition[2];
+
+		if (
+			localX - minX <= edgeMargin ||
+			maxX - localX <= edgeMargin ||
+			localZ - minZ <= edgeMargin ||
+			maxZ - localZ <= edgeMargin
+		)
+		{
+			return true;
+		}
+
+		foreach (KK_InteriorTarget other : m_aTargets)
+		{
+			if (!other || other == target)
+				continue;
+
+			if (other.m_iFloor != target.m_iFloor)
+				continue;
+
+			if (other.m_iCluster == target.m_iCluster)
+				continue;
+
+			if (
+				vector.Distance(other.m_vPosition, target.m_vPosition) <=
+				OPENING_CLUSTER_GAP
+			)
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	protected void ProbeOpening(
+		notnull BaseWorld world,
+		notnull KK_InteriorTarget target)
+	{
+		int bestHeading = -1;
+		float bestDistance = 10000.0;
+		KK_EInteriorOpening bestKind = KK_EInteriorOpening.NONE;
+		vector bestFacing = vector.Zero;
+
+		for (int heading; heading < OPENING_HEADINGS; heading++)
+		{
+			vector facing = HeadingDirection(heading * 45.0);
+			float kneeDistance = OpeningHitDistance(
+				world,
+				target.m_vPosition,
+				facing,
+				OPENING_KNEE_HEIGHT
+			);
+			float chestDistance = OpeningHitDistance(
+				world,
+				target.m_vPosition,
+				facing,
+				OPENING_CHEST_HEIGHT
+			);
+
+			bool kneeWall = kneeDistance <= OPENING_WALL_DISTANCE;
+			bool chestOpen = chestDistance > OPENING_WALL_DISTANCE;
+			KK_EInteriorOpening kind = KK_EInteriorOpening.NONE;
+			float score = 10000.0;
+
+			if (kneeWall && chestOpen)
+			{
+				kind = KK_EInteriorOpening.WINDOW;
+				score = kneeDistance;
+			}
+			else if (!kneeWall && chestOpen && DoorFrameHits(world, target.m_vPosition, heading))
+			{
+				kind = KK_EInteriorOpening.DOOR;
+				score = DoorFrameDistance(world, target.m_vPosition, heading);
+			}
+
+			if (kind == KK_EInteriorOpening.NONE)
+				continue;
+
+			bool closer = score < bestDistance;
+			bool doorBeatsWindow =
+				kind == KK_EInteriorOpening.DOOR &&
+				bestKind == KK_EInteriorOpening.WINDOW &&
+				score <= bestDistance + 0.5;
+
+			if (!closer && !doorBeatsWindow)
+				continue;
+
+			bestHeading = heading;
+			bestDistance = score;
+			bestKind = kind;
+			bestFacing = facing;
+		}
+
+		target.m_iOpeningHeading = bestHeading;
+		target.m_fOpeningDistance = bestDistance;
+		target.m_eOpening = bestKind;
+		target.m_vFacing = bestFacing;
+	}
+
+	protected bool DoorFrameHits(
+		notnull BaseWorld world,
+		vector origin,
+		int heading)
+	{
+		float left = OpeningHitDistance(
+			world,
+			origin,
+			HeadingDirection((heading * 45.0) - 25.0),
+			OPENING_CHEST_HEIGHT
+		);
+		float right = OpeningHitDistance(
+			world,
+			origin,
+			HeadingDirection((heading * 45.0) + 25.0),
+			OPENING_CHEST_HEIGHT
+		);
+
+		return left <= OPENING_WALL_DISTANCE &&
+			right <= OPENING_WALL_DISTANCE;
+	}
+
+	protected float DoorFrameDistance(
+		notnull BaseWorld world,
+		vector origin,
+		int heading)
+	{
+		float left = OpeningHitDistance(
+			world,
+			origin,
+			HeadingDirection((heading * 45.0) - 25.0),
+			OPENING_CHEST_HEIGHT
+		);
+		float right = OpeningHitDistance(
+			world,
+			origin,
+			HeadingDirection((heading * 45.0) + 25.0),
+			OPENING_CHEST_HEIGHT
+		);
+
+		return Math.Min(left, right);
+	}
+
+	protected vector HeadingDirection(float degrees)
+	{
+		float wrapped = degrees;
+		while (wrapped < 0)
+			wrapped = wrapped + 360.0;
+
+		while (wrapped >= 360.0)
+			wrapped = wrapped - 360.0;
+
+		float radians = wrapped * 0.0174533;
+		return Vector(Math.Sin(radians), 0, Math.Cos(radians));
+	}
+
+	protected float OpeningHitDistance(
+		notnull BaseWorld world,
+		vector origin,
+		vector direction,
+		float height)
+	{
+		if (!m_OpeningTrace)
+			m_OpeningTrace = new TraceParam();
+
+		vector start = origin + Vector(0, height, 0);
+		m_OpeningTrace.Flags = TraceFlags.ENTS | TraceFlags.WORLD;
+		m_OpeningTrace.Exclude = null;
+		m_OpeningTrace.TraceEnt = null;
+		m_OpeningTrace.Start = start;
+		m_OpeningTrace.End = start + (direction * OPENING_RAY_LENGTH);
+
+		float fraction = world.TraceMove(m_OpeningTrace, FilterOpeningTrace);
+		if (fraction >= 1.0)
+			return OPENING_RAY_LENGTH + 1.0;
+
+		if (MaterialIsGlass(m_OpeningTrace.TraceMaterial))
+			return OPENING_RAY_LENGTH + 1.0;
+
+		return fraction * OPENING_RAY_LENGTH;
+	}
+
+	protected bool FilterOpeningTrace(
+		IEntity entity,
+		vector start = "0 0 0",
+		vector dir = "0 0 0")
+	{
+		if (ChimeraCharacter.Cast(entity))
+			return false;
+
+		return true;
+	}
+
+	protected bool MaterialIsGlass(string material)
+	{
+		if (material.IsEmpty())
+			return false;
+
+		return material.ToLower().Contains("glass");
+	}
+
+	protected void KeepClosestOpening(float edgeMargin)
+	{
+		float keepDistance = Math.Max(edgeMargin, 1.5);
+
+		for (int i; i < m_aTargets.Count(); i++)
+		{
+			KK_InteriorTarget first = m_aTargets[i];
+			if (!first || first.m_eOpening == KK_EInteriorOpening.NONE)
+				continue;
+
+			for (int j = i + 1; j < m_aTargets.Count(); j++)
+			{
+				KK_InteriorTarget second = m_aTargets[j];
+				if (!second || second.m_eOpening == KK_EInteriorOpening.NONE)
+					continue;
+
+				if (first.m_iFloor != second.m_iFloor)
+					continue;
+
+				if (first.m_iCluster != second.m_iCluster)
+					continue;
+
+				if (first.m_iOpeningHeading != second.m_iOpeningHeading)
+					continue;
+
+				if (first.m_eOpening != second.m_eOpening)
+					continue;
+
+				if (vector.Distance(first.m_vPosition, second.m_vPosition) > keepDistance)
+					continue;
+
+				if (second.m_fOpeningDistance < first.m_fOpeningDistance)
+				{
+					ClearOpening(first);
+					break;
+				}
+
+				ClearOpening(second);
+			}
+		}
+	}
+
+	protected void ClearOpening(notnull KK_InteriorTarget target)
+	{
+		target.m_eOpening = KK_EInteriorOpening.NONE;
+		target.m_iOpeningHeading = -1;
+		target.m_fOpeningDistance = 0;
+		target.m_vFacing = vector.Zero;
 	}
 }

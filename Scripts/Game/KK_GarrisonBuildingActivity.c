@@ -55,7 +55,6 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 	protected bool m_bPlanReady;
 	protected bool m_bFinished;
 	protected bool m_bCancelled;
-	protected int m_iDeferPassesUsed;
 
 	protected float m_fLastPlanningAttempt;
 
@@ -139,7 +138,6 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		}
 
 		PruneInvalidAssignments();
-		ReleaseDeferredTargets();
 		MaintainAssignments(currentTime);
 		FillAvailableAssignments(currentTime);
 
@@ -232,7 +230,8 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				m_GarrisonWaypoint.GetDeduplicateDistance(),
 				m_GarrisonWaypoint.GetClusterRadius(),
 				GetFilterUnreachableIslands(),
-				GetFilterBuildingSurfaces()
+				GetFilterBuildingSurfaces(),
+				m_GarrisonWaypoint.GetClassifyOpenings()
 			))
 			{
 				break;
@@ -528,11 +527,12 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			IssueMoveOrder(assignment);
 
 			PrintFormat(
-				"KK: Garrison unit %1 holding %2 floor=%3 cluster=%4",
+				"KK: Garrison unit %1 holding %2 floor=%3 cluster=%4 opening=%5",
 				agent,
 				target.m_vPosition,
 				target.m_iFloor,
-				target.m_iCluster
+				target.m_iCluster,
+				target.m_eOpening
 			);
 		}
 	}
@@ -623,6 +623,18 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		if (!m_Plan)
 			return null;
 
+		KK_InteriorTarget uncovered = FindUncoveredOpening(current);
+		if (uncovered)
+			return uncovered;
+
+		if (
+			current.m_eOpening != KK_EInteriorOpening.NONE &&
+			CountOpeningSector(current) <= 1
+		)
+		{
+			return null;
+		}
+
 		array<ref KK_InteriorTarget> targets = m_Plan.GetTargets();
 		KK_InteriorTarget farthest;
 		float farthestDistance = -1;
@@ -653,8 +665,188 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		return farthest;
 	}
 
+	protected KK_InteriorTarget FindOpeningPost()
+	{
+		int floorIndex = FindLeastOccupiedOpeningFloor();
+		if (floorIndex < 0)
+			return null;
+
+		KK_InteriorTarget uncovered =
+			FindUncoveredOpeningOnFloor(floorIndex);
+
+		if (uncovered)
+			return uncovered;
+
+		return FindFarthestPendingOpening(floorIndex);
+	}
+
+	protected int FindLeastOccupiedOpeningFloor()
+	{
+		int bestFloor = -1;
+		int bestCount = int.MAX;
+
+		array<ref KK_InteriorTarget> targets = m_Plan.GetTargets();
+
+		foreach (KK_InteriorTarget target : targets)
+		{
+			if (!target || !IsPendingOpening(target))
+				continue;
+
+			int assignedCount = CountAssignedOnFloor(target.m_iFloor);
+
+			if (
+				bestFloor >= 0 &&
+				(
+					assignedCount > bestCount ||
+					(
+						assignedCount == bestCount &&
+						target.m_iFloor >= bestFloor
+					)
+				)
+			)
+			{
+				continue;
+			}
+
+			bestFloor = target.m_iFloor;
+			bestCount = assignedCount;
+		}
+
+		return bestFloor;
+	}
+
+	protected KK_InteriorTarget FindUncoveredOpeningOnFloor(int floorIndex)
+	{
+		array<ref KK_InteriorTarget> targets = m_Plan.GetTargets();
+		KK_InteriorTarget window;
+
+		foreach (KK_InteriorTarget target : targets)
+		{
+			if (!target || target.m_iFloor != floorIndex)
+				continue;
+
+			if (!IsPendingOpening(target))
+				continue;
+
+			if (CountOpeningSector(target) > 0)
+				continue;
+
+			if (target.m_eOpening == KK_EInteriorOpening.DOOR)
+				return target;
+
+			if (!window)
+				window = target;
+		}
+
+		return window;
+	}
+
+	protected KK_InteriorTarget FindFarthestPendingOpening(int floorIndex)
+	{
+		array<ref KK_InteriorTarget> targets = m_Plan.GetTargets();
+		KK_InteriorTarget farthest;
+		float farthestDistance = -1;
+
+		foreach (KK_InteriorTarget target : targets)
+		{
+			if (!target || target.m_iFloor != floorIndex)
+				continue;
+
+			if (!IsPendingOpening(target))
+				continue;
+
+			float nearestAssigned =
+				DistanceToNearestAssignment(target.m_vPosition);
+
+			if (nearestAssigned <= farthestDistance)
+				continue;
+
+			farthestDistance = nearestAssigned;
+			farthest = target;
+		}
+
+		return farthest;
+	}
+
+	protected KK_InteriorTarget FindUncoveredOpening(notnull KK_InteriorTarget current)
+	{
+		array<ref KK_InteriorTarget> targets = m_Plan.GetTargets();
+		KK_InteriorTarget farthest;
+		float farthestDistance = -1;
+
+		foreach (KK_InteriorTarget target : targets)
+		{
+			if (!target || target == current)
+				continue;
+
+			if (!IsPendingOpening(target))
+				continue;
+
+			if (SameOpeningSector(current, target))
+				continue;
+
+			if (CountOpeningSector(target) > 0)
+				continue;
+
+			float distance = vector.Distance(
+				current.m_vPosition,
+				target.m_vPosition
+			);
+
+			if (distance <= farthestDistance)
+				continue;
+
+			farthestDistance = distance;
+			farthest = target;
+		}
+
+		return farthest;
+	}
+
+	protected bool IsPendingOpening(notnull KK_InteriorTarget target)
+	{
+		return target.m_eOpening != KK_EInteriorOpening.NONE &&
+			target.m_eState == KK_EInteriorTargetState.PENDING;
+	}
+
+	protected bool SameOpeningSector(
+		notnull KK_InteriorTarget left,
+		notnull KK_InteriorTarget right)
+	{
+		return left.m_eOpening == right.m_eOpening &&
+			left.m_iFloor == right.m_iFloor &&
+			left.m_iCluster == right.m_iCluster &&
+			left.m_iOpeningHeading == right.m_iOpeningHeading;
+	}
+
+	protected int CountOpeningSector(notnull KK_InteriorTarget target)
+	{
+		int count;
+
+		foreach (
+			KK_GarrisonAgentAssignment assignment :
+			m_aAssignments
+		)
+		{
+			if (
+				assignment &&
+				assignment.m_Target &&
+				SameOpeningSector(assignment.m_Target, target)
+			)
+			{
+				count++;
+			}
+		}
+
+		return count;
+	}
+
 	protected KK_InteriorTarget FindGarrisonTarget()
 	{
+		KK_InteriorTarget opening = FindOpeningPost();
+		if (opening)
+			return opening;
+
 		int floorIndex = FindLeastOccupiedFloor();
 		if (floorIndex < 0)
 			return null;
@@ -1014,16 +1206,6 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 					assignment.m_Target.m_eState =
 						KK_EInteriorTargetState.PENDING;
 				}
-				else if (
-					m_iDeferPassesUsed <
-					m_GarrisonWaypoint.GetDeferRetries()
-				)
-				{
-					if (m_GarrisonWaypoint.GetFailClusterOnUnreachable())
-						DeferRestOfCluster(assignment.m_Target);
-					else
-						DeferTarget(assignment.m_Target);
-				}
 				else
 				{
 					assignment.m_Target.m_eState =
@@ -1051,107 +1233,6 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		int removeIndex = m_aAssignments.Find(assignment);
 		if (removeIndex >= 0)
 			m_aAssignments.Remove(removeIndex);
-	}
-
-	protected void DeferTarget(notnull KK_InteriorTarget failedTarget)
-	{
-		failedTarget.m_eState = KK_EInteriorTargetState.DEFERRED;
-
-		PrintFormat(
-			"KK: Garrison hold deferred %1 floor=%2 cluster=%3",
-			failedTarget.m_vPosition,
-			failedTarget.m_iFloor,
-			failedTarget.m_iCluster
-		);
-	}
-
-	protected void DeferRestOfCluster(notnull KK_InteriorTarget failedTarget)
-	{
-		DeferTarget(failedTarget);
-
-		if (!m_Plan)
-			return;
-
-		int deferredCount;
-		array<ref KK_InteriorTarget> targets = m_Plan.GetTargets();
-
-		foreach (KK_InteriorTarget target : targets)
-		{
-			if (
-				!target ||
-				target == failedTarget ||
-				target.m_iFloor != failedTarget.m_iFloor ||
-				target.m_iCluster != failedTarget.m_iCluster ||
-				target.IsFinished() ||
-				target.m_eState == KK_EInteriorTargetState.DEFERRED
-			)
-			{
-				continue;
-			}
-
-			target.m_eState = KK_EInteriorTargetState.DEFERRED;
-			deferredCount++;
-		}
-
-		for (int i = m_aAssignments.Count() - 1; i >= 0; i--)
-		{
-			KK_GarrisonAgentAssignment assignment = m_aAssignments[i];
-			if (
-				!assignment ||
-				!assignment.m_Target ||
-				assignment.m_Target == failedTarget ||
-				assignment.m_Target.m_iFloor != failedTarget.m_iFloor ||
-				assignment.m_Target.m_iCluster != failedTarget.m_iCluster
-			)
-			{
-				continue;
-			}
-
-			if (assignment.m_Agent)
-			{
-				KK_PerceptionBoost.Restore(
-					assignment.m_Agent,
-					m_mPerceptionFactors
-				);
-				CancelAgentOrder(assignment.m_Agent);
-			}
-
-			m_aAssignments.Remove(i);
-		}
-
-		PrintFormat(
-			"KK: Floor %1 cluster %2 deferred with the failed node, held %3 other nodes",
-			failedTarget.m_iFloor,
-			failedTarget.m_iCluster,
-			deferredCount
-		);
-	}
-
-	protected void ReleaseDeferredTargets()
-	{
-		if (!m_Plan || m_Plan.HasPending() || !m_Plan.HasDeferred())
-			return;
-
-		if (m_iDeferPassesUsed < m_GarrisonWaypoint.GetDeferRetries())
-		{
-			int released = m_Plan.ReleaseDeferred();
-			m_iDeferPassesUsed++;
-
-			PrintFormat(
-				"KK: Garrison retrying %1 deferred nodes, pass %2",
-				released,
-				m_iDeferPassesUsed
-			);
-
-			return;
-		}
-
-		int dropped = m_Plan.FinalizeDeferred();
-
-		PrintFormat(
-			"KK: Garrison dropped %1 deferred nodes",
-			dropped
-		);
 	}
 
 	protected void FailRestOfCluster(notnull KK_InteriorTarget failedTarget)
@@ -1332,6 +1413,22 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 					radius
 				)
 			);
+
+			if (
+				target.m_eOpening != KK_EInteriorOpening.NONE &&
+				target.m_vFacing.Length() > 0.01
+			)
+			{
+				m_aDebugShapes.Insert(
+					Shape.CreateArrow(
+						markerPosition,
+						markerPosition + (target.m_vFacing * 1.4),
+						0.08,
+						color,
+						ShapeFlags.NOZBUFFER | ShapeFlags.VISIBLE
+					)
+				);
+			}
 		}
 
 		foreach (
@@ -1383,19 +1480,17 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 		if (
 			target.m_eState ==
-			KK_EInteriorTargetState.DEFERRED
-		)
-		{
-			return 0xFFCC66FF;
-		}
-
-		if (
-			target.m_eState ==
 			KK_EInteriorTargetState.ACTIVE
 		)
 		{
 			return 0xFFFFFF00;
 		}
+
+		if (target.m_eOpening == KK_EInteriorOpening.DOOR)
+			return 0xFFFF8800;
+
+		if (target.m_eOpening == KK_EInteriorOpening.WINDOW)
+			return 0xFF44EE66;
 
 		return 0xFF00DDFF;
 	}

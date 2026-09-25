@@ -67,7 +67,6 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 14: return mode.KK_GetGarrisonMovementTimeout();
 			case 15: return mode.KK_GetGarrisonStuckTimeout();
 			case 16: return mode.KK_GetGarrisonMaximumRetries();
-			case 25: return mode.KK_GetGarrisonDeferRetries();
 			case 19: return mode.KK_GetPerceptionFactor();
 		}
 
@@ -102,7 +101,6 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 14: mode.KK_SetGarrisonMovementTimeout(value); break;
 			case 15: mode.KK_SetGarrisonStuckTimeout(value); break;
 			case 16: mode.KK_SetGarrisonMaximumRetries((int)Math.Round(value)); break;
-			case 25: mode.KK_SetGarrisonDeferRetries((int)Math.Round(value)); break;
 			case 19: mode.KK_SetPerceptionFactor(value); break;
 			default: mode.KK_SetHorizontalSpacing(value); break;
 		}
@@ -157,6 +155,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 6: return mode.KK_GetSharpCombat();
 			case 7: return mode.KK_GetStopWhenSeen();
 			case 8: return mode.KK_GetFilterBuildingSurfaces();
+			case 9: return mode.KK_GetClassifyOpenings();
 		}
 
 		return mode.KK_GetGarrisonAfterClear();
@@ -174,6 +173,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 6: mode.KK_SetSharpCombat(value); break;
 			case 7: mode.KK_SetStopWhenSeen(value); break;
 			case 8: mode.KK_SetFilterBuildingSurfaces(value); break;
+			case 9: mode.KK_SetClassifyOpenings(value); break;
 			default: mode.KK_SetGarrisonAfterClear(value); break;
 		}
 	}
@@ -234,9 +234,9 @@ class KK_CQBAttrGarrisonStuckTimeout : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrGarrisonMaximumRetries : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
-class KK_CQBAttrGarrisonDeferRetries : KK_CQBFloatEditorAttribute {}
-[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrGarrisonFailCluster : KK_CQBBoolEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrClassifyOpenings : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrSharpCombat : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
