@@ -285,6 +285,20 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 	protected void EvaluateAssignments(float currentTime)
 	{
+		bool passageOn = KK_Passage.Enabled();
+		ref map<AIAgent, ref KK_PassageOrder> passageOrders;
+		if (passageOn)
+		{
+			passageOrders = new map<AIAgent, ref KK_PassageOrder>();
+			array<ref KK_PassageSoldier> passageSoldiers = {};
+			CollectPassageSoldiers(passageSoldiers);
+			KK_Passage.Resolve(
+				passageSoldiers,
+				m_Pathfinding,
+				passageOrders
+			);
+		}
+
 		int i = m_aAssignments.Count() - 1;
 
 		while (i >= 0)
@@ -372,9 +386,17 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					assignment.m_Target.m_vPosition
 				);
 
+				KK_PassageOrder passageOrder;
+				bool havePassage =
+					passageOn &&
+					passageOrders &&
+					passageOrders.Find(assignment.m_Agent, passageOrder) &&
+					passageOrder;
+
 				bool holdingSpare =
 					!assignment.m_bClearsPoint &&
-					distanceToTarget <= m_ClearWaypoint.GetArrivalRadius();
+					distanceToTarget <= m_ClearWaypoint.GetArrivalRadius() &&
+					!(havePassage && passageOrder.m_bOverride);
 
 				if (holdingSpare)
 				{
@@ -402,21 +424,48 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					assignment.m_fStillSince = currentTime;
 				}
 
-				IEntity doorEntity = assignment.m_DoorEntity;
-				bool waitingOnDoor = KK_DoorAssist.Handle(
-					assignment.m_Agent,
-					assignment.m_Target.m_vPosition,
-					doorEntity
-				);
-				assignment.m_DoorEntity = doorEntity;
+				bool waitingOnDoor = false;
+				bool passageHold = false;
 
-				if (waitingOnDoor)
+				if (havePassage)
+				{
+					passageHold = passageOrder.m_bHoldTimers;
+					if (passageOrder.m_bIssueNow)
+					{
+						EMovementType passageSpeed = EMovementType.RUN;
+						if (passageOrder.m_bOverride)
+							passageSpeed = EMovementType.WALK;
+
+						assignment.m_fLastOrderAt = currentTime;
+						IssueMoveOrder(
+							assignment.m_Agent,
+							passageOrder.m_vMoveTo,
+							passageSpeed
+						);
+					}
+				}
+				else if (!passageOn)
+				{
+					IEntity doorEntity = assignment.m_DoorEntity;
+					waitingOnDoor = KK_DoorAssist.Handle(
+						assignment.m_Agent,
+						assignment.m_Target.m_vPosition,
+						doorEntity
+					);
+					assignment.m_DoorEntity = doorEntity;
+				}
+
+				if (passageHold || waitingOnDoor)
 				{
 					assignment.m_fStillSince = currentTime;
-					KK_AgentMove.SetWantedSpeed(
-						assignment.m_Agent,
-						EMovementType.WALK
-					);
+
+					if (waitingOnDoor)
+					{
+						KK_AgentMove.SetWantedSpeed(
+							assignment.m_Agent,
+							EMovementType.WALK
+						);
+					}
 
 					if (!IsEngagingEnemy(assignment.m_Agent))
 						assignment.m_fStartedAt += timerDelta;
@@ -424,6 +473,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 				if (
 					!holdingSpare &&
+					!passageHold &&
 					currentTime - assignment.m_fStillSince >=
 					m_ClearWaypoint.GetStuckTimeout() * 1000.0
 				)
@@ -441,6 +491,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				}
 				else if (
 					!holdingSpare &&
+					!passageHold &&
 					currentTime - assignment.m_fStartedAt >=
 					m_ClearWaypoint.GetMovementTimeout() * 1000.0
 				)
@@ -456,6 +507,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 						ReleaseAssignment(i);
 				}
 				else if (
+					!havePassage &&
 					!waitingOnDoor &&
 					currentTime - assignment.m_fLastOrderAt >=
 						KK_AgentMove.REISSUE_INTERVAL_MS &&
@@ -1254,16 +1306,81 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		return sum / count;
 	}
 
+	protected void CollectPassageSoldiers(
+		notnull array<ref KK_PassageSoldier> soldiers)
+	{
+		float arrival = m_ClearWaypoint.GetArrivalRadius();
+
+		foreach (KK_InteriorAgentAssignment assignment : m_aAssignments)
+		{
+			if (
+				!assignment ||
+				!assignment.m_Agent ||
+				!assignment.m_Target ||
+				!assignment.m_Agent.GetControlledEntity()
+			)
+			{
+				continue;
+			}
+
+			if (
+				!assignment.m_bClearsPoint &&
+				(
+					assignment.m_Target.IsFinished() ||
+					assignment.m_Target.m_eState ==
+						KK_EInteriorTargetState.DEFERRED
+				)
+			)
+			{
+				continue;
+			}
+
+			if (
+				assignment.m_bClearsPoint &&
+				assignment.m_Target.m_eState ==
+					KK_EInteriorTargetState.VISITED
+			)
+			{
+				continue;
+			}
+
+			vector origin =
+				assignment.m_Agent.GetControlledEntity().GetOrigin();
+			float distance = vector.Distance(
+				origin,
+				assignment.m_Target.m_vPosition
+			);
+
+			if (assignment.m_bClearsPoint && distance <= arrival)
+				continue;
+
+			bool settled =
+				!assignment.m_bClearsPoint &&
+				distance <= arrival;
+
+			soldiers.Insert(
+				new KK_PassageSoldier(
+					assignment.m_Agent,
+					assignment.m_Target.m_vPosition,
+					settled
+				)
+			);
+		}
+	}
+
 	protected void IssueMoveOrder(
 		notnull AIAgent agent,
-		vector position)
+		vector position,
+		EMovementType movementType = EMovementType.RUN)
 	{
 		KK_AgentMove.Issue(
 			this,
 			m_Group,
 			agent,
 			position,
-			m_mSoloHandlers
+			m_mSoloHandlers,
+			KK_AgentMove.PRIORITY_LEVEL,
+			movementType
 		);
 
 		SetWeaponRaised(agent, true);

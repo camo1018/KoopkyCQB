@@ -107,6 +107,9 @@ modded class SCR_BaseGameMode
 	[Attribute("1", UIWidgets.CheckBox, "Open a closed door in front of a clear or garrison move", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_OpenDoors;
 
+	[Attribute("0", UIWidgets.CheckBox, "Enable AI navigation improvements (experimental)", category: "Koopky CQB/Combat")]
+	protected bool m_bKK_NavImprovements;
+
 	[Attribute("2", UIWidgets.EditBox, "How far ahead a door is searched, in metres", category: "Koopky CQB/Combat")]
 	protected float m_fKK_DoorReach;
 
@@ -235,6 +238,7 @@ modded class SCR_BaseGameMode
 			KK_ReadBool(context, "SharpCombat", m_bKK_SharpCombat);
 			KK_ReadFloat(context, "PerceptionFactor", m_fKK_PerceptionFactor);
 			KK_ReadBool(context, "OpenDoors", m_bKK_OpenDoors);
+			KK_ReadBool(context, "NavImprovements", m_bKK_NavImprovements);
 			KK_ReadFloat(context, "DoorReach", m_fKK_DoorReach);
 			KK_ReadFloat(context, "DoorSearchInterval", m_fKK_DoorSearchInterval);
 			KK_ReadFloat(context, "DoorSearchDistance", m_fKK_DoorSearchDistance);
@@ -344,6 +348,7 @@ modded class SCR_BaseGameMode
 		context.WriteValue("SharpCombat", m_bKK_SharpCombat);
 		context.WriteValue("PerceptionFactor", m_fKK_PerceptionFactor);
 		context.WriteValue("OpenDoors", m_bKK_OpenDoors);
+		context.WriteValue("NavImprovements", m_bKK_NavImprovements);
 		context.WriteValue("DoorReach", m_fKK_DoorReach);
 		context.WriteValue("DoorSearchInterval", m_fKK_DoorSearchInterval);
 		context.WriteValue("DoorSearchDistance", m_fKK_DoorSearchDistance);
@@ -519,6 +524,11 @@ modded class SCR_BaseGameMode
 		return m_bKK_OpenDoors;
 	}
 
+	bool KK_GetNavImprovements()
+	{
+		return m_bKK_NavImprovements;
+	}
+
 	float KK_GetDoorReach()
 	{
 		return Math.Max(m_fKK_DoorReach, 0.25);
@@ -589,6 +599,7 @@ modded class SCR_BaseGameMode
 	void KK_SetSharpCombat(bool value) { m_bKK_SharpCombat = value; }
 	void KK_SetPerceptionFactor(float value) { m_fKK_PerceptionFactor = value; }
 	void KK_SetOpenDoors(bool value) { m_bKK_OpenDoors = value; }
+	void KK_SetNavImprovements(bool value) { m_bKK_NavImprovements = value; }
 	void KK_SetDoorReach(float value) { m_fKK_DoorReach = value; }
 	void KK_SetDoorSearchInterval(float value) { m_fKK_DoorSearchInterval = value; }
 	void KK_SetDoorSearchDistance(float value) { m_fKK_DoorSearchDistance = value; }

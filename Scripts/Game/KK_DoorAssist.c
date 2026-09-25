@@ -23,6 +23,33 @@ class KK_DoorAssist
 
 	// True while a closed door ahead should pause the move clocks.
 	// openedDoor remembers the door already asked to open.
+	// The door in front of this soldier, without asking it to open.
+	// Passage uses this to find the opening, then decides who may touch it.
+	static IEntity FindBlockingDoor(
+		notnull AIAgent agent,
+		vector targetPosition)
+	{
+		IEntity user = agent.GetControlledEntity();
+		BaseWorld world = GetGame().GetWorld();
+		if (!user || !world)
+			return null;
+
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		s_Reach = 2;
+		if (mode)
+			s_Reach = mode.KK_GetDoorReach();
+
+		s_Unit = user.GetOrigin();
+		s_Target = targetPosition;
+		s_Door = null;
+		s_DoorEntity = null;
+
+		if (!TraceDoor(world, user))
+			return null;
+
+		return s_DoorEntity;
+	}
+
 	static bool Handle(
 		notnull AIAgent agent,
 		vector targetPosition,

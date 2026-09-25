@@ -288,6 +288,20 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		float timeoutMs =
 			m_GarrisonWaypoint.GetMovementTimeout() * 1000.0;
 
+		bool passageOn = KK_Passage.Enabled();
+		ref map<AIAgent, ref KK_PassageOrder> passageOrders;
+		if (passageOn)
+		{
+			passageOrders = new map<AIAgent, ref KK_PassageOrder>();
+			array<ref KK_PassageSoldier> passageSoldiers = {};
+			CollectPassageSoldiers(passageSoldiers, holdRadius);
+			KK_Passage.Resolve(
+				passageSoldiers,
+				m_Pathfinding,
+				passageOrders
+			);
+		}
+
 		int i = m_aAssignments.Count() - 1;
 
 		while (i >= 0)
@@ -334,6 +348,14 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				holdRadius
 			);
 
+			KK_PassageOrder passageOrder;
+			bool havePassage =
+				passageOn &&
+				passageOrders &&
+				passageOrders.Find(assignment.m_Agent, passageOrder) &&
+				passageOrder;
+			bool passageOverride = havePassage && passageOrder.m_bOverride;
+
 			float timerDelta = currentTime - assignment.m_fLastTimerUpdate;
 			if (timerDelta < 0)
 				timerDelta = 0;
@@ -341,7 +363,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 			bool attacking = IsEngagingEnemy(assignment.m_Agent);
 
-			if (atHold)
+			if (atHold && !passageOverride)
 			{
 				if (!assignment.m_bHolding)
 				{
@@ -375,20 +397,38 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				continue;
 			}
 
-			if (assignment.m_bHolding)
+			if (assignment.m_bHolding && !passageOverride)
 			{
 				assignment.m_bHolding = false;
 				assignment.m_fLastOrderAt = currentTime;
 				IssueMoveOrder(assignment);
 			}
 
-			IEntity doorEntity = assignment.m_DoorEntity;
-			bool waitingOnDoor = KK_DoorAssist.Handle(
-				assignment.m_Agent,
-				assignment.m_Target.m_vPosition,
-				doorEntity
-			);
-			assignment.m_DoorEntity = doorEntity;
+			bool waitingOnDoor = false;
+			bool passageHold = false;
+
+			if (havePassage)
+			{
+				passageHold = passageOrder.m_bHoldTimers;
+				if (passageOrder.m_bIssueNow)
+				{
+					assignment.m_fLastOrderAt = currentTime;
+					IssuePassageMove(assignment, passageOrder);
+				}
+
+				if (passageOverride)
+					assignment.m_bHolding = false;
+			}
+			else if (!passageOn)
+			{
+				IEntity doorEntity = assignment.m_DoorEntity;
+				waitingOnDoor = KK_DoorAssist.Handle(
+					assignment.m_Agent,
+					assignment.m_Target.m_vPosition,
+					doorEntity
+				);
+				assignment.m_DoorEntity = doorEntity;
+			}
 
 			if (waitingOnDoor)
 			{
@@ -397,7 +437,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 					EMovementType.WALK
 				);
 			}
-			else
+			else if (!havePassage)
 			{
 				EMovementType approachSpeed = GetApproachSpeed(unitPosition);
 				if (approachSpeed != assignment.m_eApproachSpeed)
@@ -414,7 +454,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				}
 			}
 
-			if (attacking || waitingOnDoor)
+			if (attacking || waitingOnDoor || passageHold)
 			{
 				assignment.m_fStillSince = currentTime;
 
@@ -433,6 +473,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				assignment.m_fStillSince = currentTime;
 			}
 			else if (
+				!passageHold &&
 				currentTime - assignment.m_fStillSince >=
 				m_GarrisonWaypoint.GetStuckTimeout() * 1000.0
 			)
@@ -449,6 +490,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			}
 
 			if (
+				!passageHold &&
 				currentTime - assignment.m_fStartedAt >=
 				timeoutMs
 			)
@@ -464,6 +506,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			}
 
 			if (
+				!havePassage &&
 				!waitingOnDoor &&
 				currentTime - assignment.m_fLastOrderAt >=
 				intervalMs
@@ -1051,6 +1094,59 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		EAIThreatState state = threat.GetState();
 		return state == EAIThreatState.ALERTED ||
 			state == EAIThreatState.THREATENED;
+	}
+
+	protected void CollectPassageSoldiers(
+		notnull array<ref KK_PassageSoldier> soldiers,
+		float holdRadius)
+	{
+		foreach (KK_GarrisonAgentAssignment assignment : m_aAssignments)
+		{
+			if (
+				!assignment ||
+				!assignment.m_Agent ||
+				!assignment.m_Target ||
+				!assignment.m_Agent.GetControlledEntity()
+			)
+			{
+				continue;
+			}
+
+			vector origin =
+				assignment.m_Agent.GetControlledEntity().GetOrigin();
+			bool settled = IsAtHold(
+				origin,
+				assignment.m_Target.m_vPosition,
+				holdRadius
+			);
+
+			soldiers.Insert(
+				new KK_PassageSoldier(
+					assignment.m_Agent,
+					assignment.m_Target.m_vPosition,
+					settled
+				)
+			);
+		}
+	}
+
+	protected void IssuePassageMove(
+		notnull KK_GarrisonAgentAssignment assignment,
+		notnull KK_PassageOrder passageOrder)
+	{
+		EMovementType speed = assignment.m_eApproachSpeed;
+		if (passageOrder.m_bOverride)
+			speed = EMovementType.WALK;
+
+		KK_AgentMove.Issue(
+			this,
+			m_Group,
+			assignment.m_Agent,
+			passageOrder.m_vMoveTo,
+			m_mSoloHandlers,
+			KK_AgentMove.AbsolutePriorityLevel(),
+			speed
+		);
 	}
 
 	protected void IssueMoveOrder(
