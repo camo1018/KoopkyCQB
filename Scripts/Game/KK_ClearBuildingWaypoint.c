@@ -19,7 +19,7 @@ class KK_ClearBuildingWaypoint : SCR_AIWaypoint
 	[Attribute("4", UIWidgets.EditBox, "Room-like cluster radius")]
 	protected float m_fClusterRadius;
 
-	[Attribute("3", UIWidgets.ComboBox, "What spare soldiers do while a pair clears a room", "", ParamEnumArray.FromEnum(KK_EClearSpareMode))]
+	[Attribute("3", UIWidgets.ComboBox, "How the squad splits up while clearing", "", ParamEnumArray.FromEnum(KK_EClearSpareMode))]
 	protected KK_EClearSpareMode m_eSpareMode;
 
 	[Attribute("1", UIWidgets.EditBox, "Distance considered visited")]
@@ -76,7 +76,7 @@ class KK_ClearBuildingWaypoint : SCR_AIWaypoint
 
 	int GetSpareMode()
 	{
-		if (m_eSpareMode < 0 || m_eSpareMode > KK_EClearSpareMode.FREE_PAIRS)
+		if (m_eSpareMode < 0 || m_eSpareMode > KK_EClearSpareMode.SPREAD)
 			return KK_EClearSpareMode.FREE_PAIRS;
 
 		return m_eSpareMode;

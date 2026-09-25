@@ -3,7 +3,8 @@ enum KK_EClearSpareMode
 	STACK,
 	PREVIOUS_ROOM,
 	STAGE_NEXT,
-	FREE_PAIRS
+	FREE_PAIRS,
+	SPREAD
 }
 
 modded class SCR_BaseGameMode
@@ -29,7 +30,7 @@ modded class SCR_BaseGameMode
 	[Attribute("1", UIWidgets.CheckBox, "Garrison after the last clear", category: "Koopky CQB/Clear")]
 	protected bool m_bKK_GarrisonAfterClear;
 
-	[Attribute("3", UIWidgets.ComboBox, "What spare soldiers do while a pair clears a room", "", ParamEnumArray.FromEnum(KK_EClearSpareMode))]
+	[Attribute("3", UIWidgets.ComboBox, "How the squad splits up while clearing", "", ParamEnumArray.FromEnum(KK_EClearSpareMode))]
 	protected KK_EClearSpareMode m_eKK_ClearSpareMode;
 
 	[Attribute("75", UIWidgets.EditBox, "Building search radius", category: "Koopky CQB/Clear")]
@@ -589,7 +590,7 @@ modded class SCR_BaseGameMode
 
 	protected KK_EClearSpareMode KK_ClampSpareMode(int value)
 	{
-		if (value < 0 || value > KK_EClearSpareMode.FREE_PAIRS)
+		if (value < 0 || value > KK_EClearSpareMode.SPREAD)
 			return KK_EClearSpareMode.FREE_PAIRS;
 
 		return value;
