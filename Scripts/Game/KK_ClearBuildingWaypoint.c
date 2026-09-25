@@ -19,7 +19,7 @@ class KK_ClearBuildingWaypoint : SCR_AIWaypoint
 	[Attribute("4", UIWidgets.EditBox, "Room-like cluster radius")]
 	protected float m_fClusterRadius;
 
-	[Attribute("2.5", UIWidgets.EditBox, "Distance considered visited")]
+	[Attribute("1", UIWidgets.EditBox, "Distance considered visited")]
 	protected float m_fArrivalRadius;
 
 	[Attribute("45", UIWidgets.EditBox, "Movement timeout in seconds")]

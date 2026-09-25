@@ -49,6 +49,7 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 4: return mode.KK_GetClearSearchRadius();
 			case 5: return mode.KK_GetClearArrivalRadius();
 			case 6: return mode.KK_GetSightVisitRange();
+			case 26: return mode.KK_GetSightAimHeight();
 			case 20: return mode.KK_GetSightRetry();
 			case 21: return mode.KK_GetDoorReach();
 			case 22: return mode.KK_GetDoorSearchInterval();
@@ -83,6 +84,7 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 4: mode.KK_SetClearSearchRadius(value); break;
 			case 5: mode.KK_SetClearArrivalRadius(value); break;
 			case 6: mode.KK_SetSightVisitRange(value); break;
+			case 26: mode.KK_SetSightAimHeight(value); break;
 			case 20: mode.KK_SetSightRetry(value); break;
 			case 21: mode.KK_SetDoorReach(value); break;
 			case 22: mode.KK_SetDoorSearchInterval(value); break;
@@ -197,6 +199,8 @@ class KK_CQBAttrClearSearchRadius : KK_CQBFloatEditorAttribute {}
 class KK_CQBAttrClearArrivalRadius : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrSightVisitRange : KK_CQBFloatEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrSightAimHeight : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrSightRetry : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]

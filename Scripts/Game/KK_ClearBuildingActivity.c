@@ -736,12 +736,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		{
 			if (
 				!target ||
-				target.m_eState ==
-					KK_EInteriorTargetState.VISITED ||
-				target.m_eState ==
-					KK_EInteriorTargetState.UNREACHABLE ||
-				target.m_eState ==
-					KK_EInteriorTargetState.DEFERRED
+				target.m_eState == KK_EInteriorTargetState.VISITED
 			)
 			{
 				continue;
@@ -833,7 +828,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			return false;
 
 		vector eyePosition = viewer.GetOrigin() + Vector(0, 1.65, 0);
-		vector aimPosition = target.m_vPosition + Vector(0, 1.1, 0);
+		vector aimPosition = target.m_vPosition + Vector(0, GetSightAimHeight(), 0);
 
 		if (!IsInFieldOfView(viewer, eyePosition, aimPosition))
 			return false;
@@ -1278,6 +1273,15 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			return KK_AgentMove.SIGHT_VISIT_RANGE;
 
 		return mode.KK_GetSightVisitRange();
+	}
+
+	protected float GetSightAimHeight()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return 0.5;
+
+		return mode.KK_GetSightAimHeight();
 	}
 
 	protected bool StopWhenSeen()

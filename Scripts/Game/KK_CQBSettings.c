@@ -24,11 +24,14 @@ modded class SCR_BaseGameMode
 	[Attribute("75", UIWidgets.EditBox, "Building search radius", category: "Koopky CQB/Clear")]
 	protected float m_fKK_ClearSearchRadius;
 
-	[Attribute("2.5", UIWidgets.EditBox, "Distance considered visited", category: "Koopky CQB/Clear")]
+	[Attribute("1", UIWidgets.EditBox, "Distance considered visited", category: "Koopky CQB/Clear")]
 	protected float m_fKK_ClearArrivalRadius;
 
 	[Attribute("8", UIWidgets.EditBox, "Distance at which seeing a point counts as visited", category: "Koopky CQB/Clear")]
 	protected float m_fKK_SightVisitRange;
+
+	[Attribute("0.5", UIWidgets.EditBox, "Height above a clear point the sight trace aims at", category: "Koopky CQB/Clear")]
+	protected float m_fKK_SightAimHeight;
 
 	[Attribute("0.25", UIWidgets.EditBox, "Seconds before a blocked line of sight to the same point is traced again", category: "Koopky CQB/Clear")]
 	protected float m_fKK_SightRetry;
@@ -167,6 +170,7 @@ modded class SCR_BaseGameMode
 			KK_ReadFloat(context, "SearchRadius", m_fKK_ClearSearchRadius);
 			KK_ReadFloat(context, "ArrivalRadius", m_fKK_ClearArrivalRadius);
 			KK_ReadFloat(context, "SightVisitRange", m_fKK_SightVisitRange);
+			KK_ReadFloat(context, "SightAimHeight", m_fKK_SightAimHeight);
 			KK_ReadFloat(context, "SightRetry", m_fKK_SightRetry);
 			KK_ReadBool(context, "StopWhenSeen", m_bKK_StopWhenSeen);
 			KK_ReadFloat(context, "MovementTimeout", m_fKK_ClearMovementTimeout);
@@ -258,6 +262,7 @@ modded class SCR_BaseGameMode
 		context.WriteValue("SearchRadius", m_fKK_ClearSearchRadius);
 		context.WriteValue("ArrivalRadius", m_fKK_ClearArrivalRadius);
 		context.WriteValue("SightVisitRange", m_fKK_SightVisitRange);
+		context.WriteValue("SightAimHeight", m_fKK_SightAimHeight);
 		context.WriteValue("SightRetry", m_fKK_SightRetry);
 		context.WriteValue("StopWhenSeen", m_bKK_StopWhenSeen);
 		context.WriteValue("MovementTimeout", m_fKK_ClearMovementTimeout);
@@ -353,6 +358,11 @@ modded class SCR_BaseGameMode
 	float KK_GetSightVisitRange()
 	{
 		return Math.Max(m_fKK_SightVisitRange, 0);
+	}
+
+	float KK_GetSightAimHeight()
+	{
+		return Math.Max(m_fKK_SightAimHeight, 0);
 	}
 
 	float KK_GetSightRetry()
@@ -490,6 +500,7 @@ modded class SCR_BaseGameMode
 	void KK_SetClearSearchRadius(float value) { m_fKK_ClearSearchRadius = value; }
 	void KK_SetClearArrivalRadius(float value) { m_fKK_ClearArrivalRadius = value; }
 	void KK_SetSightVisitRange(float value) { m_fKK_SightVisitRange = value; }
+	void KK_SetSightAimHeight(float value) { m_fKK_SightAimHeight = value; }
 	void KK_SetSightRetry(float value) { m_fKK_SightRetry = value; }
 	void KK_SetStopWhenSeen(bool value) { m_bKK_StopWhenSeen = value; }
 	void KK_SetClearMovementTimeout(float value) { m_fKK_ClearMovementTimeout = value; }
