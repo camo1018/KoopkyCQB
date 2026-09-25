@@ -629,6 +629,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		if (
 			mode == KK_EClearSpareMode.FREE_PAIRS ||
 			mode == KK_EClearSpareMode.SPREAD ||
+			mode == KK_EClearSpareMode.SPREAD_PAIRS ||
 			activeIndex < 0
 		)
 		{
@@ -670,6 +671,19 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		if (mode == KK_EClearSpareMode.SPREAD)
 		{
 			AssignSpread(free, floor, anchor, currentTime);
+			return;
+		}
+
+		if (mode == KK_EClearSpareMode.SPREAD_PAIRS)
+		{
+			AssignSpreadPairs(
+				free,
+				floor,
+				floors,
+				clusters,
+				anchor,
+				currentTime
+			);
 			return;
 		}
 
@@ -1125,6 +1139,157 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		}
 
 		return best;
+	}
+
+	protected void AssignSpreadPairs(
+		notnull array<AIAgent> free,
+		int floor,
+		notnull array<int> floors,
+		notnull array<int> clusters,
+		vector anchor,
+		float currentTime)
+	{
+		while (!free.IsEmpty())
+		{
+			int cluster = FindSpreadPairRoom(
+				floor,
+				floors,
+				clusters,
+				anchor
+			);
+
+			if (cluster < 0)
+				return;
+
+			array<KK_InteriorTarget> pending = {};
+			CollectPendingInRoom(floor, cluster, pending);
+
+			if (pending.IsEmpty())
+				return;
+
+			array<vector> claimed = {};
+			CollectAssignedTargets(floor, claimed);
+
+			KK_InteriorTarget leadPoint = FarthestFromClaimed(
+				pending,
+				claimed,
+				anchor
+			);
+
+			if (!leadPoint)
+				return;
+
+			vector roomCenter = vector.Zero;
+
+			foreach (KK_InteriorTarget point : pending)
+			{
+				if (!point)
+					continue;
+
+				roomCenter += point.m_vPosition;
+			}
+
+			roomCenter = roomCenter / pending.Count();
+
+			int openSlots = 2 - CountClearers(floor, cluster);
+
+			string leadRole = "spread lead";
+			if (openSlots < 2)
+				leadRole = "spread trailer";
+
+			AIAgent lead = TakeClosestAgent(free, roomCenter);
+			if (!lead)
+				return;
+
+			AssignClearer(lead, leadPoint, currentTime, leadRole);
+
+			if (free.IsEmpty() || openSlots < 2)
+				continue;
+
+			array<KK_InteriorTarget> others = {};
+
+			foreach (KK_InteriorTarget point : pending)
+			{
+				if (!point || point == leadPoint)
+					continue;
+
+				others.Insert(point);
+			}
+
+			KK_InteriorTarget partnerPoint = FarthestFrom(
+				others,
+				leadPoint.m_vPosition
+			);
+
+			if (!partnerPoint)
+				continue;
+
+			AIAgent partner = TakeClosestAgent(free, roomCenter);
+			if (!partner)
+				return;
+
+			AssignClearer(partner, partnerPoint, currentTime, "spread trailer");
+		}
+	}
+
+	protected int FindSpreadPairRoom(
+		int floor,
+		notnull array<int> floors,
+		notnull array<int> clusters,
+		vector anchor)
+	{
+		int bestCluster = -1;
+		float bestSeparation = -1;
+
+		for (int i = 0; i < clusters.Count(); i++)
+		{
+			if (floors[i] != floor)
+				continue;
+
+			int cluster = clusters[i];
+			if (CountClearers(floor, cluster) >= 2)
+				continue;
+
+			array<KK_InteriorTarget> pending = {};
+			CollectPendingInRoom(floor, cluster, pending);
+
+			if (pending.IsEmpty())
+				continue;
+
+			array<vector> claimed = {};
+			CollectAssignedTargets(floor, claimed);
+
+			KK_InteriorTarget far = FarthestFromClaimed(
+				pending,
+				claimed,
+				anchor
+			);
+
+			if (!far)
+				continue;
+
+			float separation = vector.Distance(anchor, far.m_vPosition);
+
+			if (!claimed.IsEmpty())
+			{
+				separation = float.MAX;
+
+				foreach (vector claim : claimed)
+				{
+					float distance = vector.Distance(claim, far.m_vPosition);
+					if (distance < separation)
+						separation = distance;
+				}
+			}
+
+			if (separation <= bestSeparation)
+				continue;
+
+			bestSeparation = separation;
+			bestCluster = cluster;
+		}
+
+		return bestCluster;
 	}
 
 	protected void AssignClearersToRoom(

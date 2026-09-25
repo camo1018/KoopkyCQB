@@ -316,7 +316,7 @@ class KK_CQBAttrClearSpareMode : SCR_BaseEditorAttribute
 
 	override int GetEntries(notnull array<ref SCR_BaseEditorAttributeEntry> outEntries)
 	{
-		int count = 5;
+		int count = 6;
 		if (m_aValues)
 			count = m_aValues.Count();
 

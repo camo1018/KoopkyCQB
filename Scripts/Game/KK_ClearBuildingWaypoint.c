@@ -76,7 +76,7 @@ class KK_ClearBuildingWaypoint : SCR_AIWaypoint
 
 	int GetSpareMode()
 	{
-		if (m_eSpareMode < 0 || m_eSpareMode > KK_EClearSpareMode.SPREAD)
+		if (m_eSpareMode < 0 || m_eSpareMode > KK_EClearSpareMode.SPREAD_PAIRS)
 			return KK_EClearSpareMode.FREE_PAIRS;
 
 		return m_eSpareMode;

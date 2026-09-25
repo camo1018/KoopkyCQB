@@ -4,7 +4,8 @@ enum KK_EClearSpareMode
 	PREVIOUS_ROOM,
 	STAGE_NEXT,
 	FREE_PAIRS,
-	SPREAD
+	SPREAD,
+	SPREAD_PAIRS
 }
 
 modded class SCR_BaseGameMode
@@ -604,7 +605,7 @@ modded class SCR_BaseGameMode
 
 	protected KK_EClearSpareMode KK_ClampSpareMode(int value)
 	{
-		if (value < 0 || value > KK_EClearSpareMode.SPREAD)
+		if (value < 0 || value > KK_EClearSpareMode.SPREAD_PAIRS)
 			return KK_EClearSpareMode.FREE_PAIRS;
 
 		return value;
