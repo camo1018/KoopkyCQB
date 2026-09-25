@@ -1387,12 +1387,6 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			return 0xFFFFFF00;
 		}
 
-		if (target.m_iFloor == 1)
-			return 0xFFFF66FF;
-
-		if (target.m_iFloor >= 2)
-			return 0xFFFFAA00;
-
 		return 0xFF00DDFF;
 	}
 }
