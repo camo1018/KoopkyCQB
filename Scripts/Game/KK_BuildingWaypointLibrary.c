@@ -37,6 +37,7 @@ class KK_PrefabWaypointSet
 	ref array<ref KK_AuthoredBuildingWaypoint> m_aWaypoints = {};
 	ref array<ref KK_CachedInteriorSample> m_aSamples = {};
 	ref array<float> m_aForbiddenFloorYs = {};
+	bool m_bDropRoof;
 }
 
 class KK_BuildingWaypointLibrary
@@ -159,6 +160,25 @@ class KK_BuildingWaypointLibrary
 		return created;
 	}
 
+	static void ReplacePrefabSet(string prefabName, KK_PrefabWaypointSet replacement)
+	{
+		EnsureLoaded();
+
+		if (prefabName.IsEmpty())
+			return;
+
+		if (!replacement)
+		{
+			s_mSets.Remove(prefabName);
+			SaveToDisk();
+			return;
+		}
+
+		replacement.m_sPrefabName = prefabName;
+		s_mSets.Set(prefabName, replacement);
+		SaveToDisk();
+	}
+
 	static KK_PrefabWaypointSet FindSet(string prefabName)
 	{
 		EnsureLoaded();
@@ -261,6 +281,258 @@ class KK_BuildingWaypointLibrary
 
 		SaveToDisk();
 		return waypoint;
+	}
+
+	static bool DeleteNearestWaypoint(
+		notnull BaseBuilding building,
+		vector worldPosition,
+		float radius,
+		out KK_EBuildingWaypointType type,
+		out int removedId)
+	{
+		type = KK_EBuildingWaypointType.POST;
+		removedId = -1;
+
+		KK_PrefabWaypointSet prefabSet = FindSet(ResolvePrefabName(building));
+		if (!prefabSet)
+			return false;
+
+		int bestIndex = -1;
+		float bestDistance = radius;
+
+		for (int i = 0; i < prefabSet.m_aWaypoints.Count(); i++)
+		{
+			KK_AuthoredBuildingWaypoint waypoint = prefabSet.m_aWaypoints[i];
+			if (!waypoint)
+				continue;
+
+			vector world = building.CoordToParent(waypoint.m_vLocalPosition);
+			float distance = vector.Distance(world, worldPosition);
+			if (distance > bestDistance)
+				continue;
+
+			bestDistance = distance;
+			bestIndex = i;
+		}
+
+		if (bestIndex < 0)
+			return false;
+
+		KK_AuthoredBuildingWaypoint removed = prefabSet.m_aWaypoints[bestIndex];
+		removedId = removed.m_iId;
+		type = removed.m_eType;
+		prefabSet.m_aWaypoints.Remove(bestIndex);
+
+		foreach (KK_AuthoredBuildingWaypoint waypoint : prefabSet.m_aWaypoints)
+		{
+			if (!waypoint)
+				continue;
+
+			int linkIndex = waypoint.m_aLinks.Find(removedId);
+			if (linkIndex >= 0)
+				waypoint.m_aLinks.Remove(linkIndex);
+		}
+
+		SaveToDisk();
+		return true;
+	}
+
+	static bool AddSample(
+		notnull BaseBuilding building,
+		vector worldPosition,
+		float horizontalSpacing,
+		float verticalSpacing,
+		float deduplicateDistance)
+	{
+		string prefabName = ResolvePrefabName(building);
+		KK_PrefabWaypointSet prefabSet = GetOrCreateSet(prefabName);
+		if (!prefabSet)
+			return false;
+
+		if (!prefabSet.m_bHasSampleCache)
+		{
+			float scaleX;
+			float scaleY;
+			float scaleZ;
+			ReadScale(building, scaleX, scaleY, scaleZ);
+			prefabSet.m_fScaleX = scaleX;
+			prefabSet.m_fScaleY = scaleY;
+			prefabSet.m_fScaleZ = scaleZ;
+			prefabSet.m_fHorizontalSpacing = horizontalSpacing;
+			prefabSet.m_fVerticalSpacing = verticalSpacing;
+			prefabSet.m_fDeduplicateDistance = deduplicateDistance;
+			prefabSet.m_bHasSampleCache = true;
+		}
+
+		KK_CachedInteriorSample sample = new KK_CachedInteriorSample();
+		sample.m_vLocalPosition = building.CoordToLocal(worldPosition);
+		prefabSet.m_aSamples.Insert(sample);
+		SaveToDisk();
+		return true;
+	}
+
+	static int FindSampleAlongRay(
+		notnull BaseBuilding building,
+		vector rayStart,
+		vector rayDirection,
+		float maxAlong,
+		float maxOffRay)
+	{
+		KK_PrefabWaypointSet prefabSet = FindSet(ResolvePrefabName(building));
+		if (!prefabSet)
+			return -1;
+
+		int bestIndex = -1;
+		float bestOff = maxOffRay;
+		float bestAlong = maxAlong;
+
+		for (int i = 0; i < prefabSet.m_aSamples.Count(); i++)
+		{
+			KK_CachedInteriorSample sample = prefabSet.m_aSamples[i];
+			if (!sample)
+				continue;
+
+			vector world = building.CoordToParent(sample.m_vLocalPosition);
+			vector offset = world - rayStart;
+			float along = vector.Dot(offset, rayDirection);
+			if (along < 0.0 || along > maxAlong)
+				continue;
+
+			vector closest = rayStart + (rayDirection * along);
+			float offRay = vector.Distance(closest, world);
+			if (offRay > maxOffRay)
+				continue;
+
+			if (offRay > bestOff)
+				continue;
+
+			if (offRay == bestOff && along >= bestAlong)
+				continue;
+
+			bestOff = offRay;
+			bestAlong = along;
+			bestIndex = i;
+		}
+
+		return bestIndex;
+	}
+
+	static bool RemoveSampleAt(notnull BaseBuilding building, int sampleIndex)
+	{
+		KK_PrefabWaypointSet prefabSet = FindSet(ResolvePrefabName(building));
+		if (!prefabSet)
+			return false;
+
+		if (sampleIndex < 0 || sampleIndex >= prefabSet.m_aSamples.Count())
+			return false;
+
+		prefabSet.m_aSamples.Remove(sampleIndex);
+		SaveToDisk();
+		return true;
+	}
+
+	static int RemoveSampleCluster(
+		notnull BaseBuilding building,
+		int sampleIndex,
+		float clusterRadius)
+	{
+		KK_PrefabWaypointSet prefabSet = FindSet(ResolvePrefabName(building));
+		if (!prefabSet)
+			return 0;
+
+		if (sampleIndex < 0 || sampleIndex >= prefabSet.m_aSamples.Count())
+			return 0;
+
+		array<float> bands = {};
+		CollectFloorBands(prefabSet, bands);
+
+		ref array<int> clusterOf = {};
+		ref array<vector> centers = {};
+		ref array<int> floors = {};
+		ref array<int> counts = {};
+
+		for (int i = 0; i < prefabSet.m_aSamples.Count(); i++)
+		{
+			KK_CachedInteriorSample sample = prefabSet.m_aSamples[i];
+			if (!sample)
+			{
+				clusterOf.Insert(-1);
+				continue;
+			}
+
+			int floorIndex = BandIndex(bands, sample.m_vLocalPosition[1]);
+			int clusterIndex = -1;
+			float nearest = clusterRadius;
+
+			for (int c = 0; c < centers.Count(); c++)
+			{
+				if (floors[c] != floorIndex)
+					continue;
+
+				float distance = vector.Distance(
+					centers[c],
+					sample.m_vLocalPosition
+				);
+
+				if (distance <= nearest)
+				{
+					nearest = distance;
+					clusterIndex = c;
+				}
+			}
+
+			if (clusterIndex < 0)
+			{
+				clusterIndex = centers.Count();
+				centers.Insert(sample.m_vLocalPosition);
+				floors.Insert(floorIndex);
+				counts.Insert(0);
+			}
+
+			counts[clusterIndex] = counts[clusterIndex] + 1;
+			vector center = centers[clusterIndex];
+			float count = counts[clusterIndex];
+			center = center + ((sample.m_vLocalPosition - center) * (1.0 / count));
+			centers[clusterIndex] = center;
+			clusterOf.Insert(clusterIndex);
+		}
+
+		int targetCluster = clusterOf[sampleIndex];
+		if (targetCluster < 0)
+			return 0;
+
+		int removed;
+		for (int i = prefabSet.m_aSamples.Count() - 1; i >= 0; i--)
+		{
+			if (clusterOf[i] != targetCluster)
+				continue;
+
+			prefabSet.m_aSamples.Remove(i);
+			removed++;
+		}
+
+		if (removed > 0)
+			SaveToDisk();
+
+		return removed;
+	}
+
+	protected static int BandIndex(notnull array<float> bands, float localY)
+	{
+		int best;
+		float bestDistance = 10000.0;
+
+		for (int i = 0; i < bands.Count(); i++)
+		{
+			float distance = Math.AbsFloat(bands[i] - localY);
+			if (distance < bestDistance)
+			{
+				bestDistance = distance;
+				best = i;
+			}
+		}
+
+		return best;
 	}
 
 	static bool LinkWaypoints(
@@ -367,6 +639,12 @@ class KK_BuildingWaypointLibrary
 		}
 
 		return false;
+	}
+
+	static void ToggleDropRoof(notnull KK_PrefabWaypointSet prefabSet)
+	{
+		prefabSet.m_bDropRoof = !prefabSet.m_bDropRoof;
+		SaveToDisk();
 	}
 
 	static void ToggleForbiddenFloor(notnull KK_PrefabWaypointSet prefabSet, float localY)
@@ -538,7 +816,6 @@ class KK_BuildingWaypointLibrary
 		notnull SCR_JsonSaveContext context,
 		notnull KK_PrefabWaypointSet prefabSet)
 	{
-		context.StartObject();
 		context.WriteValue("Prefab", prefabSet.m_sPrefabName);
 		context.WriteValue("ScaleX", prefabSet.m_fScaleX);
 		context.WriteValue("ScaleY", prefabSet.m_fScaleY);
@@ -547,6 +824,7 @@ class KK_BuildingWaypointLibrary
 		context.WriteValue("VerticalSpacing", prefabSet.m_fVerticalSpacing);
 		context.WriteValue("DeduplicateDistance", prefabSet.m_fDeduplicateDistance);
 		context.WriteValue("HasSampleCache", prefabSet.m_bHasSampleCache);
+		context.WriteValue("DropRoof", prefabSet.m_bDropRoof);
 		context.WriteValue("NextWaypointId", prefabSet.m_iNextWaypointId);
 
 		int waypointCount = prefabSet.m_aWaypoints.Count();
@@ -625,8 +903,6 @@ class KK_BuildingWaypointLibrary
 		}
 
 		context.WriteValue("ForbiddenFloors", forbidCsv);
-
-		context.EndObject();
 	}
 
 	protected static void LoadFromDisk()
@@ -723,6 +999,7 @@ class KK_BuildingWaypointLibrary
 			context.ReadValue("VerticalSpacing", prefabSet.m_fVerticalSpacing);
 			context.ReadValue("DeduplicateDistance", prefabSet.m_fDeduplicateDistance);
 			context.ReadValue("HasSampleCache", prefabSet.m_bHasSampleCache);
+			context.ReadValue("DropRoof", prefabSet.m_bDropRoof);
 			context.ReadValue("NextWaypointId", prefabSet.m_iNextWaypointId);
 
 			int waypointCount;

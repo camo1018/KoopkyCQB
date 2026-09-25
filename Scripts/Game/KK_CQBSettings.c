@@ -127,6 +127,9 @@ modded class SCR_BaseGameMode
 	[Attribute("0", UIWidgets.CheckBox, "Draw interior points while playing from Workbench", category: "Koopky CQB/Debug")]
 	protected bool m_bKK_DebugDraw;
 
+	[Attribute("0", UIWidgets.CheckBox, "Show the waypoint authoring page on the commanding radial", category: "Koopky CQB/Debug")]
+	protected bool m_bKK_WaypointAuthoring;
+
 	protected static const string KK_CONFIG_PATH = "$profile:KoopkyCQB/config.json";
 	protected static const string KK_LEGACY_CONFIG_PATH = "$profile:KoopkyCQB_config.json";
 	protected bool m_bKK_ConfigLoaded;
@@ -146,7 +149,11 @@ modded class SCR_BaseGameMode
 		KK_CaptureDefaults();
 
 		if (!Replication.IsServer())
+		{
+			m_bKK_ConfigLoaded = true;
+			KK_ReadAuthoringFlag();
 			return;
+		}
 
 		m_bKK_ConfigLoaded = true;
 
@@ -267,6 +274,28 @@ modded class SCR_BaseGameMode
 			KK_ReadBool(context, "DebugDraw", m_bKK_DebugDraw);
 			context.EndObject();
 		}
+
+		if (context.StartObject("Authoring"))
+		{
+			KK_ReadBool(context, "WaypointRadial", m_bKK_WaypointAuthoring);
+			context.EndObject();
+		}
+	}
+
+	protected void KK_ReadAuthoringFlag()
+	{
+		if (!FileIO.FileExists(KK_CONFIG_PATH))
+			return;
+
+		SCR_JsonLoadContext context = new SCR_JsonLoadContext();
+		if (!context.LoadFromFile(KK_CONFIG_PATH))
+			return;
+
+		if (!context.StartObject("Authoring"))
+			return;
+
+		KK_ReadBool(context, "WaypointRadial", m_bKK_WaypointAuthoring);
+		context.EndObject();
 	}
 
 	protected void KK_ReadFloat(
@@ -376,6 +405,10 @@ modded class SCR_BaseGameMode
 
 		context.StartObject("Debug");
 		context.WriteValue("DebugDraw", m_bKK_DebugDraw);
+		context.EndObject();
+
+		context.StartObject("Authoring");
+		context.WriteValue("WaypointRadial", m_bKK_WaypointAuthoring);
 		context.EndObject();
 	}
 
@@ -574,6 +607,11 @@ modded class SCR_BaseGameMode
 		return m_bKK_DebugDraw;
 	}
 
+	bool KK_GetWaypointAuthoring()
+	{
+		return m_bKK_WaypointAuthoring;
+	}
+
 	void KK_SetHorizontalSpacing(float value) { m_fKK_HorizontalSpacing = value; }
 	void KK_SetVerticalSpacing(float value) { m_fKK_VerticalSpacing = value; }
 	void KK_SetDeduplicateDistance(float value) { m_fKK_DeduplicateDistance = value; }
@@ -630,6 +668,7 @@ modded class SCR_BaseGameMode
 	void KK_SetDoorSearchInterval(float value) { m_fKK_DoorSearchInterval = value; }
 	void KK_SetDoorSearchDistance(float value) { m_fKK_DoorSearchDistance = value; }
 	void KK_SetDebugDraw(bool value) { m_bKK_DebugDraw = value; }
+	void KK_SetWaypointAuthoring(bool value) { m_bKK_WaypointAuthoring = value; }
 }
 
 class KK_SavedCollision
@@ -781,31 +820,29 @@ class KK_SquadCollision
 	{
 		int previous = physics.GetInteractionLayer();
 		int next = WithoutCharacters(previous);
-		if ((next & EPhysicsLayerDefs.FireGeometry) == 0)
-		{
-			int savedCount = saved.m_aGeomMasks.Count();
-			for (int n = 0; n < savedCount; n++)
-			{
-				if ((saved.m_aGeomMasks[n] & EPhysicsLayerDefs.FireGeometry) == 0)
-					continue;
-
-				next |= EPhysicsLayerDefs.FireGeometry;
-				break;
-			}
-		}
-
 		if (next != previous)
 			physics.SetInteractionLayer(next);
 
 		int geomCount = physics.GetNumGeoms();
-		for (int i = 0; i < geomCount; i++)
+		int i;
+		for (i = 0; i < geomCount; i++)
 		{
 			int mask = physics.GetGeomInteractionLayer(i);
 			if (i >= saved.m_aGeomMasks.Count())
 				saved.m_aGeomMasks.Insert(mask);
+		}
 
-			int stripped = WithoutCharacters(mask);
-			if (stripped != mask)
+		if (BlocksCharacters(physics))
+			physics.SetInteractionLayer(EPhysicsLayerDefs.CharNoCollide);
+
+		int savedCount = saved.m_aGeomMasks.Count();
+		if (savedCount < geomCount)
+			geomCount = savedCount;
+
+		for (i = 0; i < geomCount; i++)
+		{
+			int stripped = WithoutCharacters(saved.m_aGeomMasks[i]);
+			if (stripped != physics.GetGeomInteractionLayer(i))
 				physics.SetGeomInteractionLayer(i, stripped);
 		}
 

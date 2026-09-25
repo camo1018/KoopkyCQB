@@ -687,7 +687,11 @@ bool EnsureNavmeshLoaded(
 		}
 
 		if (prefabSet)
+		{
 			DropForbiddenFloors(prefabSet);
+			if (prefabSet.m_bDropRoof)
+				DropRoofNodes(world, building);
+		}
 
 		if (m_aTargets.IsEmpty())
 		{
@@ -1058,6 +1062,64 @@ bool EnsureNavmeshLoaded(
 
 		PrintFormat(
 			"KK: Forbidden floors dropped targets, kept %1",
+			m_aTargets.Count()
+		);
+	}
+
+	protected void DropRoofNodes(BaseWorld world, notnull IEntity building)
+	{
+		const float ROOF_BAND = 2.0;
+		float topLocalY = -10000.0;
+
+		foreach (KK_InteriorTarget candidate : m_aTargets)
+		{
+			if (!candidate || candidate.m_iAuthoredId >= 0)
+				continue;
+
+			topLocalY = Math.Max(topLocalY, candidate.m_vLocalPosition[1]);
+		}
+
+		ref array<ref KK_InteriorTarget> kept = {};
+		int dropped;
+
+		foreach (KK_InteriorTarget target : m_aTargets)
+		{
+			if (!target)
+				continue;
+
+			bool roof =
+				target.m_iAuthoredId < 0 &&
+				topLocalY - target.m_vLocalPosition[1] <= ROOF_BAND &&
+				!HasBuildingOverhead(world, building, target.m_vPosition);
+
+			if (roof)
+			{
+				dropped++;
+				continue;
+			}
+
+			kept.Insert(target);
+		}
+
+		m_aTargets.Clear();
+		m_mAuthoredTargetIndex.Clear();
+
+		foreach (KK_InteriorTarget keptTarget : kept)
+		{
+			m_aTargets.Insert(keptTarget);
+
+			if (keptTarget.m_iAuthoredId >= 0)
+			{
+				m_mAuthoredTargetIndex.Set(
+					keptTarget.m_iAuthoredId,
+					m_aTargets.Count() - 1
+				);
+			}
+		}
+
+		PrintFormat(
+			"KK: Roof drop removed %1 targets, kept %2",
+			dropped,
 			m_aTargets.Count()
 		);
 	}

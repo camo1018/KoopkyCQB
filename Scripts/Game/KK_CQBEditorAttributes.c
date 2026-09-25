@@ -158,6 +158,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 9: return mode.KK_GetClassifyOpenings();
 			case 10: return mode.KK_GetNavImprovements();
 			case 11: return mode.KK_GetIgnoreSquadCollision();
+			case 12: return mode.KK_GetWaypointAuthoring();
 		}
 
 		return mode.KK_GetGarrisonAfterClear();
@@ -178,6 +179,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 9: mode.KK_SetClassifyOpenings(value); break;
 			case 10: mode.KK_SetNavImprovements(value); break;
 			case 11: mode.KK_SetIgnoreSquadCollision(value); break;
+			case 12: mode.KK_SetWaypointAuthoring(value); break;
 			default: mode.KK_SetGarrisonAfterClear(value); break;
 		}
 	}
@@ -259,6 +261,8 @@ class KK_CQBAttrDoorSearchInterval : KK_CQBFloatEditorAttribute {}
 class KK_CQBAttrDoorSearchDistance : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrDebugDraw : KK_CQBBoolEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrWaypointAuthoring : KK_CQBBoolEditorAttribute {}
 
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrClearSpareMode : SCR_BaseEditorAttribute
