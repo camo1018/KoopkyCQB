@@ -10,6 +10,9 @@ class KK_InteriorAgentAssignment
 	vector m_vStillPosition;
 	IEntity m_DoorEntity;
 	bool m_bClearsPoint;
+	bool m_bFacingApplied;
+	ref array<vector> m_aRouteGoals = {};
+	int m_iRouteIndex;
 
 	void KK_InteriorAgentAssignment(
 		notnull AIAgent agent,
@@ -354,6 +357,10 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			}
 			else if (
 				assignment.m_bClearsPoint &&
+				KK_AuthoredRouteHelper.IsOnFinalGoal(
+					assignment.m_aRouteGoals,
+					assignment.m_iRouteIndex
+				) &&
 				vector.Distance(
 					assignment.m_Agent.GetControlledEntity().GetOrigin(),
 					assignment.m_Target.m_vPosition
@@ -374,6 +381,12 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				{
 					assignment.m_fStillSince = currentTime;
 					assignment.m_fStartedAt += timerDelta;
+
+					if (assignment.m_bFacingApplied)
+					{
+						KK_HoldFacing.Release(this, assignment.m_Agent);
+						assignment.m_bFacingApplied = false;
+					}
 				}
 
 				SetWeaponRaised(assignment.m_Agent, true);
@@ -381,9 +394,33 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				vector unitPosition =
 					assignment.m_Agent.GetControlledEntity().GetOrigin();
 
+				vector moveGoal = AssignmentMoveGoal(assignment);
+				bool onFinalGoal = KK_AuthoredRouteHelper.IsOnFinalGoal(
+					assignment.m_aRouteGoals,
+					assignment.m_iRouteIndex
+				);
+
+				if (
+					!onFinalGoal &&
+					vector.Distance(unitPosition, moveGoal) <=
+						m_ClearWaypoint.GetArrivalRadius()
+				)
+				{
+					assignment.m_iRouteIndex++;
+					assignment.m_fLastOrderAt = currentTime;
+					assignment.m_fStillSince = currentTime;
+					assignment.m_fStartedAt = currentTime;
+					moveGoal = AssignmentMoveGoal(assignment);
+					onFinalGoal = KK_AuthoredRouteHelper.IsOnFinalGoal(
+						assignment.m_aRouteGoals,
+						assignment.m_iRouteIndex
+					);
+					IssueMoveOrder(assignment.m_Agent, moveGoal);
+				}
+
 				float distanceToTarget = vector.Distance(
 					unitPosition,
-					assignment.m_Target.m_vPosition
+					moveGoal
 				);
 
 				KK_PassageOrder passageOrder;
@@ -395,6 +432,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 				bool holdingSpare =
 					!assignment.m_bClearsPoint &&
+					onFinalGoal &&
 					distanceToTarget <= m_ClearWaypoint.GetArrivalRadius() &&
 					!(havePassage && passageOrder.m_bOverride);
 
@@ -402,6 +440,33 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				{
 					assignment.m_fStillSince = currentTime;
 					assignment.m_fStartedAt = currentTime;
+
+					if (IsEngagingEnemy(assignment.m_Agent))
+					{
+						if (assignment.m_bFacingApplied)
+						{
+							KK_HoldFacing.Release(this, assignment.m_Agent);
+							assignment.m_bFacingApplied = false;
+						}
+					}
+					else if (
+						KK_HoldFacing.HasFacing(assignment.m_Target) &&
+						!assignment.m_bFacingApplied
+					)
+					{
+						KK_HoldFacing.Apply(
+							this,
+							assignment.m_Agent,
+							assignment.m_Target,
+							KK_AgentMove.PRIORITY_LEVEL
+						);
+						assignment.m_bFacingApplied = true;
+					}
+				}
+				else if (assignment.m_bFacingApplied)
+				{
+					KK_HoldFacing.Release(this, assignment.m_Agent);
+					assignment.m_bFacingApplied = false;
 				}
 
 				if (
@@ -449,7 +514,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					IEntity doorEntity = assignment.m_DoorEntity;
 					waitingOnDoor = KK_DoorAssist.Handle(
 						assignment.m_Agent,
-						assignment.m_Target.m_vPosition,
+						moveGoal,
 						doorEntity
 					);
 					assignment.m_DoorEntity = doorEntity;
@@ -509,6 +574,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				else if (
 					!havePassage &&
 					!waitingOnDoor &&
+					!holdingSpare &&
 					currentTime - assignment.m_fLastOrderAt >=
 						KK_AgentMove.REISSUE_INTERVAL_MS &&
 					(
@@ -521,7 +587,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					assignment.m_fLastOrderAt = currentTime;
 					IssueMoveOrder(
 						assignment.m_Agent,
-						assignment.m_Target.m_vPosition
+						AssignmentMoveGoal(assignment)
 					);
 				}
 			}
@@ -1312,6 +1378,19 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		return chosen;
 	}
 
+	protected vector AssignmentMoveGoal(
+		notnull KK_InteriorAgentAssignment assignment)
+	{
+		if (!assignment.m_Target)
+			return vector.Zero;
+
+		return KK_AuthoredRouteHelper.CurrentMoveGoal(
+			assignment.m_Target,
+			assignment.m_aRouteGoals,
+			assignment.m_iRouteIndex
+		);
+	}
+
 	protected void AssignClearer(
 		notnull AIAgent agent,
 		notnull KK_InteriorTarget target,
@@ -1320,17 +1399,26 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 	{
 		target.m_eState = KK_EInteriorTargetState.ACTIVE;
 
+		vector origin = agent.GetControlledEntity().GetOrigin();
 		KK_InteriorAgentAssignment assignment =
 			new KK_InteriorAgentAssignment(
 				agent,
 				target,
 				currentTime,
-				agent.GetControlledEntity().GetOrigin()
+				origin
 			);
+
+		KK_AuthoredRouteHelper.BuildGoals(
+			m_Plan,
+			origin,
+			target,
+			assignment.m_aRouteGoals
+		);
+		assignment.m_iRouteIndex = 0;
 
 		m_aAssignments.Insert(assignment);
 		KK_PerceptionBoost.Apply(agent, m_mPerceptionFactors);
-		IssueMoveOrder(agent, target.m_vPosition);
+		IssueMoveOrder(agent, AssignmentMoveGoal(assignment));
 
 		PrintFormat(
 			"KK: Unit %1 %2 target %3 floor=%4 cluster=%5 attempt=%6",
@@ -1348,18 +1436,27 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		notnull KK_InteriorTarget target,
 		float currentTime)
 	{
+		vector origin = agent.GetControlledEntity().GetOrigin();
 		KK_InteriorAgentAssignment assignment =
 			new KK_InteriorAgentAssignment(
 				agent,
 				target,
 				currentTime,
-				agent.GetControlledEntity().GetOrigin()
+				origin
 			);
 
 		assignment.m_bClearsPoint = false;
+		KK_AuthoredRouteHelper.BuildGoals(
+			m_Plan,
+			origin,
+			target,
+			assignment.m_aRouteGoals
+		);
+		assignment.m_iRouteIndex = 0;
+
 		m_aAssignments.Insert(assignment);
 		KK_PerceptionBoost.Apply(agent, m_mPerceptionFactors);
-		IssueMoveOrder(agent, target.m_vPosition);
+		IssueMoveOrder(agent, AssignmentMoveGoal(assignment));
 
 		PrintFormat(
 			"KK: Unit %1 spare target %2 floor=%3 cluster=%4",
@@ -1378,6 +1475,12 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		vector origin =
 			assignment.m_Agent.GetControlledEntity().GetOrigin();
 
+		if (assignment.m_bFacingApplied)
+		{
+			KK_HoldFacing.Release(this, assignment.m_Agent);
+			assignment.m_bFacingApplied = false;
+		}
+
 		assignment.m_Target = target;
 		assignment.m_fStartedAt = currentTime;
 		assignment.m_fStillSince = currentTime;
@@ -1389,7 +1492,14 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			target.m_vPosition
 		);
 		assignment.m_DoorEntity = null;
-		IssueMoveOrder(assignment.m_Agent, target.m_vPosition);
+		KK_AuthoredRouteHelper.BuildGoals(
+			m_Plan,
+			origin,
+			target,
+			assignment.m_aRouteGoals
+		);
+		assignment.m_iRouteIndex = 0;
+		IssueMoveOrder(assignment.m_Agent, AssignmentMoveGoal(assignment));
 
 		PrintFormat(
 			"KK: Unit %1 spare retarget %2 floor=%3 cluster=%4",
@@ -1463,22 +1573,33 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 			vector origin =
 				assignment.m_Agent.GetControlledEntity().GetOrigin();
-			float distance = vector.Distance(
-				origin,
-				assignment.m_Target.m_vPosition
-			);
+			vector moveGoal = AssignmentMoveGoal(assignment);
+			float distance = vector.Distance(origin, moveGoal);
 
-			if (assignment.m_bClearsPoint && distance <= arrival)
+			if (
+				assignment.m_bClearsPoint &&
+				KK_AuthoredRouteHelper.IsOnFinalGoal(
+					assignment.m_aRouteGoals,
+					assignment.m_iRouteIndex
+				) &&
+				distance <= arrival
+			)
+			{
 				continue;
+			}
 
 			bool settled =
 				!assignment.m_bClearsPoint &&
+				KK_AuthoredRouteHelper.IsOnFinalGoal(
+					assignment.m_aRouteGoals,
+					assignment.m_iRouteIndex
+				) &&
 				distance <= arrival;
 
 			soldiers.Insert(
 				new KK_PassageSoldier(
 					assignment.m_Agent,
-					assignment.m_Target.m_vPosition,
+					moveGoal,
 					settled
 				)
 			);
@@ -1815,6 +1936,12 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 		if (assignment && assignment.m_Agent)
 		{
+			if (assignment.m_bFacingApplied)
+			{
+				KK_HoldFacing.Release(this, assignment.m_Agent);
+				assignment.m_bFacingApplied = false;
+			}
+
 			KK_PerceptionBoost.Restore(
 				assignment.m_Agent,
 				m_mPerceptionFactors
@@ -1836,6 +1963,12 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 		if (assignment && assignment.m_Agent)
 		{
+			if (assignment.m_bFacingApplied)
+			{
+				KK_HoldFacing.Release(this, assignment.m_Agent);
+				assignment.m_bFacingApplied = false;
+			}
+
 			KK_PerceptionBoost.Restore(
 				assignment.m_Agent,
 				m_mPerceptionFactors

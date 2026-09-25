@@ -31,6 +31,7 @@ class KK_InteriorTarget
 	int m_iCluster;
 	int m_iRetries;
 	int m_iOpeningHeading;
+	int m_iAuthoredId;
 
 	float m_fOpeningDistance;
 
@@ -51,6 +52,7 @@ class KK_InteriorTarget
 		m_iCluster = -1;
 		m_iRetries = 0;
 		m_iOpeningHeading = -1;
+		m_iAuthoredId = -1;
 		m_fOpeningDistance = 0;
 		m_vFacing = vector.Zero;
 		m_eState = KK_EInteriorTargetState.PENDING;
@@ -180,6 +182,12 @@ class KK_BuildingInteriorPlan
 
 	protected ref array<ref KK_InteriorTarget> m_aTargets = {};
 	protected ref array<ref KK_InteriorCluster> m_aClusters = {};
+	protected ref array<ref KK_AuthoredBuildingWaypoint> m_aAuthoredWaypoints = {};
+	protected ref map<int, int> m_mAuthoredTargetIndex = new map<int, int>();
+	protected ref map<int, ref array<int>> m_mAuthoredLinks = new map<int, ref array<int>>();
+	protected ref map<int, vector> m_mAuthoredWorldPositions = new map<int, vector>();
+	protected ref map<string, bool> m_mReachableAuthoredHops =
+		new map<string, bool>();
 
 	protected ref TraceParam m_SurfaceTrace;
 	protected ref TraceParam m_OpeningTrace;
@@ -190,6 +198,7 @@ class KK_BuildingInteriorPlan
 	protected static const float OPENING_CHEST_HEIGHT = 1.5;
 	protected static const float OPENING_CLUSTER_GAP = 3.5;
 	protected static const int OPENING_HEADINGS = 8;
+	protected static const float FLOOR_REJECT_HEIGHT = 1.0;
 	protected int m_iSurfaceBuilding;
 	protected int m_iSurfaceCovered;
 	protected int m_iSurfaceNatural;
@@ -209,6 +218,164 @@ class KK_BuildingInteriorPlan
 	array<ref KK_InteriorCluster> GetClusters()
 	{
 		return m_aClusters;
+	}
+
+	array<ref KK_AuthoredBuildingWaypoint> GetAuthoredWaypoints()
+	{
+		return m_aAuthoredWaypoints;
+	}
+
+	bool GetAuthoredWorldPosition(int authoredId, out vector worldPosition)
+	{
+		return m_mAuthoredWorldPositions.Find(authoredId, worldPosition);
+	}
+
+	bool HasReachableAuthoredChain(int fromAuthoredId, int toAuthoredId)
+	{
+		if (fromAuthoredId < 0 || toAuthoredId < 0)
+			return false;
+
+		if (fromAuthoredId == toAuthoredId)
+			return true;
+
+		return HopIsReachable(fromAuthoredId, toAuthoredId) ||
+			FindAuthoredPath(fromAuthoredId, toAuthoredId, null);
+	}
+
+	bool FindAuthoredPath(
+		int fromAuthoredId,
+		int toAuthoredId,
+		array<int> outPath)
+	{
+		if (fromAuthoredId < 0 || toAuthoredId < 0)
+			return false;
+
+		if (outPath)
+			outPath.Clear();
+
+		if (fromAuthoredId == toAuthoredId)
+		{
+			if (outPath)
+				outPath.Insert(fromAuthoredId);
+
+			return true;
+		}
+
+		ref map<int, int> cameFrom = new map<int, int>();
+		ref array<int> queue = {};
+		queue.Insert(fromAuthoredId);
+		cameFrom.Set(fromAuthoredId, -1);
+
+		int queuePos;
+		while (queuePos < queue.Count())
+		{
+			int current = queue[queuePos];
+			queuePos++;
+
+			ref array<int> links;
+			if (!m_mAuthoredLinks.Find(current, links) || !links)
+				continue;
+
+			foreach (int nextId : links)
+			{
+				if (cameFrom.Contains(nextId))
+					continue;
+
+				if (!HopIsReachable(current, nextId))
+					continue;
+
+				cameFrom.Set(nextId, current);
+
+				if (nextId == toAuthoredId)
+				{
+					if (outPath)
+						BuildPath(cameFrom, fromAuthoredId, toAuthoredId, outPath);
+
+					return true;
+				}
+
+				queue.Insert(nextId);
+			}
+		}
+
+		return false;
+	}
+
+	int FindNearestAuthoredId(vector worldPosition, bool holdsOnly = false)
+	{
+		int nearestId = -1;
+		float nearestDistance = float.MAX;
+
+		foreach (KK_AuthoredBuildingWaypoint waypoint : m_aAuthoredWaypoints)
+		{
+			if (!waypoint)
+				continue;
+
+			if (
+				holdsOnly &&
+				waypoint.m_eType == KK_EBuildingWaypointType.ROUTE
+			)
+			{
+				continue;
+			}
+
+			vector world;
+			if (!m_mAuthoredWorldPositions.Find(waypoint.m_iId, world))
+				continue;
+
+			float distance = vector.Distance(worldPosition, world);
+			if (distance >= nearestDistance)
+				continue;
+
+			nearestDistance = distance;
+			nearestId = waypoint.m_iId;
+		}
+
+		return nearestId;
+	}
+
+	protected void BuildPath(
+		notnull map<int, int> cameFrom,
+		int fromId,
+		int toId,
+		notnull array<int> outPath)
+	{
+		ref array<int> reversed = {};
+		int current = toId;
+
+		while (current >= 0)
+		{
+			reversed.Insert(current);
+
+			int previous;
+			if (!cameFrom.Find(current, previous))
+				break;
+
+			current = previous;
+			if (current == fromId)
+			{
+				reversed.Insert(fromId);
+				break;
+			}
+		}
+
+		for (int i = reversed.Count() - 1; i >= 0; i--)
+			outPath.Insert(reversed[i]);
+	}
+
+	protected bool HopIsReachable(int fromId, int toId)
+	{
+		string key = HopKey(fromId, toId);
+		bool reachable;
+		return m_mReachableAuthoredHops.Find(key, reachable) && reachable;
+	}
+
+	protected string HopKey(int fromId, int toId)
+	{
+		if (fromId <= toId)
+			return string.Format("%1:%2", fromId, toId);
+
+		return string.Format("%1:%2", toId, fromId);
 	}
 
 bool EnsureNavmeshLoaded(
@@ -280,12 +447,17 @@ bool EnsureNavmeshLoaded(
 		m_Building = building;
 		m_aTargets.Clear();
 		m_aClusters.Clear();
-	
+		m_aAuthoredWaypoints.Clear();
+		m_mAuthoredTargetIndex.Clear();
+		m_mAuthoredLinks.Clear();
+		m_mAuthoredWorldPositions.Clear();
+		m_mReachableAuthoredHops.Clear();
+
 		AIPathfindingComponent pathfinding =
 			AIPathfindingComponent.Cast(
 				group.FindComponent(AIPathfindingComponent)
 			);
-	
+
 		if (!pathfinding)
 		{
 			Print(
@@ -294,18 +466,10 @@ bool EnsureNavmeshLoaded(
 			);
 			return false;
 		}
-	
-		// Prevent zero or excessively small increments.
-		horizontalSpacing = Math.Max(
-			horizontalSpacing,
-			1.5
-		);
-	
-		verticalSpacing = Math.Max(
-			verticalSpacing,
-			1.0
-		);
-	
+
+		horizontalSpacing = Math.Max(horizontalSpacing, 1.5);
+		verticalSpacing = Math.Max(verticalSpacing, 1.0);
+
 		vector mins;
 		vector maxs;
 		ExpandBoundsToEntitySize(building, mins, maxs);
@@ -317,19 +481,15 @@ bool EnsureNavmeshLoaded(
 			horizontalSpacing,
 			verticalSpacing
 		);
-	
+
 		const float HORIZONTAL_MARGIN = 0.6;
 		const float VERTICAL_MARGIN = 0.25;
-	
-		vector projectionExtents = Vector(
-			0.55,
-			1.0,
-			0.55
-		);
-	
+
+		vector projectionExtents = Vector(0.55, 1.0, 0.55);
+
 		NavmeshWorldComponent navmesh =
 			pathfinding.GetNavmeshComponent();
-	
+
 		if (!navmesh)
 		{
 			Print(
@@ -338,7 +498,7 @@ bool EnsureNavmeshLoaded(
 			);
 			return false;
 		}
-	
+
 		int testedCount;
 		int projectedCount;
 		int rejectedCount;
@@ -348,165 +508,155 @@ bool EnsureNavmeshLoaded(
 		m_iSurfaceNatural = 0;
 		m_iSurfaceOpen = 0;
 		m_aNotedMaterials = {};
-	
+
 		BaseWorld world = GetGame().GetWorld();
-	
-		float localY =
-			mins[1] + VERTICAL_MARGIN;
-	
-		while (localY <= maxs[1] - VERTICAL_MARGIN)
+
+		KK_BuildingWaypointLibrary.EnsureLoaded();
+		string prefabName =
+			KK_BuildingWaypointLibrary.ResolvePrefabName(building);
+		KK_PrefabWaypointSet prefabSet =
+			KK_BuildingWaypointLibrary.FindSet(prefabName);
+
+		float scaleX;
+		float scaleY;
+		float scaleZ;
+		KK_BuildingWaypointLibrary.ReadScale(
+			building,
+			scaleX,
+			scaleY,
+			scaleZ
+		);
+
+		int authoredHoldCount = InsertAuthoredHolds(
+			building,
+			pathfinding,
+			navmesh,
+			world,
+			verticalSpacing,
+			deduplicateDistance,
+			prefabSet
+		);
+
+		bool usedCache;
+		if (
+			prefabSet &&
+			KK_BuildingWaypointLibrary.HasUsableSampleCache(
+				prefabSet,
+				scaleX,
+				scaleY,
+				scaleZ,
+				horizontalSpacing,
+				verticalSpacing,
+				deduplicateDistance
+			)
+		)
 		{
-			int layerTested;
-			int layerAccepted;
-	
-			float localX =
-				mins[0] + HORIZONTAL_MARGIN;
-	
-			while (localX <= maxs[0] - HORIZONTAL_MARGIN)
-			{
-				float localZ =
-					mins[2] + HORIZONTAL_MARGIN;
-	
-				while (localZ <= maxs[2] - HORIZONTAL_MARGIN)
-				{
-					// Advance before validation so every rejection path
-					// still progresses to the next sample.
-					float sampleZ = localZ;
-					localZ += horizontalSpacing;
-	
-					testedCount++;
-					layerTested++;
-	
-					vector localSample = Vector(
-						localX,
-						localY,
-						sampleZ
-					);
-	
-					vector worldSample =
-						building.CoordToParent(localSample);
-	
-					vector queryPosition =
-						SnapToFloor(
-							world,
-							worldSample,
-							0.8
-						);
-	
-					vector correctedPosition;
-	
-					bool projected =
-						pathfinding.GetClosestPositionOnNavmesh(
-							queryPosition,
-							projectionExtents,
-							correctedPosition
-						);
-	
-					if (!projected)
-					{
-						rejectedCount++;
-						continue;
-					}
-	
-					vector queryLocal =
-						building.CoordToLocal(queryPosition);
-	
-					vector correctedLocal =
-						building.CoordToLocal(
-							correctedPosition
-						);
-	
-					// Reject samples that snap vertically onto
-					// a different floor.
-					float verticalProjectionDifference =
-						Math.AbsFloat(
-							correctedLocal[1] -
-							queryLocal[1]
-						);
-	
-					if (
-						verticalProjectionDifference >
-						Math.Max(
-							verticalSpacing * 0.75,
-							0.8
-						)
-					)
-					{
-						rejectedCount++;
-						continue;
-					}
-
-					// SnapToFloor / navmesh must stay on the storey
-					// we sampled. Otherwise upper floors collapse
-					// onto ground-level navmesh.
-					if (
-						Math.AbsFloat(
-							correctedLocal[1] - localSample[1]
-						) > 1.0
-					)
-					{
-						rejectedCount++;
-						continue;
-					}
-
-					if (
-						filterBuildingSurfaces &&
-						!KeepBuildingSurface(
-							world,
-							building,
-							correctedPosition
-						)
-					)
-					{
-						rejectedCount++;
-						continue;
-					}
-	
-					vector reachablePoint;
-					if (!navmesh.GetReachablePoint(
-						correctedPosition,
-						1.5,
-						reachablePoint
-					))
-					{
-						rejectedCount++;
-						continue;
-					}
-	
-					if (ContainsNearbyTarget(
-						correctedPosition,
-						deduplicateDistance
-					))
-					{
-						rejectedCount++;
-						continue;
-					}
-	
-					KK_InteriorTarget target =
-						new KK_InteriorTarget(
-							correctedPosition,
-							correctedLocal,
-							0
-						);
-	
-					m_aTargets.Insert(target);
-					projectedCount++;
-					layerAccepted++;
-				}
-	
-				localX += horizontalSpacing;
-			}
-	
-			PrintFormat(
-				"KK: Sample layer localY=%1 tested=%2 accepted=%3",
-				localY,
-				layerTested,
-				layerAccepted
+			usedCache = true;
+			int cacheAccepted = InsertCachedSamples(
+				building,
+				pathfinding,
+				navmesh,
+				world,
+				verticalSpacing,
+				deduplicateDistance,
+				filterBuildingSurfaces,
+				prefabSet,
+				testedCount,
+				projectedCount,
+				rejectedCount
 			);
-	
-			localY += verticalSpacing;
+
+			PrintFormat(
+				"KK: Prefab sample cache hit for %1 accepted=%2 authoredHolds=%3",
+				prefabName,
+				cacheAccepted,
+				authoredHoldCount
+			);
 		}
-	
+		else
+		{
+			float localY = mins[1] + VERTICAL_MARGIN;
+
+			while (localY <= maxs[1] - VERTICAL_MARGIN)
+			{
+				int layerTested;
+				int layerAccepted;
+
+				float localX = mins[0] + HORIZONTAL_MARGIN;
+
+				while (localX <= maxs[0] - HORIZONTAL_MARGIN)
+				{
+					float localZ = mins[2] + HORIZONTAL_MARGIN;
+
+					while (localZ <= maxs[2] - HORIZONTAL_MARGIN)
+					{
+						float sampleZ = localZ;
+						localZ += horizontalSpacing;
+
+						testedCount++;
+						layerTested++;
+
+						vector localSample = Vector(
+							localX,
+							localY,
+							sampleZ
+						);
+
+						vector correctedPosition;
+						vector correctedLocal;
+
+						if (!ProjectLocalSample(
+							building,
+							pathfinding,
+							navmesh,
+							world,
+							localSample,
+							verticalSpacing,
+							projectionExtents,
+							filterBuildingSurfaces,
+							correctedPosition,
+							correctedLocal
+						))
+						{
+							rejectedCount++;
+							continue;
+						}
+
+						if (ContainsNearbyTarget(
+							correctedPosition,
+							deduplicateDistance
+						))
+						{
+							rejectedCount++;
+							continue;
+						}
+
+						KK_InteriorTarget target =
+							new KK_InteriorTarget(
+								correctedPosition,
+								correctedLocal,
+								0
+							);
+
+						m_aTargets.Insert(target);
+						projectedCount++;
+						layerAccepted++;
+					}
+
+					localX += horizontalSpacing;
+				}
+
+				PrintFormat(
+					"KK: Sample layer localY=%1 tested=%2 accepted=%3",
+					localY,
+					layerTested,
+					layerAccepted
+				);
+
+				localY += verticalSpacing;
+			}
+		}
+
 		if (filterBuildingSurfaces)
 			PrintSurfaceFilter();
 
@@ -516,9 +666,47 @@ bool EnsureNavmeshLoaded(
 				"KK: No interior navmesh positions found in %1",
 				building
 			);
-	
+
 			return false;
 		}
+
+		if (classifyOpenings && !usedCache)
+			ClassifyOpenings(horizontalSpacing);
+
+		ApplyAuthoredOpeningOverrides(building, prefabSet);
+
+		if (!usedCache)
+		{
+			KK_BuildingWaypointLibrary.StoreSampleCache(
+				building,
+				horizontalSpacing,
+				verticalSpacing,
+				deduplicateDistance,
+				m_aTargets
+			);
+		}
+
+		if (prefabSet)
+			DropForbiddenFloors(prefabSet);
+
+		if (m_aTargets.IsEmpty())
+		{
+			PrintFormat(
+				"KK: All interior targets forbidden for %1",
+				building
+			);
+
+			return false;
+		}
+
+		PrepareAuthoredGraph(
+			building,
+			pathfinding,
+			navmesh,
+			world,
+			verticalSpacing,
+			prefabSet
+		);
 
 		if (filterUnreachableIslands && !KeepReachableIsland(group))
 		{
@@ -529,32 +717,36 @@ bool EnsureNavmeshLoaded(
 
 			return false;
 		}
-	
+
+		RebuildAuthoredTargetIndex();
 		AssignFloorIndices();
 		BuildClusters(clusterRadius);
 		OrderTargets(group.GetCenterOfMass());
+		RebuildAuthoredTargetIndex();
 
-		if (classifyOpenings)
+		if (classifyOpenings && usedCache)
 			ClassifyOpenings(horizontalSpacing);
-	
+
+		ApplyAuthoredOpeningOverrides(building, prefabSet);
+
 		float minLocalY = 10000.0;
 		float maxLocalY = -10000.0;
 		int floor0Count;
 		int floor1Count;
 		int floor2PlusCount;
-	
+
 		foreach (KK_InteriorTarget summaryTarget : m_aTargets)
 		{
 			minLocalY = Math.Min(
 				minLocalY,
 				summaryTarget.m_vLocalPosition[1]
 			);
-	
+
 			maxLocalY = Math.Max(
 				maxLocalY,
 				summaryTarget.m_vLocalPosition[1]
 			);
-	
+
 			if (summaryTarget.m_iFloor <= 0)
 				floor0Count++;
 			else if (summaryTarget.m_iFloor == 1)
@@ -562,16 +754,17 @@ bool EnsureNavmeshLoaded(
 			else
 				floor2PlusCount++;
 		}
-	
+
 		PrintFormat(
-			"KK: Interior plan for %1 tested=%2 accepted=%3 rejected=%4 clusters=%5",
+			"KK: Interior plan for %1 tested=%2 accepted=%3 rejected=%4 clusters=%5 cache=%6",
 			building,
 			testedCount,
 			projectedCount,
 			rejectedCount,
-			m_aClusters.Count()
+			m_aClusters.Count(),
+			usedCache
 		);
-	
+
 		PrintFormat(
 			"KK: Floor counts 0=%1 1=%2 2+=%3 localY=%4 to %5",
 			floor0Count,
@@ -580,7 +773,7 @@ bool EnsureNavmeshLoaded(
 			minLocalY,
 			maxLocalY
 		);
-	
+
 		return true;
 	}	
 
@@ -614,6 +807,422 @@ bool EnsureNavmeshLoaded(
 		maxs[0] = Math.Max(maxs[0], Math.Max(cornerA[0], cornerB[0]));
 		maxs[1] = Math.Max(maxs[1], Math.Max(topLocal[1], bottomLocal[1]));
 		maxs[2] = Math.Max(maxs[2], Math.Max(cornerA[2], cornerB[2]));
+	}
+
+	protected int InsertAuthoredHolds(
+		notnull BaseBuilding building,
+		notnull AIPathfindingComponent pathfinding,
+		notnull NavmeshWorldComponent navmesh,
+		BaseWorld world,
+		float verticalSpacing,
+		float deduplicateDistance,
+		KK_PrefabWaypointSet prefabSet)
+	{
+		if (!prefabSet)
+			return 0;
+
+		int accepted;
+
+		foreach (KK_AuthoredBuildingWaypoint waypoint : prefabSet.m_aWaypoints)
+		{
+			if (!waypoint)
+				continue;
+
+			if (waypoint.m_eType == KK_EBuildingWaypointType.ROUTE)
+				continue;
+
+			vector correctedPosition;
+			vector correctedLocal;
+
+			if (!ProjectLocalSample(
+				building,
+				pathfinding,
+				navmesh,
+				world,
+				waypoint.m_vLocalPosition,
+				verticalSpacing,
+				Vector(0.55, 1.0, 0.55),
+				false,
+				correctedPosition,
+				correctedLocal
+			))
+			{
+				continue;
+			}
+
+			KK_InteriorTarget target = new KK_InteriorTarget(
+				correctedPosition,
+				correctedLocal,
+				0
+			);
+
+			target.m_iAuthoredId = waypoint.m_iId;
+			target.m_vFacing =
+				KK_BuildingWaypointLibrary.LocalFacingToWorld(
+					building,
+					waypoint.m_vLocalFacing
+				);
+
+			if (waypoint.m_eType == KK_EBuildingWaypointType.WINDOW)
+				target.m_eOpening = KK_EInteriorOpening.WINDOW;
+			else if (waypoint.m_eType == KK_EBuildingWaypointType.DOOR)
+				target.m_eOpening = KK_EInteriorOpening.DOOR;
+
+			m_aTargets.Insert(target);
+			m_mAuthoredTargetIndex.Set(waypoint.m_iId, m_aTargets.Count() - 1);
+			accepted++;
+		}
+
+		return accepted;
+	}
+
+	protected int InsertCachedSamples(
+		notnull BaseBuilding building,
+		notnull AIPathfindingComponent pathfinding,
+		notnull NavmeshWorldComponent navmesh,
+		BaseWorld world,
+		float verticalSpacing,
+		float deduplicateDistance,
+		bool filterBuildingSurfaces,
+		notnull KK_PrefabWaypointSet prefabSet,
+		out int testedCount,
+		out int projectedCount,
+		out int rejectedCount)
+	{
+		int accepted;
+
+		foreach (KK_CachedInteriorSample sample : prefabSet.m_aSamples)
+		{
+			if (!sample)
+				continue;
+
+			testedCount++;
+
+			vector correctedPosition;
+			vector correctedLocal;
+
+			if (!ProjectLocalSample(
+				building,
+				pathfinding,
+				navmesh,
+				world,
+				sample.m_vLocalPosition,
+				verticalSpacing,
+				Vector(0.55, 1.0, 0.55),
+				filterBuildingSurfaces,
+				correctedPosition,
+				correctedLocal
+			))
+			{
+				rejectedCount++;
+				continue;
+			}
+
+			if (ContainsNearbyTarget(correctedPosition, deduplicateDistance))
+			{
+				rejectedCount++;
+				continue;
+			}
+
+			KK_InteriorTarget target = new KK_InteriorTarget(
+				correctedPosition,
+				correctedLocal,
+				0
+			);
+
+			target.m_eOpening = sample.m_eOpening;
+			target.m_iOpeningHeading = sample.m_iOpeningHeading;
+
+			if (sample.m_eOpening != KK_EInteriorOpening.NONE)
+			{
+				target.m_vFacing =
+					KK_BuildingWaypointLibrary.LocalFacingToWorld(
+						building,
+						sample.m_vLocalFacing
+					);
+			}
+
+			m_aTargets.Insert(target);
+			projectedCount++;
+			accepted++;
+		}
+
+		return accepted;
+	}
+
+	protected bool ProjectLocalSample(
+		notnull BaseBuilding building,
+		notnull AIPathfindingComponent pathfinding,
+		notnull NavmeshWorldComponent navmesh,
+		BaseWorld world,
+		vector localSample,
+		float verticalSpacing,
+		vector projectionExtents,
+		bool filterBuildingSurfaces,
+		out vector correctedPosition,
+		out vector correctedLocal)
+	{
+		vector worldSample = building.CoordToParent(localSample);
+		vector queryPosition = SnapToFloor(world, worldSample, 0.8);
+
+		if (!pathfinding.GetClosestPositionOnNavmesh(
+			queryPosition,
+			projectionExtents,
+			correctedPosition
+		))
+		{
+			return false;
+		}
+
+		vector queryLocal = building.CoordToLocal(queryPosition);
+		correctedLocal = building.CoordToLocal(correctedPosition);
+
+		float verticalProjectionDifference =
+			Math.AbsFloat(correctedLocal[1] - queryLocal[1]);
+
+		if (
+			verticalProjectionDifference >
+			Math.Max(verticalSpacing * 0.75, 0.8)
+		)
+		{
+			return false;
+		}
+
+		if (
+			Math.AbsFloat(correctedLocal[1] - localSample[1]) >
+			FLOOR_REJECT_HEIGHT
+		)
+		{
+			return false;
+		}
+
+		if (
+			filterBuildingSurfaces &&
+			!KeepBuildingSurface(world, building, correctedPosition)
+		)
+		{
+			return false;
+		}
+
+		vector reachablePoint;
+		if (!navmesh.GetReachablePoint(
+			correctedPosition,
+			1.5,
+			reachablePoint
+		))
+		{
+			return false;
+		}
+
+		return true;
+	}
+
+	protected void DropForbiddenFloors(notnull KK_PrefabWaypointSet prefabSet)
+	{
+		if (prefabSet.m_aForbiddenFloorYs.IsEmpty())
+			return;
+
+		ref array<ref KK_InteriorTarget> kept = {};
+
+		foreach (KK_InteriorTarget target : m_aTargets)
+		{
+			if (!target)
+				continue;
+
+			if (KK_BuildingWaypointLibrary.IsFloorForbidden(
+				prefabSet,
+				target.m_vLocalPosition[1]
+			))
+			{
+				continue;
+			}
+
+			kept.Insert(target);
+		}
+
+		m_aTargets.Clear();
+		m_mAuthoredTargetIndex.Clear();
+
+		foreach (KK_InteriorTarget keptTarget : kept)
+		{
+			m_aTargets.Insert(keptTarget);
+
+			if (keptTarget.m_iAuthoredId >= 0)
+			{
+				m_mAuthoredTargetIndex.Set(
+					keptTarget.m_iAuthoredId,
+					m_aTargets.Count() - 1
+				);
+			}
+		}
+
+		PrintFormat(
+			"KK: Forbidden floors dropped targets, kept %1",
+			m_aTargets.Count()
+		);
+	}
+
+	protected void PrepareAuthoredGraph(
+		notnull BaseBuilding building,
+		notnull AIPathfindingComponent pathfinding,
+		notnull NavmeshWorldComponent navmesh,
+		BaseWorld world,
+		float verticalSpacing,
+		KK_PrefabWaypointSet prefabSet)
+	{
+		m_aAuthoredWaypoints.Clear();
+		m_mAuthoredLinks.Clear();
+		m_mAuthoredWorldPositions.Clear();
+		m_mReachableAuthoredHops.Clear();
+
+		if (!prefabSet)
+			return;
+
+		foreach (KK_AuthoredBuildingWaypoint waypoint : prefabSet.m_aWaypoints)
+		{
+			if (!waypoint)
+				continue;
+
+			m_aAuthoredWaypoints.Insert(waypoint);
+
+			vector worldPosition;
+			vector correctedLocal;
+
+			if (ProjectLocalSample(
+				building,
+				pathfinding,
+				navmesh,
+				world,
+				waypoint.m_vLocalPosition,
+				verticalSpacing,
+				Vector(0.55, 1.0, 0.55),
+				false,
+				worldPosition,
+				correctedLocal
+			))
+			{
+				m_mAuthoredWorldPositions.Set(waypoint.m_iId, worldPosition);
+			}
+			else
+			{
+				m_mAuthoredWorldPositions.Set(
+					waypoint.m_iId,
+					building.CoordToParent(waypoint.m_vLocalPosition)
+				);
+			}
+
+			ref array<int> links = {};
+			foreach (int linkId : waypoint.m_aLinks)
+				links.Insert(linkId);
+
+			m_mAuthoredLinks.Set(waypoint.m_iId, links);
+		}
+
+		foreach (KK_AuthoredBuildingWaypoint waypoint : m_aAuthoredWaypoints)
+		{
+			if (!waypoint)
+				continue;
+
+			foreach (int linkId : waypoint.m_aLinks)
+			{
+				if (linkId < waypoint.m_iId)
+					continue;
+
+				vector fromPos;
+				vector toPos;
+
+				if (
+					!m_mAuthoredWorldPositions.Find(waypoint.m_iId, fromPos) ||
+					!m_mAuthoredWorldPositions.Find(linkId, toPos)
+				)
+				{
+					continue;
+				}
+
+				if (!ArePositionsReachable(navmesh, fromPos, toPos))
+					continue;
+
+				m_mReachableAuthoredHops.Set(
+					HopKey(waypoint.m_iId, linkId),
+					true
+				);
+			}
+		}
+	}
+
+	protected bool ArePositionsReachable(
+		notnull NavmeshWorldComponent navmesh,
+		vector fromPos,
+		vector toPos)
+	{
+		vector reachableFrom;
+		vector reachableTo;
+
+		if (!navmesh.GetReachablePoint(fromPos, 1.5, reachableFrom))
+			return false;
+
+		if (!navmesh.GetReachablePoint(toPos, 1.5, reachableTo))
+			return false;
+
+		return true;
+	}
+
+	protected void ApplyAuthoredOpeningOverrides(
+		notnull BaseBuilding building,
+		KK_PrefabWaypointSet prefabSet)
+	{
+		if (!prefabSet)
+			return;
+
+		foreach (KK_AuthoredBuildingWaypoint waypoint : prefabSet.m_aWaypoints)
+		{
+			if (!waypoint)
+				continue;
+
+			if (
+				waypoint.m_eType != KK_EBuildingWaypointType.WINDOW &&
+				waypoint.m_eType != KK_EBuildingWaypointType.DOOR
+			)
+			{
+				continue;
+			}
+
+			int targetIndex;
+			if (!m_mAuthoredTargetIndex.Find(waypoint.m_iId, targetIndex))
+				continue;
+
+			if (targetIndex < 0 || targetIndex >= m_aTargets.Count())
+				continue;
+
+			KK_InteriorTarget target = m_aTargets[targetIndex];
+			if (!target)
+				continue;
+
+			if (waypoint.m_eType == KK_EBuildingWaypointType.WINDOW)
+				target.m_eOpening = KK_EInteriorOpening.WINDOW;
+			else
+				target.m_eOpening = KK_EInteriorOpening.DOOR;
+
+			target.m_vFacing =
+				KK_BuildingWaypointLibrary.LocalFacingToWorld(
+					building,
+					waypoint.m_vLocalFacing
+				);
+		}
+	}
+
+	protected void RebuildAuthoredTargetIndex()
+	{
+		m_mAuthoredTargetIndex.Clear();
+
+		for (int i = 0; i < m_aTargets.Count(); i++)
+		{
+			KK_InteriorTarget target = m_aTargets[i];
+			if (!target || target.m_iAuthoredId < 0)
+				continue;
+
+			m_mAuthoredTargetIndex.Set(target.m_iAuthoredId, i);
+		}
 	}
 
 	protected bool ContainsNearbyTarget(
@@ -1060,6 +1669,15 @@ bool EnsureNavmeshLoaded(
 		notnull KK_InteriorTarget left,
 		notnull KK_InteriorTarget right)
 	{
+		if (
+			left.m_iAuthoredId >= 0 &&
+			right.m_iAuthoredId >= 0 &&
+			HasReachableAuthoredChain(left.m_iAuthoredId, right.m_iAuthoredId)
+		)
+		{
+			return true;
+		}
+
 		const float MAX_HORIZONTAL = 4.0;
 		const float MAX_VERTICAL = 2.5;
 

@@ -126,7 +126,8 @@ modded class SCR_BaseGameMode
 	[Attribute("0", UIWidgets.CheckBox, "Draw interior points while playing from Workbench", category: "Koopky CQB/Debug")]
 	protected bool m_bKK_DebugDraw;
 
-	protected static const string KK_CONFIG_PATH = "$profile:KoopkyCQB_config.json";
+	protected static const string KK_CONFIG_PATH = "$profile:KoopkyCQB/config.json";
+	protected static const string KK_LEGACY_CONFIG_PATH = "$profile:KoopkyCQB_config.json";
 	protected bool m_bKK_ConfigLoaded;
 	protected string m_sKK_DefaultConfig;
 
@@ -148,8 +149,19 @@ modded class SCR_BaseGameMode
 
 		m_bKK_ConfigLoaded = true;
 
+		FileIO.MakeDirectory("$profile:KoopkyCQB");
+
 		if (!FileIO.FileExists(KK_CONFIG_PATH))
+		{
+			if (FileIO.FileExists(KK_LEGACY_CONFIG_PATH))
+			{
+				SCR_JsonLoadContext legacy = new SCR_JsonLoadContext();
+				if (legacy.LoadFromFile(KK_LEGACY_CONFIG_PATH))
+					KK_ApplyConfig(legacy);
+			}
+
 			KK_WriteConfig();
+		}
 
 		KK_ImportConfig();
 	}
@@ -298,6 +310,8 @@ modded class SCR_BaseGameMode
 
 	protected void KK_WriteConfig()
 	{
+		FileIO.MakeDirectory("$profile:KoopkyCQB");
+
 		SCR_JsonSaveContext context = new SCR_JsonSaveContext();
 		KK_WriteConfigValues(context);
 

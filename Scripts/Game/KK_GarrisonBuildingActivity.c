@@ -10,7 +10,10 @@ class KK_GarrisonAgentAssignment
 	vector m_vStillPosition;
 	IEntity m_DoorEntity;
 	bool m_bHolding;
+	bool m_bFacingApplied;
 	EMovementType m_eApproachSpeed;
+	ref array<vector> m_aRouteGoals = {};
+	int m_iRouteIndex;
 
 	void KK_GarrisonAgentAssignment(
 		notnull AIAgent agent,
@@ -342,11 +345,34 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			);
 
 			vector unitPosition = controlledEntity.GetOrigin();
-			bool atHold = IsAtHold(
-				unitPosition,
-				assignment.m_Target.m_vPosition,
-				holdRadius
+			vector moveGoal = AssignmentMoveGoal(assignment);
+			bool onFinalGoal = KK_AuthoredRouteHelper.IsOnFinalGoal(
+				assignment.m_aRouteGoals,
+				assignment.m_iRouteIndex
 			);
+
+			if (!onFinalGoal)
+			{
+				if (
+					vector.Distance(unitPosition, moveGoal) <=
+					holdRadius
+				)
+				{
+					assignment.m_iRouteIndex++;
+					assignment.m_fLastOrderAt = currentTime;
+					assignment.m_fStillSince = currentTime;
+					assignment.m_fStartedAt = currentTime;
+					IssueMoveOrder(assignment);
+				}
+			}
+
+			bool atHold =
+				onFinalGoal &&
+				IsAtHold(
+					unitPosition,
+					assignment.m_Target.m_vPosition,
+					holdRadius
+				);
 
 			KK_PassageOrder passageOrder;
 			bool havePassage =
@@ -374,6 +400,29 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 						assignment.m_Agent,
 						EMovementType.RUN
 					);
+					assignment.m_bFacingApplied = false;
+				}
+
+				if (attacking)
+				{
+					if (assignment.m_bFacingApplied)
+					{
+						KK_HoldFacing.Release(this, assignment.m_Agent);
+						assignment.m_bFacingApplied = false;
+					}
+				}
+				else if (
+					KK_HoldFacing.HasFacing(assignment.m_Target) &&
+					!assignment.m_bFacingApplied
+				)
+				{
+					KK_HoldFacing.Apply(
+						this,
+						assignment.m_Agent,
+						assignment.m_Target,
+						KK_AgentMove.AbsolutePriorityLevel()
+					);
+					assignment.m_bFacingApplied = true;
 				}
 				else if (
 					!attacking &&
@@ -399,6 +448,12 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 			if (assignment.m_bHolding && !passageOverride)
 			{
+				if (assignment.m_bFacingApplied)
+				{
+					KK_HoldFacing.Release(this, assignment.m_Agent);
+					assignment.m_bFacingApplied = false;
+				}
+
 				assignment.m_bHolding = false;
 				assignment.m_fLastOrderAt = currentTime;
 				IssueMoveOrder(assignment);
@@ -424,7 +479,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				IEntity doorEntity = assignment.m_DoorEntity;
 				waitingOnDoor = KK_DoorAssist.Handle(
 					assignment.m_Agent,
-					assignment.m_Target.m_vPosition,
+					AssignmentMoveGoal(assignment),
 					doorEntity
 				);
 				assignment.m_DoorEntity = doorEntity;
@@ -562,6 +617,14 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 					agent.GetControlledEntity().GetOrigin()
 				);
 
+			KK_AuthoredRouteHelper.BuildGoals(
+				m_Plan,
+				agent.GetControlledEntity().GetOrigin(),
+				target,
+				assignment.m_aRouteGoals
+			);
+			assignment.m_iRouteIndex = 0;
+
 			m_aAssignments.Insert(assignment);
 			KK_PerceptionBoost.Apply(
 				agent,
@@ -645,10 +708,18 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		next.m_eState = KK_EInteriorTargetState.ACTIVE;
 		assignment.m_Target = next;
 		assignment.m_bHolding = false;
+		assignment.m_bFacingApplied = false;
 		assignment.m_fStartedAt = currentTime;
 		assignment.m_fStillSince = currentTime;
 		assignment.m_fLastOrderAt = currentTime;
 		assignment.m_vStillPosition = unitPosition;
+		KK_AuthoredRouteHelper.BuildGoals(
+			m_Plan,
+			unitPosition,
+			next,
+			assignment.m_aRouteGoals
+		);
+		assignment.m_iRouteIndex = 0;
 		IssueMoveOrder(assignment);
 
 		PrintFormat(
@@ -1123,11 +1194,24 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			soldiers.Insert(
 				new KK_PassageSoldier(
 					assignment.m_Agent,
-					assignment.m_Target.m_vPosition,
+					AssignmentMoveGoal(assignment),
 					settled
 				)
 			);
 		}
+	}
+
+	protected vector AssignmentMoveGoal(
+		notnull KK_GarrisonAgentAssignment assignment)
+	{
+		if (!assignment.m_Target)
+			return vector.Zero;
+
+		return KK_AuthoredRouteHelper.CurrentMoveGoal(
+			assignment.m_Target,
+			assignment.m_aRouteGoals,
+			assignment.m_iRouteIndex
+		);
 	}
 
 	protected void IssuePassageMove(
@@ -1168,7 +1252,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			this,
 			m_Group,
 			assignment.m_Agent,
-			assignment.m_Target.m_vPosition,
+			AssignmentMoveGoal(assignment),
 			m_mSoloHandlers,
 			KK_AgentMove.AbsolutePriorityLevel(),
 			speed
@@ -1281,6 +1365,12 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 		if (assignment.m_Agent)
 		{
+			if (assignment.m_bFacingApplied)
+			{
+				KK_HoldFacing.Release(this, assignment.m_Agent);
+				assignment.m_bFacingApplied = false;
+			}
+
 			KK_PerceptionBoost.Restore(
 				assignment.m_Agent,
 				m_mPerceptionFactors
