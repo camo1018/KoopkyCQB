@@ -170,8 +170,7 @@ modded class SCR_BaseGameMode
 		}
 
 		KK_ApplyConfig(context);
-		KK_WriteConfig();
-		Print("KK: Restored default config to " + KK_CONFIG_PATH);
+		Print("KK: Restored default scenario values");
 	}
 
 	void KK_ImportConfig()
