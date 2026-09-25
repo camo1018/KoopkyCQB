@@ -110,6 +110,7 @@ modded class SCR_BaseGameMode
 
 	protected static const string KK_CONFIG_PATH = "$profile:KoopkyCQB_config.json";
 	protected bool m_bKK_ConfigLoaded;
+	protected string m_sKK_DefaultConfig;
 
 	override void OnGameModeStart()
 	{
@@ -121,6 +122,8 @@ modded class SCR_BaseGameMode
 	{
 		if (m_bKK_ConfigLoaded)
 			return;
+
+		KK_CaptureDefaults();
 
 		if (!Replication.IsServer())
 			return;
@@ -136,6 +139,22 @@ modded class SCR_BaseGameMode
 	void KK_ExportConfig()
 	{
 		KK_WriteConfig();
+	}
+
+	void KK_ResetConfig()
+	{
+		KK_CaptureDefaults();
+
+		SCR_JsonLoadContext context = new SCR_JsonLoadContext();
+		if (!context.ImportFromString(m_sKK_DefaultConfig))
+		{
+			Print("KK: Failed to restore default config", LogLevel.ERROR);
+			return;
+		}
+
+		KK_ApplyConfig(context);
+		KK_WriteConfig();
+		Print("KK: Restored default config to " + KK_CONFIG_PATH);
 	}
 
 	void KK_ImportConfig()
@@ -245,9 +264,29 @@ modded class SCR_BaseGameMode
 			value = read;
 	}
 
+	protected void KK_CaptureDefaults()
+	{
+		if (m_sKK_DefaultConfig)
+			return;
+
+		SCR_JsonSaveContext context = new SCR_JsonSaveContext();
+		KK_WriteConfigValues(context);
+		m_sKK_DefaultConfig = context.ExportToString();
+	}
+
 	protected void KK_WriteConfig()
 	{
 		SCR_JsonSaveContext context = new SCR_JsonSaveContext();
+		KK_WriteConfigValues(context);
+
+		if (!context.SaveToFile(KK_CONFIG_PATH))
+			Print("KK: Failed to write " + KK_CONFIG_PATH, LogLevel.ERROR);
+		else
+			Print("KK: Wrote config to " + KK_CONFIG_PATH);
+	}
+
+	protected void KK_WriteConfigValues(notnull SCR_JsonSaveContext context)
+	{
 		context.StartObject("Interior");
 		context.WriteValue("HorizontalSpacing", m_fKK_HorizontalSpacing);
 		context.WriteValue("VerticalSpacing", m_fKK_VerticalSpacing);
@@ -298,11 +337,6 @@ modded class SCR_BaseGameMode
 		context.StartObject("Debug");
 		context.WriteValue("DebugDraw", m_bKK_DebugDraw);
 		context.EndObject();
-
-		if (!context.SaveToFile(KK_CONFIG_PATH))
-			Print("KK: Failed to write " + KK_CONFIG_PATH, LogLevel.ERROR);
-		else
-			Print("KK: Wrote config to " + KK_CONFIG_PATH);
 	}
 
 	static SCR_BaseGameMode Get()

@@ -289,10 +289,17 @@ class KK_CQBConfigFileAttribute : SCR_BaseEditorAttribute
 			return;
 		}
 
-		if (var.GetInt() != 1)
+		if (var.GetInt() == 1)
+		{
+			mode.KK_ImportConfig();
+			RefreshOpenAttributes(manager);
+			return;
+		}
+
+		if (var.GetInt() != 2)
 			return;
 
-		mode.KK_ImportConfig();
+		mode.KK_ResetConfig();
 		RefreshOpenAttributes(manager);
 	}
 
@@ -349,7 +356,7 @@ class KK_CQBConfigFileAttribute : SCR_BaseEditorAttribute
 
 	override int GetEntries(notnull array<ref SCR_BaseEditorAttributeEntry> outEntries)
 	{
-		outEntries.Insert(new SCR_EditorAttributePresetEntry(2, false));
+		outEntries.Insert(new SCR_EditorAttributePresetEntry(3, false));
 		outEntries.Insert(new SCR_BaseEditorAttributeFloatStringValues(m_aValues));
 		return outEntries.Count();
 	}
