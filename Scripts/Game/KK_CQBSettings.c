@@ -130,6 +130,9 @@ modded class SCR_BaseGameMode
 	[Attribute("0", UIWidgets.CheckBox, "Show the waypoint authoring page on the commanding radial", category: "Koopky CQB/Debug")]
 	protected bool m_bKK_WaypointAuthoring;
 
+	[Attribute("20", UIWidgets.EditBox, "Times to wait for navmesh tiles while locking a building", category: "Koopky CQB/Debug")]
+	protected int m_iKK_SampleAttempts;
+
 	protected static const string KK_CONFIG_PATH = "$profile:KoopkyCQB/config.json";
 	protected static const string KK_LEGACY_CONFIG_PATH = "$profile:KoopkyCQB_config.json";
 	protected bool m_bKK_ConfigLoaded;
@@ -278,6 +281,7 @@ modded class SCR_BaseGameMode
 		if (context.StartObject("Authoring"))
 		{
 			KK_ReadBool(context, "WaypointRadial", m_bKK_WaypointAuthoring);
+			KK_ReadInt(context, "SampleAttempts", m_iKK_SampleAttempts);
 			context.EndObject();
 		}
 	}
@@ -295,6 +299,7 @@ modded class SCR_BaseGameMode
 			return;
 
 		KK_ReadBool(context, "WaypointRadial", m_bKK_WaypointAuthoring);
+		KK_ReadInt(context, "SampleAttempts", m_iKK_SampleAttempts);
 		context.EndObject();
 	}
 
@@ -409,6 +414,7 @@ modded class SCR_BaseGameMode
 
 		context.StartObject("Authoring");
 		context.WriteValue("WaypointRadial", m_bKK_WaypointAuthoring);
+		context.WriteValue("SampleAttempts", m_iKK_SampleAttempts);
 		context.EndObject();
 	}
 
@@ -610,6 +616,11 @@ modded class SCR_BaseGameMode
 	bool KK_GetWaypointAuthoring()
 	{
 		return m_bKK_WaypointAuthoring;
+	}
+
+	int KK_GetSampleAttempts()
+	{
+		return Math.Max(m_iKK_SampleAttempts, 1);
 	}
 
 	void KK_SetHorizontalSpacing(float value) { m_fKK_HorizontalSpacing = value; }

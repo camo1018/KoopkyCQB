@@ -37,7 +37,7 @@ class KK_WaypointAuthoring
 	protected static bool s_bSamplePending;
 	protected static bool s_bSampleAnnounce;
 	protected static int s_iSampleAttempts;
-	protected static const int SAMPLE_ATTEMPTS = 20;
+	protected static const int SAMPLE_ATTEMPTS_BASELINE = 20;
 	protected static const int HEIGHT_NONE = 0;
 	protected static const int HEIGHT_ABOVE = 1;
 	protected static const int HEIGHT_BELOW = 2;
@@ -491,6 +491,15 @@ class KK_WaypointAuthoring
 		return BuildSampleCache();
 	}
 
+	protected static int SampleAttemptLimit()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return SAMPLE_ATTEMPTS_BASELINE;
+
+		return mode.KK_GetSampleAttempts();
+	}
+
 	protected static bool BuildSampleCache()
 	{
 		if (!s_LockedBuilding)
@@ -568,7 +577,7 @@ class KK_WaypointAuthoring
 
 		// Tiles stream in after LoadTileIn. Sampling before that returns
 		// no interior points, which is what a clear order used to wait out.
-		if (s_iSampleAttempts < SAMPLE_ATTEMPTS)
+		if (s_iSampleAttempts < SampleAttemptLimit())
 		{
 			s_iSampleAttempts++;
 			s_bSamplePending = true;
