@@ -19,7 +19,8 @@ enum KK_EWaypointAuthorAction
 	ADD_NODE,
 	DELETE_NODE,
 	DELETE_CLUSTER,
-	UNDO
+	UNDO,
+	RELEASE_BUILDING
 }
 
 class KK_WaypointAuthoring
@@ -161,6 +162,26 @@ class KK_WaypointAuthoring
 			Notify("Locked this building, but samples failed");
 
 		RefreshDebugDraw();
+		return true;
+	}
+
+	static bool ReleaseBuilding()
+	{
+		if (!s_LockedBuilding && s_sLockedPrefab.IsEmpty())
+		{
+			Notify("No building is locked");
+			return false;
+		}
+
+		s_bSamplePending = false;
+		s_iSampleAttempts = 0;
+		GetGame().GetCallqueue().Remove(RetryBuildSampleCache);
+
+		s_LockedBuilding = null;
+		s_sLockedPrefab = string.Empty;
+		s_iLastWaypointId = -1;
+		RefreshDebugDraw();
+		Notify("Released the building");
 		return true;
 	}
 
@@ -715,6 +736,10 @@ class KK_WaypointAuthoring
 			}
 		}
 
+		float roofTopY = -10000.0;
+		if (prefabSet.m_bDropRoof)
+			roofTopY = HighestOpenSampleY(prefabSet);
+
 		foreach (KK_CachedInteriorSample sample : prefabSet.m_aSamples)
 		{
 			if (!sample)
@@ -722,10 +747,14 @@ class KK_WaypointAuthoring
 
 			vector sampleWorld =
 				s_LockedBuilding.CoordToParent(sample.m_vLocalPosition);
+			int sampleColor = 0xFF88AACC;
+
+			if (SampleIsForbidden(prefabSet, sample, sampleWorld, roofTopY))
+				sampleColor = 0xFFFF2222;
 
 			s_aDebugShapes.Insert(
 				Shape.CreateSphere(
-					0xFF88AACC,
+					sampleColor,
 					shapeFlags,
 					sampleWorld + Vector(0, 0.2, 0),
 					0.12
@@ -734,6 +763,90 @@ class KK_WaypointAuthoring
 		}
 
 		EnsureDebugTick();
+	}
+
+	protected static float HighestOpenSampleY(notnull KK_PrefabWaypointSet prefabSet)
+	{
+		float topLocalY = -10000.0;
+
+		foreach (KK_CachedInteriorSample sample : prefabSet.m_aSamples)
+		{
+			if (!sample)
+				continue;
+
+			if (KK_BuildingWaypointLibrary.IsFloorForbidden(
+				prefabSet,
+				sample.m_vLocalPosition[1]
+			))
+			{
+				continue;
+			}
+
+			topLocalY = Math.Max(topLocalY, sample.m_vLocalPosition[1]);
+		}
+
+		return topLocalY;
+	}
+
+	protected static bool SampleIsForbidden(
+		notnull KK_PrefabWaypointSet prefabSet,
+		notnull KK_CachedInteriorSample sample,
+		vector worldPosition,
+		float roofTopY)
+	{
+		if (KK_BuildingWaypointLibrary.IsFloorForbidden(
+			prefabSet,
+			sample.m_vLocalPosition[1]
+		))
+		{
+			return true;
+		}
+
+		if (!prefabSet.m_bDropRoof || roofTopY < -9000.0)
+			return false;
+
+		const float ROOF_BAND = 2.0;
+		if (roofTopY - sample.m_vLocalPosition[1] > ROOF_BAND)
+			return false;
+
+		return !SampleHasBuildingOverhead(s_LockedBuilding, worldPosition);
+	}
+
+	protected static bool SampleHasBuildingOverhead(
+		notnull IEntity building,
+		vector position)
+	{
+		BaseWorld world = GetGame().GetWorld();
+		if (!world)
+			return true;
+
+		TraceParam trace = new TraceParam();
+		trace.Flags = TraceFlags.ENTS | TraceFlags.WORLD;
+		trace.Start = position + Vector(0, 0.3, 0);
+		trace.End = position + Vector(0, 4.0, 0);
+
+		float fraction = world.TraceMove(trace, FilterOverheadTrace);
+		if (fraction >= 1.0 || !trace.TraceEnt)
+			return false;
+
+		if (trace.TraceEnt == building)
+			return true;
+
+		BaseBuilding hitBuilding =
+			KK_BuildingResolver.ResolveBuildingRoot(trace.TraceEnt);
+
+		return hitBuilding == building;
+	}
+
+	protected static bool FilterOverheadTrace(
+		IEntity entity,
+		vector start = "0 0 0",
+		vector dir = "0 0 0")
+	{
+		if (ChimeraCharacter.Cast(entity))
+			return false;
+
+		return true;
 	}
 
 	protected static void CurrentInteriorSettings(
@@ -1106,6 +1219,9 @@ class KK_WaypointAuthorCommand : SCR_BaseGroupCommand
 		{
 			case KK_EWaypointAuthorAction.LOCK_BUILDING:
 				return KK_WaypointAuthoring.LockBuildingUnderPlayer();
+
+			case KK_EWaypointAuthorAction.RELEASE_BUILDING:
+				return KK_WaypointAuthoring.ReleaseBuilding();
 
 			case KK_EWaypointAuthorAction.PLACE_WINDOW:
 				return KK_WaypointAuthoring.PlaceWaypoint(
