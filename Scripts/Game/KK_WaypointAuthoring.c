@@ -37,7 +37,7 @@ class KK_WaypointAuthoring
 	protected static bool s_bSamplePending;
 	protected static bool s_bSampleAnnounce;
 	protected static int s_iSampleAttempts;
-	protected static const int SAMPLE_ATTEMPTS = 6;
+	protected static const int SAMPLE_ATTEMPTS = 20;
 	protected static const int HEIGHT_NONE = 0;
 	protected static const int HEIGHT_ABOVE = 1;
 	protected static const int HEIGHT_BELOW = 2;
@@ -535,35 +535,66 @@ class KK_WaypointAuthoring
 			cluster = mode.KK_GetClusterRadius();
 		}
 
+		RequestNavmeshAtBuilding(pathfinding, s_LockedBuilding);
+
 		KK_BuildingInteriorPlan plan = new KK_BuildingInteriorPlan();
 		bool tilesLoaded = plan.EnsureNavmeshLoaded(
 			pathfinding,
 			s_LockedBuilding
 		);
 
-		if (!tilesLoaded && s_iSampleAttempts < SAMPLE_ATTEMPTS)
+		bool ok = false;
+		if (tilesLoaded)
+		{
+			ok = plan.Generate(
+				group,
+				s_LockedBuilding,
+				horizontal,
+				vertical,
+				dedup,
+				cluster,
+				false,
+				true,
+				false
+			);
+		}
+
+		if (ok)
+		{
+			s_bSamplePending = false;
+			RefreshDebugDraw();
+			return true;
+		}
+
+		// Tiles stream in after LoadTileIn. Sampling before that returns
+		// no interior points, which is what a clear order used to wait out.
+		if (s_iSampleAttempts < SAMPLE_ATTEMPTS)
 		{
 			s_iSampleAttempts++;
 			s_bSamplePending = true;
-			GetGame().GetCallqueue().CallLater(RetryBuildSampleCache, 400, false);
+			GetGame().GetCallqueue().CallLater(RetryBuildSampleCache, 500, false);
 			return false;
 		}
 
 		s_bSamplePending = false;
-		bool ok = plan.Generate(
-			group,
-			s_LockedBuilding,
-			horizontal,
-			vertical,
-			dedup,
-			cluster,
-			false,
-			true,
-			false
+		RefreshDebugDraw();
+		return false;
+	}
+
+	protected static void RequestNavmeshAtBuilding(
+		notnull AIPathfindingComponent pathfinding,
+		notnull BaseBuilding building)
+	{
+		vector center = SCR_EntityHelper.GetEntityCenterWorld(building);
+		vector size = SCR_EntityHelper.GetEntitySize(building);
+		vector closest;
+		vector extents = Vector(
+			Math.Max(size[0] * 0.5, 4.0),
+			Math.Max(size[1] * 0.5, 4.0),
+			Math.Max(size[2] * 0.5, 4.0)
 		);
 
-		RefreshDebugDraw();
-		return ok;
+		pathfinding.GetClosestPositionOnNavmesh(center, extents, closest);
 	}
 
 	protected static void RetryBuildSampleCache()
