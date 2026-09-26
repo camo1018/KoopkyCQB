@@ -20,7 +20,10 @@ enum KK_EWaypointAuthorAction
 	DELETE_NODE,
 	DELETE_CLUSTER,
 	UNDO,
-	RELEASE_BUILDING
+	RELEASE_BUILDING,
+	FORBID_ABOVE,
+	FORBID_BELOW,
+	CLEAR_HEIGHTS
 }
 
 class KK_WaypointAuthoring
@@ -35,6 +38,14 @@ class KK_WaypointAuthoring
 	protected static bool s_bSampleAnnounce;
 	protected static int s_iSampleAttempts;
 	protected static const int SAMPLE_ATTEMPTS = 6;
+	protected static const int HEIGHT_NONE = 0;
+	protected static const int HEIGHT_ABOVE = 1;
+	protected static const int HEIGHT_BELOW = 2;
+	protected static int s_iHeightMode;
+	protected static float s_fHeightPreview;
+	protected static float s_fHeightNotified = -100000;
+	protected static int s_iHeightHoldFrames;
+	protected static bool s_bHeightSliderTicking;
 
 	static BaseBuilding GetLockedBuilding()
 	{
@@ -140,6 +151,7 @@ class KK_WaypointAuthoring
 			return false;
 		}
 
+		StopHeightSlider();
 		s_LockedBuilding = building;
 		s_sLockedPrefab = prefabName;
 		s_iLastWaypointId = -1;
@@ -173,6 +185,7 @@ class KK_WaypointAuthoring
 			return false;
 		}
 
+		StopHeightSlider();
 		s_bSamplePending = false;
 		s_iSampleAttempts = 0;
 		GetGame().GetCallqueue().Remove(RetryBuildSampleCache);
@@ -187,16 +200,13 @@ class KK_WaypointAuthoring
 
 	static bool DeleteWaypointHere()
 	{
-		BaseBuilding building = s_LockedBuilding;
-		if (!building)
-			building = ResolveBuildingUnderPlayer();
-
-		IEntity player = GetLocalPlayerEntity();
-		if (!building || !player)
-		{
-			Notify("Lock a building first");
+		if (!RequireLockedBuilding())
 			return false;
-		}
+
+		BaseBuilding building = s_LockedBuilding;
+		IEntity player = GetLocalPlayerEntity();
+		if (!player)
+			return false;
 
 		string prefabName = KK_BuildingWaypointLibrary.ResolvePrefabName(building);
 		KK_AuthorEditHistory.Remember(prefabName, s_iLastWaypointId);
@@ -232,7 +242,7 @@ class KK_WaypointAuthoring
 
 	static bool AddNodeHere()
 	{
-		if (!s_LockedBuilding && !LockBuildingUnderPlayer())
+		if (!RequireLockedBuilding())
 			return false;
 
 		IEntity player = GetLocalPlayerEntity();
@@ -269,11 +279,8 @@ class KK_WaypointAuthoring
 
 	static bool DeleteNodeInSight()
 	{
-		if (!s_LockedBuilding)
-		{
-			Notify("Lock a building first");
+		if (!RequireLockedBuilding())
 			return false;
-		}
 
 		int sampleIndex = SampleInSight();
 		if (sampleIndex < 0)
@@ -303,11 +310,8 @@ class KK_WaypointAuthoring
 
 	static bool DeleteClusterInSight()
 	{
-		if (!s_LockedBuilding)
-		{
-			Notify("Lock a building first");
+		if (!RequireLockedBuilding())
 			return false;
-		}
 
 		int sampleIndex = SampleInSight();
 		if (sampleIndex < 0)
@@ -344,6 +348,22 @@ class KK_WaypointAuthoring
 
 	static bool UndoLastEdit()
 	{
+		if (!RequireLockedBuilding())
+			return false;
+
+		string topPrefab;
+		if (!KK_AuthorEditHistory.PeekPrefab(topPrefab))
+		{
+			Notify("Nothing to undo");
+			return false;
+		}
+
+		if (topPrefab != s_sLockedPrefab)
+		{
+			Notify("Nothing to undo on this building");
+			return false;
+		}
+
 		int lastWaypointId;
 		string prefabName;
 		bool undone = KK_AuthorEditHistory.Undo(prefabName, lastWaypointId);
@@ -363,11 +383,8 @@ class KK_WaypointAuthoring
 
 	static bool PlaceWaypoint(KK_EBuildingWaypointType type)
 	{
-		if (!s_LockedBuilding)
-		{
-			if (!LockBuildingUnderPlayer())
-				return false;
-		}
+		if (!RequireLockedBuilding())
+			return false;
 
 		IEntity player = GetLocalPlayerEntity();
 		if (!player || !s_LockedBuilding)
@@ -424,6 +441,15 @@ class KK_WaypointAuthoring
 		return true;
 	}
 
+	protected static bool RequireLockedBuilding()
+	{
+		if (s_LockedBuilding && !s_sLockedPrefab.IsEmpty())
+			return true;
+
+		Notify("Lock a building first");
+		return false;
+	}
+
 	static KK_PrefabWaypointSet GetLockedSet()
 	{
 		if (s_sLockedPrefab.IsEmpty())
@@ -435,10 +461,7 @@ class KK_WaypointAuthoring
 	static bool EnsureSampleCache(bool announce)
 	{
 		if (!s_LockedBuilding)
-		{
-			if (!LockBuildingUnderPlayer())
-				return false;
-		}
+			return false;
 
 		KK_PrefabWaypointSet prefabSet = GetLockedSet();
 		if (!prefabSet)
@@ -571,7 +594,7 @@ class KK_WaypointAuthoring
 
 	static bool ToggleRoof()
 	{
-		if (!s_LockedBuilding && !LockBuildingUnderPlayer())
+		if (!RequireLockedBuilding())
 			return false;
 
 		KK_PrefabWaypointSet prefabSet = GetLockedSet();
@@ -593,78 +616,104 @@ class KK_WaypointAuthoring
 		return "Roof allow";
 	}
 
-	static bool ToggleFloor(int floorIndex)
+	static bool BeginOrConfirmHeight(int mode)
 	{
-		if (!s_LockedBuilding && !LockBuildingUnderPlayer())
+		if (!RequireLockedBuilding())
 			return false;
 
-		KK_AuthorEditHistory.Remember(s_sLockedPrefab, s_iLastWaypointId);
+		if (s_iHeightMode == mode)
+			return ConfirmHeightLimit();
 
-		if (!EnsureSampleCache(true))
-		{
-			if (!s_bSamplePending)
-				KK_AuthorEditHistory.Discard();
-			return false;
-		}
+		s_iHeightMode = mode;
+		s_iHeightHoldFrames = 0;
+		s_fHeightNotified = -100000;
+		float aimed;
+		if (AimedLocalHeight(aimed))
+			s_fHeightPreview = aimed;
+		else if (mode == HEIGHT_ABOVE)
+			s_fHeightPreview = 0;
+		else
+			s_fHeightPreview = 0;
 
-		KK_PrefabWaypointSet prefabSet = GetLockedSet();
-		if (!prefabSet)
-		{
-			KK_AuthorEditHistory.Discard();
-			return false;
-		}
-
-		array<float> bands = {};
-		KK_BuildingWaypointLibrary.CollectFloorBands(prefabSet, bands);
-
-		if (floorIndex < 0 || floorIndex >= bands.Count())
-		{
-			KK_AuthorEditHistory.Discard();
-			Notify(string.Format("No floor %1 on this building", floorIndex + 1));
-			return false;
-		}
-
-		KK_BuildingWaypointLibrary.ToggleForbiddenFloorIndex(prefabSet, floorIndex);
-		bool forbidden =
-			KK_BuildingWaypointLibrary.IsForbiddenFloorIndex(prefabSet, floorIndex);
-
-		Notify(FloorLabel(floorIndex));
-
+		StartHeightSliderTick();
+		NotifyHeightPreview(true);
 		RefreshDebugDraw();
 		return true;
 	}
 
-	static string FloorLabel(int floorIndex)
+	static bool ClearHeightLimits()
 	{
+		if (!RequireLockedBuilding())
+			return false;
+
+		StopHeightSlider();
+
 		KK_PrefabWaypointSet prefabSet = GetLockedSet();
 		if (!prefabSet)
-			return string.Format("Floor %1", floorIndex + 1);
+			return false;
 
-		array<float> bands = {};
-		KK_BuildingWaypointLibrary.CollectFloorBands(prefabSet, bands);
-
-		if (floorIndex < 0 || floorIndex >= bands.Count())
-			return string.Format("Floor %1 (none)", floorIndex + 1);
-
-		bool forbidden =
-			KK_BuildingWaypointLibrary.IsForbiddenFloorIndex(prefabSet, floorIndex);
-
-		if (forbidden)
+		if (!KK_BuildingWaypointLibrary.HasHeightLimit(prefabSet))
 		{
-			return string.Format(
-				"Floor %1 forbid",
-				floorIndex + 1
-			);
+			Notify("No height limits");
+			RefreshDebugDraw();
+			return false;
 		}
 
-		return string.Format("Floor %1 allow", floorIndex + 1);
+		KK_AuthorEditHistory.Remember(s_sLockedPrefab, s_iLastWaypointId);
+		KK_BuildingWaypointLibrary.ClearHeightLimits(prefabSet);
+		Notify("Height limits cleared");
+		RefreshDebugDraw();
+		return true;
+	}
+
+	static string HeightCommandLabel(int mode)
+	{
+		if (s_iHeightMode == mode)
+			return "Set " + FormatMeters(s_fHeightPreview);
+
+		KK_PrefabWaypointSet prefabSet = GetLockedSet();
+		if (mode == HEIGHT_ABOVE)
+		{
+			if (prefabSet && prefabSet.m_bForbidAbove)
+				return "Above " + FormatMeters(prefabSet.m_fForbidAboveLocalY);
+
+			return "Forbid above";
+		}
+
+		if (prefabSet && prefabSet.m_bForbidBelow)
+			return "Below " + FormatMeters(prefabSet.m_fForbidBelowLocalY);
+
+		return "Forbid below";
+	}
+
+	static string ForbidAboveLabel()
+	{
+		return HeightCommandLabel(HEIGHT_ABOVE);
+	}
+
+	static string ForbidBelowLabel()
+	{
+		return HeightCommandLabel(HEIGHT_BELOW);
+	}
+
+	static bool BeginForbidAbove()
+	{
+		return BeginOrConfirmHeight(HEIGHT_ABOVE);
+	}
+
+	static bool BeginForbidBelow()
+	{
+		return BeginOrConfirmHeight(HEIGHT_BELOW);
 	}
 
 	static void RefreshDebugDraw()
 	{
 		ClearDebugShapes();
 
-		if (!s_bDebugDraw || !s_LockedBuilding)
+		if (s_iHeightMode == HEIGHT_NONE && !s_bDebugDraw)
+			return;
+
+		if (!s_LockedBuilding)
 			return;
 
 		KK_PrefabWaypointSet prefabSet = GetLockedSet();
@@ -740,6 +789,8 @@ class KK_WaypointAuthoring
 		if (prefabSet.m_bDropRoof)
 			roofTopY = HighestOpenSampleY(prefabSet);
 
+		int aimedSample = SampleInSight();
+
 		foreach (KK_CachedInteriorSample sample : prefabSet.m_aSamples)
 		{
 			if (!sample)
@@ -752,17 +803,28 @@ class KK_WaypointAuthoring
 			if (SampleIsForbidden(prefabSet, sample, sampleWorld, roofTopY))
 				sampleColor = 0xFFFF2222;
 
+			vector marker = sampleWorld + Vector(0, 0.2, 0);
+			float markerRadius = 0.12;
+			if (aimedSample >= 0 && sample == prefabSet.m_aSamples[aimedSample])
+			{
+				sampleColor = 0xFFFFFF00;
+				markerRadius = 0.28;
+			}
+
 			s_aDebugShapes.Insert(
 				Shape.CreateSphere(
 					sampleColor,
 					shapeFlags,
-					sampleWorld + Vector(0, 0.2, 0),
-					0.12
+					marker,
+					markerRadius
 				)
 			);
 		}
 
-		EnsureDebugTick();
+		DrawStoredHeightLines(prefabSet);
+
+		if (s_bDebugDraw)
+			EnsureDebugTick();
 	}
 
 	protected static float HighestOpenSampleY(notnull KK_PrefabWaypointSet prefabSet)
@@ -774,10 +836,7 @@ class KK_WaypointAuthoring
 			if (!sample)
 				continue;
 
-			if (KK_BuildingWaypointLibrary.IsFloorForbidden(
-				prefabSet,
-				sample.m_vLocalPosition[1]
-			))
+			if (ElevationForbidden(prefabSet, sample.m_vLocalPosition[1]))
 			{
 				continue;
 			}
@@ -794,13 +853,8 @@ class KK_WaypointAuthoring
 		vector worldPosition,
 		float roofTopY)
 	{
-		if (KK_BuildingWaypointLibrary.IsFloorForbidden(
-			prefabSet,
-			sample.m_vLocalPosition[1]
-		))
-		{
+		if (ElevationForbidden(prefabSet, sample.m_vLocalPosition[1]))
 			return true;
-		}
 
 		if (!prefabSet.m_bDropRoof || roofTopY < -9000.0)
 			return false;
@@ -849,6 +903,260 @@ class KK_WaypointAuthoring
 		return true;
 	}
 
+	protected static bool ElevationForbidden(
+		notnull KK_PrefabWaypointSet prefabSet,
+		float localY)
+	{
+		bool forbidAbove = prefabSet.m_bForbidAbove;
+		float aboveY = prefabSet.m_fForbidAboveLocalY;
+		bool forbidBelow = prefabSet.m_bForbidBelow;
+		float belowY = prefabSet.m_fForbidBelowLocalY;
+
+		if (s_iHeightMode == HEIGHT_ABOVE)
+		{
+			forbidAbove = true;
+			aboveY = s_fHeightPreview;
+		}
+		else if (s_iHeightMode == HEIGHT_BELOW)
+		{
+			forbidBelow = true;
+			belowY = s_fHeightPreview;
+		}
+
+		return KK_BuildingWaypointLibrary.IsElevationForbidden(
+			prefabSet,
+			localY,
+			forbidAbove,
+			aboveY,
+			forbidBelow,
+			belowY
+		);
+	}
+
+	protected static bool ConfirmHeightLimit()
+	{
+		KK_PrefabWaypointSet prefabSet = GetLockedSet();
+		int mode = s_iHeightMode;
+		float localY = s_fHeightPreview;
+		StopHeightSlider();
+
+		if (!prefabSet || mode == HEIGHT_NONE)
+			return false;
+
+		KK_AuthorEditHistory.Remember(s_sLockedPrefab, s_iLastWaypointId);
+		KK_BuildingWaypointLibrary.SetHeightLimit(
+			prefabSet,
+			mode == HEIGHT_ABOVE,
+			true,
+			localY
+		);
+
+		if (mode == HEIGHT_ABOVE)
+			Notify("Forbid above " + FormatMeters(localY));
+		else
+			Notify("Forbid below " + FormatMeters(localY));
+
+		RefreshDebugDraw();
+		return true;
+	}
+
+	protected static void StartHeightSliderTick()
+	{
+		if (s_bHeightSliderTicking)
+			return;
+
+		s_bHeightSliderTicking = true;
+		GetGame().GetCallqueue().CallLater(HeightSliderTick, 50, true);
+	}
+
+	protected static void StopHeightSlider()
+	{
+		s_iHeightMode = HEIGHT_NONE;
+		s_iHeightHoldFrames = 0;
+		s_fHeightNotified = -100000;
+
+		if (!s_bHeightSliderTicking)
+			return;
+
+		s_bHeightSliderTicking = false;
+		GetGame().GetCallqueue().Remove(HeightSliderTick);
+	}
+
+	protected static void HeightSliderTick()
+	{
+		if (s_iHeightMode == HEIGHT_NONE || !s_LockedBuilding)
+		{
+			StopHeightSlider();
+			RefreshDebugDraw();
+			return;
+		}
+
+		UpdateHeightPreview();
+		RefreshDebugDraw();
+	}
+
+	protected static void UpdateHeightPreview()
+	{
+		InputManager input = GetGame().GetInputManager();
+		float wheel = 0;
+		if (input)
+			wheel = input.GetActionValue("MouseWheel");
+
+		if (wheel > 0.01)
+		{
+			s_fHeightPreview = s_fHeightPreview + 0.25;
+			s_iHeightHoldFrames = 8;
+		}
+		else if (wheel < -0.01)
+		{
+			s_fHeightPreview = s_fHeightPreview - 0.25;
+			s_iHeightHoldFrames = 8;
+		}
+		else if (s_iHeightHoldFrames > 0)
+		{
+			s_iHeightHoldFrames--;
+		}
+		else
+		{
+			float aimed;
+			if (AimedLocalHeight(aimed))
+				s_fHeightPreview = aimed;
+		}
+
+		NotifyHeightPreview(false);
+	}
+
+	protected static void NotifyHeightPreview(bool force)
+	{
+		if (!force && Math.AbsFloat(s_fHeightPreview - s_fHeightNotified) < 0.2)
+			return;
+
+		s_fHeightNotified = s_fHeightPreview;
+		string side = "above";
+		if (s_iHeightMode == HEIGHT_BELOW)
+			side = "below";
+
+		Notify(string.Format(
+			"Aim the %1 line, now %2. Pick it again to set it.",
+			side,
+			FormatMeters(s_fHeightPreview)
+		));
+	}
+
+	protected static bool AimedLocalHeight(out float localY)
+	{
+		localY = 0;
+		IEntity player = GetLocalPlayerEntity();
+		if (!player || !s_LockedBuilding)
+			return false;
+
+		vector start;
+		vector direction;
+		if (!LookDirection(player, start, direction))
+			return false;
+
+		vector origin = s_LockedBuilding.GetOrigin();
+		vector flatDir = direction;
+		flatDir[1] = 0;
+		float flatLen = flatDir.Length();
+		float distance = 4.0;
+
+		if (flatLen > 0.05)
+		{
+			flatDir = flatDir * (1.0 / flatLen);
+			vector toBuilding = origin - start;
+			toBuilding[1] = 0;
+			distance = vector.Dot(toBuilding, flatDir);
+			if (distance < 0.5)
+				distance = 0.5;
+			if (distance > 40.0)
+				distance = 40.0;
+		}
+
+		vector point = start + (direction * distance);
+		vector local = s_LockedBuilding.CoordToLocal(point);
+		localY = Math.Round(local[1] / 0.25) * 0.25;
+		return true;
+	}
+
+	protected static void DrawStoredHeightLines(notnull KK_PrefabWaypointSet prefabSet)
+	{
+		if (s_iHeightMode == HEIGHT_ABOVE)
+			DrawHeightLine(s_fHeightPreview, 0xFFFFFF00);
+		else if (prefabSet.m_bForbidAbove)
+			DrawHeightLine(prefabSet.m_fForbidAboveLocalY, 0xFFFF2222);
+
+		if (s_iHeightMode == HEIGHT_BELOW)
+			DrawHeightLine(s_fHeightPreview, 0xFF66EEFF);
+		else if (prefabSet.m_bForbidBelow)
+			DrawHeightLine(prefabSet.m_fForbidBelowLocalY, 0xFFFF8822);
+	}
+
+	protected static void DrawHeightLine(float localY, int color)
+	{
+		if (!s_LockedBuilding)
+			return;
+
+		float minX = 10000.0;
+		float maxX = -10000.0;
+		float minZ = 10000.0;
+		float maxZ = -10000.0;
+		bool any = false;
+
+		KK_PrefabWaypointSet prefabSet = GetLockedSet();
+		if (prefabSet)
+		{
+			foreach (KK_CachedInteriorSample sample : prefabSet.m_aSamples)
+			{
+				if (!sample)
+					continue;
+
+				any = true;
+				minX = Math.Min(minX, sample.m_vLocalPosition[0]);
+				maxX = Math.Max(maxX, sample.m_vLocalPosition[0]);
+				minZ = Math.Min(minZ, sample.m_vLocalPosition[2]);
+				maxZ = Math.Max(maxZ, sample.m_vLocalPosition[2]);
+			}
+		}
+
+		if (!any)
+		{
+			minX = -2.0;
+			maxX = 2.0;
+			minZ = -2.0;
+			maxZ = 2.0;
+		}
+
+		if (maxX - minX < 1.0)
+		{
+			minX = minX - 1.0;
+			maxX = maxX + 1.0;
+		}
+
+		if (maxZ - minZ < 1.0)
+		{
+			minZ = minZ - 1.0;
+			maxZ = maxZ + 1.0;
+		}
+
+		vector a = s_LockedBuilding.CoordToParent(Vector(minX, localY, minZ));
+		vector b = s_LockedBuilding.CoordToParent(Vector(maxX, localY, minZ));
+		vector c = s_LockedBuilding.CoordToParent(Vector(maxX, localY, maxZ));
+		vector d = s_LockedBuilding.CoordToParent(Vector(minX, localY, maxZ));
+		int flags = ShapeFlags.NOZBUFFER | ShapeFlags.VISIBLE;
+
+		s_aDebugShapes.Insert(Shape.CreateArrow(a, b, 0.04, color, flags));
+		s_aDebugShapes.Insert(Shape.CreateArrow(b, c, 0.04, color, flags));
+		s_aDebugShapes.Insert(Shape.CreateArrow(c, d, 0.04, color, flags));
+		s_aDebugShapes.Insert(Shape.CreateArrow(d, a, 0.04, color, flags));
+	}
+
+	protected static string FormatMeters(float meters)
+	{
+		float shown = Math.Round(meters * 10.0) / 10.0;
+		return string.Format("%1 m", shown);
+	}
+
 	protected static void CurrentInteriorSettings(
 		out float horizontal,
 		out float vertical,
@@ -886,7 +1194,7 @@ class KK_WaypointAuthoring
 			start,
 			direction,
 			40.0,
-			1.25
+			0.35
 		);
 	}
 
@@ -993,7 +1301,9 @@ class KK_WaypointAuthoring
 	{
 		if (!s_bDebugDraw)
 		{
-			ClearDebugShapes();
+			if (s_iHeightMode == HEIGHT_NONE)
+				ClearDebugShapes();
+
 			GetGame().GetCallqueue().Remove(DebugTick);
 			s_bDebugTicking = false;
 			return;
@@ -1051,6 +1361,10 @@ class KK_AuthorSnapshot
 		copy.m_bHasSampleCache = live.m_bHasSampleCache;
 		copy.m_iNextWaypointId = live.m_iNextWaypointId;
 		copy.m_bDropRoof = live.m_bDropRoof;
+		copy.m_bForbidAbove = live.m_bForbidAbove;
+		copy.m_fForbidAboveLocalY = live.m_fForbidAboveLocalY;
+		copy.m_bForbidBelow = live.m_bForbidBelow;
+		copy.m_fForbidBelowLocalY = live.m_fForbidBelowLocalY;
 
 		foreach (float forbiddenY : live.m_aForbiddenFloorYs)
 			copy.m_aForbiddenFloorYs.Insert(forbiddenY);
@@ -1122,6 +1436,20 @@ class KK_AuthorEditHistory
 		s_aSteps.Remove(s_aSteps.Count() - 1);
 	}
 
+	static bool PeekPrefab(out string prefabName)
+	{
+		prefabName = string.Empty;
+		if (!s_aSteps || s_aSteps.IsEmpty())
+			return false;
+
+		KK_AuthorSnapshot step = s_aSteps[s_aSteps.Count() - 1];
+		if (!step)
+			return false;
+
+		prefabName = step.m_sPrefabName;
+		return true;
+	}
+
 	static bool Undo(out string prefabName, out int lastWaypointId)
 	{
 		prefabName = string.Empty;
@@ -1163,33 +1491,13 @@ class KK_WaypointAuthorCommand : SCR_BaseGroupCommand
 		if (m_eAction == KK_EWaypointAuthorAction.TOGGLE_ROOF)
 			return KK_WaypointAuthoring.RoofLabel();
 
-		int floorIndex = FloorIndex();
-		if (floorIndex >= 0)
-			return KK_WaypointAuthoring.FloorLabel(floorIndex);
+		if (m_eAction == KK_EWaypointAuthorAction.FORBID_ABOVE)
+			return KK_WaypointAuthoring.ForbidAboveLabel();
+
+		if (m_eAction == KK_EWaypointAuthorAction.FORBID_BELOW)
+			return KK_WaypointAuthoring.ForbidBelowLabel();
 
 		return super.GetCommandDisplayName();
-	}
-
-	protected int FloorIndex()
-	{
-		if (m_eAction == KK_EWaypointAuthorAction.TOGGLE_FLOOR_0)
-			return 0;
-		if (m_eAction == KK_EWaypointAuthorAction.TOGGLE_FLOOR_1)
-			return 1;
-		if (m_eAction == KK_EWaypointAuthorAction.TOGGLE_FLOOR_2)
-			return 2;
-		if (m_eAction == KK_EWaypointAuthorAction.TOGGLE_FLOOR_3)
-			return 3;
-		if (m_eAction == KK_EWaypointAuthorAction.TOGGLE_FLOOR_4)
-			return 4;
-		if (m_eAction == KK_EWaypointAuthorAction.TOGGLE_FLOOR_5)
-			return 5;
-		if (m_eAction == KK_EWaypointAuthorAction.TOGGLE_FLOOR_6)
-			return 6;
-		if (m_eAction == KK_EWaypointAuthorAction.TOGGLE_FLOOR_7)
-			return 7;
-
-		return -1;
 	}
 
 	override bool CanBePerformed(notnull SCR_ChimeraCharacter user)
@@ -1264,29 +1572,14 @@ class KK_WaypointAuthorCommand : SCR_BaseGroupCommand
 			case KK_EWaypointAuthorAction.TOGGLE_ROOF:
 				return KK_WaypointAuthoring.ToggleRoof();
 
-			case KK_EWaypointAuthorAction.TOGGLE_FLOOR_0:
-				return KK_WaypointAuthoring.ToggleFloor(0);
+			case KK_EWaypointAuthorAction.FORBID_ABOVE:
+				return KK_WaypointAuthoring.BeginForbidAbove();
 
-			case KK_EWaypointAuthorAction.TOGGLE_FLOOR_1:
-				return KK_WaypointAuthoring.ToggleFloor(1);
+			case KK_EWaypointAuthorAction.FORBID_BELOW:
+				return KK_WaypointAuthoring.BeginForbidBelow();
 
-			case KK_EWaypointAuthorAction.TOGGLE_FLOOR_2:
-				return KK_WaypointAuthoring.ToggleFloor(2);
-
-			case KK_EWaypointAuthorAction.TOGGLE_FLOOR_3:
-				return KK_WaypointAuthoring.ToggleFloor(3);
-
-			case KK_EWaypointAuthorAction.TOGGLE_FLOOR_4:
-				return KK_WaypointAuthoring.ToggleFloor(4);
-
-			case KK_EWaypointAuthorAction.TOGGLE_FLOOR_5:
-				return KK_WaypointAuthoring.ToggleFloor(5);
-
-			case KK_EWaypointAuthorAction.TOGGLE_FLOOR_6:
-				return KK_WaypointAuthoring.ToggleFloor(6);
-
-			case KK_EWaypointAuthorAction.TOGGLE_FLOOR_7:
-				return KK_WaypointAuthoring.ToggleFloor(7);
+			case KK_EWaypointAuthorAction.CLEAR_HEIGHTS:
+				return KK_WaypointAuthoring.ClearHeightLimits();
 		}
 
 		return false;

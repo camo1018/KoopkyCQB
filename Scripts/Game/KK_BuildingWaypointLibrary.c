@@ -38,6 +38,10 @@ class KK_PrefabWaypointSet
 	ref array<ref KK_CachedInteriorSample> m_aSamples = {};
 	ref array<float> m_aForbiddenFloorYs = {};
 	bool m_bDropRoof;
+	bool m_bForbidAbove;
+	float m_fForbidAboveLocalY;
+	bool m_bForbidBelow;
+	float m_fForbidBelowLocalY;
 }
 
 class KK_BuildingWaypointLibrary
@@ -383,7 +387,6 @@ class KK_BuildingWaypointLibrary
 			return -1;
 
 		int bestIndex = -1;
-		float bestOff = maxOffRay;
 		float bestAlong = maxAlong;
 
 		for (int i = 0; i < prefabSet.m_aSamples.Count(); i++)
@@ -392,10 +395,12 @@ class KK_BuildingWaypointLibrary
 			if (!sample)
 				continue;
 
-			vector world = building.CoordToParent(sample.m_vLocalPosition);
+			// Match the debug sphere, which sits above the sample.
+			vector world =
+				building.CoordToParent(sample.m_vLocalPosition) + Vector(0, 0.2, 0);
 			vector offset = world - rayStart;
 			float along = vector.Dot(offset, rayDirection);
-			if (along < 0.0 || along > maxAlong)
+			if (along < 0.15 || along > maxAlong)
 				continue;
 
 			vector closest = rayStart + (rayDirection * along);
@@ -403,13 +408,10 @@ class KK_BuildingWaypointLibrary
 			if (offRay > maxOffRay)
 				continue;
 
-			if (offRay > bestOff)
+			// First marker the look ray actually passes through.
+			if (along >= bestAlong)
 				continue;
 
-			if (offRay == bestOff && along >= bestAlong)
-				continue;
-
-			bestOff = offRay;
 			bestAlong = along;
 			bestIndex = i;
 		}
@@ -632,6 +634,31 @@ class KK_BuildingWaypointLibrary
 
 	static bool IsFloorForbidden(notnull KK_PrefabWaypointSet prefabSet, float localY)
 	{
+		return IsElevationForbidden(
+			prefabSet,
+			localY,
+			prefabSet.m_bForbidAbove,
+			prefabSet.m_fForbidAboveLocalY,
+			prefabSet.m_bForbidBelow,
+			prefabSet.m_fForbidBelowLocalY
+		);
+	}
+
+	static bool IsElevationForbidden(
+		notnull KK_PrefabWaypointSet prefabSet,
+		float localY,
+		bool forbidAbove,
+		float aboveY,
+		bool forbidBelow,
+		float belowY)
+	{
+		const float EDGE = 0.02;
+		if (forbidAbove && localY > aboveY + EDGE)
+			return true;
+
+		if (forbidBelow && localY < belowY - EDGE)
+			return true;
+
 		foreach (float forbiddenY : prefabSet.m_aForbiddenFloorYs)
 		{
 			if (Math.AbsFloat(localY - forbiddenY) <= FLOOR_BAND)
@@ -639,6 +666,44 @@ class KK_BuildingWaypointLibrary
 		}
 
 		return false;
+	}
+
+	static bool HasHeightLimit(notnull KK_PrefabWaypointSet prefabSet)
+	{
+		return prefabSet.m_bForbidAbove ||
+			prefabSet.m_bForbidBelow ||
+			!prefabSet.m_aForbiddenFloorYs.IsEmpty();
+	}
+
+	static void SetHeightLimit(
+		notnull KK_PrefabWaypointSet prefabSet,
+		bool above,
+		bool enabled,
+		float localY)
+	{
+		if (above)
+		{
+			prefabSet.m_bForbidAbove = enabled;
+			prefabSet.m_fForbidAboveLocalY = localY;
+		}
+		else
+		{
+			prefabSet.m_bForbidBelow = enabled;
+			prefabSet.m_fForbidBelowLocalY = localY;
+		}
+
+		prefabSet.m_aForbiddenFloorYs.Clear();
+		SaveToDisk();
+	}
+
+	static void ClearHeightLimits(notnull KK_PrefabWaypointSet prefabSet)
+	{
+		prefabSet.m_bForbidAbove = false;
+		prefabSet.m_bForbidBelow = false;
+		prefabSet.m_fForbidAboveLocalY = 0;
+		prefabSet.m_fForbidBelowLocalY = 0;
+		prefabSet.m_aForbiddenFloorYs.Clear();
+		SaveToDisk();
 	}
 
 	static void ToggleDropRoof(notnull KK_PrefabWaypointSet prefabSet)
@@ -825,6 +890,10 @@ class KK_BuildingWaypointLibrary
 		context.WriteValue("DeduplicateDistance", prefabSet.m_fDeduplicateDistance);
 		context.WriteValue("HasSampleCache", prefabSet.m_bHasSampleCache);
 		context.WriteValue("DropRoof", prefabSet.m_bDropRoof);
+		context.WriteValue("ForbidAbove", prefabSet.m_bForbidAbove);
+		context.WriteValue("ForbidAboveY", prefabSet.m_fForbidAboveLocalY);
+		context.WriteValue("ForbidBelow", prefabSet.m_bForbidBelow);
+		context.WriteValue("ForbidBelowY", prefabSet.m_fForbidBelowLocalY);
 		context.WriteValue("NextWaypointId", prefabSet.m_iNextWaypointId);
 
 		int waypointCount = prefabSet.m_aWaypoints.Count();
@@ -1000,6 +1069,10 @@ class KK_BuildingWaypointLibrary
 			context.ReadValue("DeduplicateDistance", prefabSet.m_fDeduplicateDistance);
 			context.ReadValue("HasSampleCache", prefabSet.m_bHasSampleCache);
 			context.ReadValue("DropRoof", prefabSet.m_bDropRoof);
+			context.ReadValue("ForbidAbove", prefabSet.m_bForbidAbove);
+			context.ReadValue("ForbidAboveY", prefabSet.m_fForbidAboveLocalY);
+			context.ReadValue("ForbidBelow", prefabSet.m_bForbidBelow);
+			context.ReadValue("ForbidBelowY", prefabSet.m_fForbidBelowLocalY);
 			context.ReadValue("NextWaypointId", prefabSet.m_iNextWaypointId);
 
 			int waypointCount;

@@ -1023,7 +1023,7 @@ bool EnsureNavmeshLoaded(
 
 	protected void DropForbiddenFloors(notnull KK_PrefabWaypointSet prefabSet)
 	{
-		if (prefabSet.m_aForbiddenFloorYs.IsEmpty())
+		if (!KK_BuildingWaypointLibrary.HasHeightLimit(prefabSet))
 			return;
 
 		ref array<ref KK_InteriorTarget> kept = {};
