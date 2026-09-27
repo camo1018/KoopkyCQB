@@ -59,6 +59,7 @@ modded class SCR_AICombatComponent
 	{
 		if (KK_GarrisonHold.IsIgnoringTargets(GetOwner()))
 		{
+			KK_GarrisonHold.NoteTarget(GetOwner(), GetCurrentTarget());
 			KK_ClearTarget();
 			outWeaponEvent = false;
 			outSelectedTargetChanged = false;
@@ -86,6 +87,9 @@ class KK_GarrisonHold
 	protected static ref set<IEntity> s_Traveling = new set<IEntity>();
 	protected static ref set<IEntity> s_IgnoringTargets = new set<IEntity>();
 	protected static ref set<IEntity> s_DoorFiring = new set<IEntity>();
+	protected static ref set<IEntity> s_InteriorContact = new set<IEntity>();
+	protected static ref map<IEntity, IEntity> s_RushBuilding =
+		new map<IEntity, IEntity>();
 	protected static ref map<IEntity, vector> s_ApproachGoals =
 		new map<IEntity, vector>();
 
@@ -178,6 +182,71 @@ class KK_GarrisonHold
 		return body && s_DoorFiring.Contains(body);
 	}
 
+	// The sprint ignore clears the selected target. Remember an enemy who
+	// was already inside so the rush can still stop for him.
+	static void SetRushBuilding(IEntity soldier, IEntity building)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		if (building)
+			s_RushBuilding.Set(body, building);
+		else
+			s_RushBuilding.Remove(body);
+	}
+
+	static void NoteTarget(IEntity soldier, BaseTarget target)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !target || !s_RushBuilding.Contains(body))
+			return;
+
+		IEntity building = s_RushBuilding.Get(body);
+		if (!building)
+			return;
+
+		vector position = target.GetLastSeenPosition();
+		IEntity targetEntity = target.GetTargetEntity();
+		if (targetEntity)
+			position = targetEntity.GetOrigin();
+
+		if (PositionInside(building, position))
+			s_InteriorContact.Insert(body);
+	}
+
+	static bool HasInteriorContact(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		return body && s_InteriorContact.Contains(body);
+	}
+
+	static void ClearInteriorContact(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (body)
+			s_InteriorContact.RemoveItem(body);
+	}
+
+	static bool PositionInside(IEntity building, vector worldPosition)
+	{
+		if (!building)
+			return false;
+
+		vector mins;
+		vector maxs;
+		building.GetBounds(mins, maxs);
+
+		vector local = building.CoordToLocal(worldPosition);
+
+		return local[0] >= mins[0] &&
+			local[0] <= maxs[0] &&
+			local[1] >= mins[1] - 1.0 &&
+			local[1] <= maxs[1] + 1.0 &&
+			local[2] >= mins[2] &&
+			local[2] <= maxs[2];
+	}
+
 	static void SuppressTargeting(notnull AIAgent agent)
 	{
 		SetIgnoringTargets(agent, true);
@@ -211,6 +280,10 @@ class KK_GarrisonHold
 
 		if (utility.m_CombatComponent)
 		{
+			KK_GarrisonHold.NoteTarget(
+				utility.m_OwnerEntity,
+				utility.m_CombatComponent.GetCurrentTarget()
+			);
 			utility.m_CombatComponent.SetPerceptionFactor(0);
 			utility.m_CombatComponent.KK_ClearTarget();
 		}
@@ -377,14 +450,22 @@ modded class SCR_AIAttackBehavior
 	{
 		float score = super.CustomEvaluate();
 
-		// Stay on a garrison post, or stop for an enemy already inside.
-		// Combat move would walk him off that spot.
 		IEntity character;
 		IEntity agentEntity;
 		if (m_Utility)
 		{
 			character = m_Utility.m_OwnerEntity;
 			agentEntity = m_Utility.GetOwner();
+		}
+
+		// Getting to the post outranks aiming. He can shoot once he is there,
+		// or sooner when an enemy is already inside.
+		if (
+			KK_GarrisonHold.IsIgnoringTargets(character) ||
+			KK_GarrisonHold.IsIgnoringTargets(agentEntity)
+		)
+		{
+			return 0;
 		}
 
 		if (
@@ -594,7 +675,13 @@ modded class SCR_AIUtilityComponent
 			KK_GarrisonHold.IsIgnoringTargets(GetOwner());
 
 		if (ignore && m_CombatComponent)
+		{
+			KK_GarrisonHold.NoteTarget(
+				m_OwnerEntity,
+				m_CombatComponent.GetCurrentTarget()
+			);
 			m_CombatComponent.KK_ClearTarget();
+		}
 
 		SCR_AIBehaviorBase result;
 		if (ignore)
