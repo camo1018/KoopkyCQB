@@ -110,7 +110,7 @@ modded class SCR_BaseGameMode
 	[Attribute("1", UIWidgets.CheckBox, "If one node in a room is unreachable, fail the rest of that room", category: "Koopky CQB/Garrison")]
 	protected bool m_bKK_GarrisonFailCluster;
 
-	[Attribute("0", UIWidgets.CheckBox, "Mark doors and windows and prefer those posts. Experimental.", category: "Koopky CQB/Garrison")]
+	[Attribute("0", UIWidgets.CheckBox, "Mark doors and windows and prefer those posts.", category: "Koopky CQB/Garrison")]
 	protected bool m_bKK_ClassifyOpenings;
 
 	[Attribute("1", UIWidgets.CheckBox, "While clearing or garrisoning, suppression does not slow recognition and the first shot does not wait", category: "Koopky CQB/Combat")]

@@ -31,7 +31,7 @@ A post only counts if the soldier is on that floor. A sampled interior post allo
 
 A soldier who leaves his post is pulled back on an interval. He rotates to another spot after a random wait between the minimum and maximum (20–60 s). **Rotate during combat** lets that wait count down while he is alerted or threatened. An endangering threat during the walk drops the route until it is gone.
 
-**Hold doors and windows** is experimental. It marks openings and sends soldiers there first. Off, garrison uses the normal interior posts.
+**Hold doors and windows** marks openings and sends soldiers there first. Off, garrison uses the normal interior posts.
 
 ## Doors and movement
 
@@ -43,7 +43,7 @@ A soldier who leaves his post is pulled back on an interval. He rotates to anoth
 - **Make Way** is experimental. A soldier who has been stopped asks the person in front to step aside.
 - **Pass-through** keeps collision until someone is blocking him. That soldier then ignores character collision until he is through. Walls, doors, and the ground stay solid.
 
-**Pass through characters** is a separate experimental option. While clearing or garrisoning, squad members pass through other characters for the whole order. A player in the squad keeps normal collision. Walls, doors, and the ground stay solid.
+**Pass through characters** is a separate option. While clearing or garrisoning, squad members pass through other characters for the whole order. A player in the squad keeps normal collision. Walls, doors, and the ground stay solid.
 
 ## Combat
 
