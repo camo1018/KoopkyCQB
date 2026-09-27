@@ -379,7 +379,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				IsAtHold(
 					unitPosition,
 					assignment.m_Target.m_vPosition,
-					HoldRadiusFor(assignment.m_Target)
+					m_GarrisonWaypoint.GetHoldRadius()
 				);
 
 			KK_PassageOrder passageOrder;
@@ -1328,6 +1328,44 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		return IsInsideBuilding(position);
 	}
 
+	protected bool IsAtGarrisonHold(notnull AIAgent agent)
+	{
+		if (!m_GarrisonWaypoint)
+			return false;
+
+		IEntity body = agent.GetControlledEntity();
+		if (!body || !IsInsideBuilding(body.GetOrigin()))
+			return false;
+
+		foreach (KK_GarrisonAgentAssignment assignment : m_aAssignments)
+		{
+			if (
+				!assignment ||
+				assignment.m_Agent != agent ||
+				!assignment.m_Target
+			)
+			{
+				continue;
+			}
+
+			if (!KK_AuthoredRouteHelper.IsOnFinalGoal(
+				assignment.m_aRouteGoals,
+				assignment.m_iRouteIndex
+			))
+			{
+				return false;
+			}
+
+			return IsAtHold(
+				body.GetOrigin(),
+				assignment.m_Target.m_vPosition,
+				m_GarrisonWaypoint.GetHoldRadius()
+			);
+		}
+
+		return false;
+	}
+
 	protected void CollectPassageSoldiers(
 		notnull array<ref KK_PassageSoldier> soldiers)
 	{
@@ -1454,7 +1492,10 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		if (
 			!entering &&
 			!forceTravel &&
-			ThreatInsideBuilding(agent) &&
+			(
+				ThreatInsideBuilding(agent) ||
+				IsAtGarrisonHold(agent)
+			) &&
 			IsEngagingEnemy(agent)
 		)
 		{

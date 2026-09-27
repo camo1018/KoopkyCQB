@@ -113,11 +113,6 @@ class KK_GarrisonHold
 
 		if (movement && locked)
 			movement.SetMovementTypeWanted(EMovementType.IDLE);
-
-		if (!locked)
-			return;
-
-		CancelCombatMove(soldier);
 	}
 
 	protected static void CancelCombatMove(IEntity soldier)
@@ -148,7 +143,8 @@ modded class SCR_AIAttackBehavior
 
 		if (KK_GarrisonHold.IsPinned(body))
 		{
-			m_bUseCombatMove = false;
+			// Speed stays locked by the post. Combat move stays on so the shot can fire.
+			m_bUseCombatMove = true;
 			KK_GarrisonHold.SetPinned(body, true);
 		}
 		else if (KK_GarrisonHold.IsTraveling(body))
