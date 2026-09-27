@@ -1,9 +1,22 @@
 modded class SCR_AICombatComponent
 {
+	void KK_ClearTarget()
+	{
+		m_SelectedTarget = null;
+	}
+
 	override void UpdatePerceptionFactor(
 		PerceptionComponent perceptionComp,
 		SCR_AIThreatSystem threatSystem)
 	{
+		if (KK_GarrisonHold.IsIgnoringTargets(GetOwner()))
+		{
+			if (perceptionComp)
+				perceptionComp.SetPerceptionFactor(0);
+
+			return;
+		}
+
 		if (
 			!perceptionComp ||
 			!threatSystem ||
@@ -35,12 +48,43 @@ modded class SCR_AICombatComponent
 		perceptionFactor *= m_fPerceptionFactor;
 		perceptionComp.SetPerceptionFactor(perceptionFactor);
 	}
+
+	override void EvaluateWeaponAndTarget(
+		out bool outWeaponEvent,
+		out bool outSelectedTargetChanged,
+		out BaseTarget outPrevTarget,
+		out BaseTarget outCurrentTarget,
+		out bool outRetreatTargetChanged,
+		out bool outCompartmentChanged)
+	{
+		if (KK_GarrisonHold.IsIgnoringTargets(GetOwner()))
+		{
+			KK_ClearTarget();
+			outWeaponEvent = false;
+			outSelectedTargetChanged = false;
+			outPrevTarget = null;
+			outCurrentTarget = null;
+			outRetreatTargetChanged = false;
+			outCompartmentChanged = false;
+			return;
+		}
+
+		super.EvaluateWeaponAndTarget(
+			outWeaponEvent,
+			outSelectedTargetChanged,
+			outPrevTarget,
+			outCurrentTarget,
+			outRetreatTargetChanged,
+			outCompartmentChanged
+		);
+	}
 }
 
 class KK_GarrisonHold
 {
 	protected static ref set<IEntity> s_Pinned = new set<IEntity>();
 	protected static ref set<IEntity> s_Traveling = new set<IEntity>();
+	protected static ref set<IEntity> s_IgnoringTargets = new set<IEntity>();
 	protected static ref map<IEntity, vector> s_ApproachGoals =
 		new map<IEntity, vector>();
 
@@ -90,6 +134,108 @@ class KK_GarrisonHold
 	static bool IsTraveling(IEntity soldier)
 	{
 		return soldier && s_Traveling.Contains(soldier);
+	}
+
+	// Outside the building the sprint ignores enemies. A target raises the
+	// weapon and drops the sprint, and the sprint order then blocks the shot.
+	// The flag is checked every AI evaluation, not only on the garrison tick.
+	static void SetIgnoringTargets(IEntity soldier, bool ignore)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		if (ignore)
+			s_IgnoringTargets.Insert(body);
+		else
+			s_IgnoringTargets.RemoveItem(body);
+	}
+
+	static bool IsIgnoringTargets(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		return body && s_IgnoringTargets.Contains(body);
+	}
+
+	static void SuppressTargeting(notnull AIAgent agent)
+	{
+		SetIgnoringTargets(agent, true);
+		SetIgnoringTargets(agent.GetControlledEntity(), true);
+
+		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
+		if (soldier)
+			EnforceSprintIgnore(soldier.m_UtilityComponent);
+	}
+
+	// Called from the soldier's own evaluation so a later target reaction
+	// cannot bring the weapon back up before the next garrison tick.
+	static void EnforceSprintIgnore(SCR_AIUtilityComponent utility)
+	{
+		if (!utility)
+			return;
+
+		if (
+			!IsIgnoringTargets(utility.m_OwnerEntity) &&
+			!IsIgnoringTargets(utility.GetOwner())
+		)
+		{
+			return;
+		}
+
+		SetIgnoringTargets(utility.m_OwnerEntity, true);
+		SetIgnoringTargets(utility.GetOwner(), true);
+
+		if (utility.m_PerceptionComponent)
+			utility.m_PerceptionComponent.SetPerceptionFactor(0);
+
+		if (utility.m_CombatComponent)
+		{
+			utility.m_CombatComponent.SetPerceptionFactor(0);
+			utility.m_CombatComponent.KK_ClearTarget();
+		}
+
+		if (utility.m_ThreatSystem)
+			utility.m_ThreatSystem.KK_IgnoreForSprint();
+
+		if (utility.m_LookAction)
+			utility.m_LookAction.Cancel();
+
+		IEntity body = utility.m_OwnerEntity;
+		if (!body)
+		{
+			AIAgent agent = AIAgent.Cast(utility.GetOwner());
+			if (agent)
+				body = agent.GetControlledEntity();
+		}
+
+		if (!body)
+			return;
+
+		CharacterControllerComponent controller =
+			CharacterControllerComponent.Cast(
+				body.FindComponent(CharacterControllerComponent)
+			);
+
+		if (controller)
+			controller.SetWeaponRaised(false);
+	}
+
+	// The threat system and the behavior tree do not always pass the same
+	// entity. The flag is the character, and an agent resolves to it.
+	protected static IEntity CharacterBody(IEntity entity)
+	{
+		if (!entity)
+			return null;
+
+		AIAgent agent = AIAgent.Cast(entity);
+		if (!agent)
+			return entity;
+
+		IEntity body = agent.GetControlledEntity();
+		if (body)
+			return body;
+
+		return entity;
 	}
 
 	// While he is shooting on the way in, combat movement uses this
@@ -292,5 +438,156 @@ modded class SCR_AICombatMoveLogicBase
 		}
 
 		return super.EOnTaskSimulate(owner, dt);
+	}
+}
+
+modded class SCR_AIThreatSystem
+{
+	void KK_IgnoreForSprint()
+	{
+		SetThreatValues(0, 0, 0, 0);
+		m_fThreatTotal = 0;
+		UpdateState();
+	}
+
+	override void Update(SCR_AIUtilityComponent utility, float timeSlice)
+	{
+		if (
+			m_Utility &&
+			(
+				KK_GarrisonHold.IsIgnoringTargets(m_Utility.m_OwnerEntity) ||
+				KK_GarrisonHold.IsIgnoringTargets(m_Utility.GetOwner())
+			)
+		)
+		{
+			if (m_Agent && m_Agent.GetDangerEventsCount() > 0)
+				m_Agent.ClearDangerEvents(m_Agent.GetDangerEventsCount() + 1);
+
+			KK_IgnoreForSprint();
+			return;
+		}
+
+		super.Update(utility, timeSlice);
+	}
+
+	override void ThreatBulletImpact(int count)
+	{
+		if (IsSprintIgnoring())
+			return;
+
+		super.ThreatBulletImpact(count);
+	}
+
+	override void ThreatExplosion(float distance)
+	{
+		if (IsSprintIgnoring())
+			return;
+
+		super.ThreatExplosion(distance);
+	}
+
+	override void ThreatShotFired(float distance, int count)
+	{
+		if (IsSprintIgnoring())
+			return;
+
+		super.ThreatShotFired(distance, count);
+	}
+
+	override void ThreatProjectileFlyby(int count)
+	{
+		if (IsSprintIgnoring())
+			return;
+
+		super.ThreatProjectileFlyby(count);
+	}
+
+	protected bool IsSprintIgnoring()
+	{
+		return m_Utility &&
+			(
+				KK_GarrisonHold.IsIgnoringTargets(m_Utility.m_OwnerEntity) ||
+				KK_GarrisonHold.IsIgnoringTargets(m_Utility.GetOwner())
+			);
+	}
+}
+
+modded class SCR_AIUtilityComponent
+{
+	override SCR_AIBehaviorBase EvaluateBehavior(BaseTarget unknownTarget)
+	{
+		bool ignore =
+			KK_GarrisonHold.IsIgnoringTargets(m_OwnerEntity) ||
+			KK_GarrisonHold.IsIgnoringTargets(GetOwner());
+
+		if (ignore && m_CombatComponent)
+			m_CombatComponent.KK_ClearTarget();
+
+		SCR_AIBehaviorBase result;
+		if (ignore)
+			result = super.EvaluateBehavior(null);
+		else
+			result = super.EvaluateBehavior(unknownTarget);
+
+		if (ignore)
+			KK_GarrisonHold.EnforceSprintIgnore(this);
+
+		return result;
+	}
+}
+
+modded class SCR_AISetWeaponRaised
+{
+	override ENodeResult EOnTaskSimulate(AIAgent owner, float dt)
+	{
+		IEntity body;
+		if (owner)
+			body = owner.GetControlledEntity();
+
+		if (KK_GarrisonHold.IsIgnoringTargets(body) || KK_GarrisonHold.IsIgnoringTargets(owner))
+		{
+			if (body)
+			{
+				CharacterControllerComponent controller =
+					CharacterControllerComponent.Cast(
+						body.FindComponent(CharacterControllerComponent)
+					);
+
+				if (controller)
+					controller.SetWeaponRaised(false);
+			}
+
+			return ENodeResult.SUCCESS;
+		}
+
+		return super.EOnTaskSimulate(owner, dt);
+	}
+}
+
+modded class SCR_AILookAction
+{
+	override void LookAt(vector pos, float priority, float duration = 0.8)
+	{
+		if (SprintIgnoring())
+			return;
+
+		super.LookAt(pos, priority, duration);
+	}
+
+	override void LookAt(IEntity ent, float priority, float duration = 0.8)
+	{
+		if (SprintIgnoring())
+			return;
+
+		super.LookAt(ent, priority, duration);
+	}
+
+	protected bool SprintIgnoring()
+	{
+		return m_Utility &&
+			(
+				KK_GarrisonHold.IsIgnoringTargets(m_Utility.m_OwnerEntity) ||
+				KK_GarrisonHold.IsIgnoringTargets(m_Utility.GetOwner())
+			);
 	}
 }

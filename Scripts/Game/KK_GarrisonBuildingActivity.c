@@ -374,7 +374,9 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				}
 			}
 
+			bool insideBuilding = IsInsideBuilding(unitPosition);
 			bool atHold =
+				insideBuilding &&
 				onFinalGoal &&
 				IsAtHold(
 					unitPosition,
@@ -396,14 +398,13 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			assignment.m_fLastTimerUpdate = currentTime;
 
 			bool attacking = IsEngagingEnemy(assignment.m_Agent);
-			bool insideBuilding = IsInsideBuilding(unitPosition);
 			bool interiorThreat =
 				insideBuilding &&
 				ThreatInsideBuilding(assignment.m_Agent);
 
-			// Sprint outside, run inside. A shot on the way slows him down,
-			// but the next step is still the post. He stops only when an
-			// enemy is already inside the building.
+			// Outside, enemies are ignored so the sprint is not broken by a
+			// raised weapon. Inside, a shot can slow him, but he keeps
+			// moving to the post unless the enemy is already in the building.
 			bool settledAtPost = atHold && !passageOverride;
 			bool releaseEntry =
 				assignment.m_bEntryPriority &&
@@ -428,6 +429,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			}
 
 			bool approachFight =
+				insideBuilding &&
 				attacking &&
 				!interiorThreat &&
 				!settledAtPost;
@@ -474,6 +476,11 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 					IssueMoveOrder(assignment, true);
 				}
 			}
+
+			if (!insideBuilding && !settledAtPost)
+				KK_GarrisonHold.SuppressTargeting(assignment.m_Agent);
+			else
+				KK_GarrisonHold.SetIgnoringTargets(controlledEntity, false);
 
 			if (!settledAtPost && !interiorThreat)
 			{
@@ -681,14 +688,11 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				assignment.m_fStillSince = currentTime;
 				assignment.m_fStartedAt += timerDelta;
 			}
-			else if (attacking)
+			else if (attacking && !insideBuilding)
 			{
-				// Still outside. Travel time pauses. Standing still fails the post
-				// only after the run-in order is already above combat.
+				// The firefight does not fail the post, and it does not
+				// count as arriving. The sprint order stays in charge.
 				assignment.m_fStartedAt += timerDelta;
-
-				if (!assignment.m_bEntryPriority)
-					assignment.m_fStillSince = currentTime;
 			}
 
 			if (
@@ -707,15 +711,31 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				m_GarrisonWaypoint.GetStuckTimeout() * 1000.0
 			)
 			{
-				PrintFormat(
-					"KK: Garrison unit stood still for %1s heading to %2",
-					m_GarrisonWaypoint.GetStuckTimeout(),
-					assignment.m_Target.m_vPosition
-				);
+				if (!insideBuilding && attacking)
+				{
+					PrintFormat(
+						"KK: Garrison unit stood still outside, sending him to %1",
+						assignment.m_Target.m_vPosition
+					);
 
-				ReleaseAssignment(i, true);
-				i--;
-				continue;
+					assignment.m_fStillSince = currentTime;
+					assignment.m_fStartedAt = currentTime;
+					assignment.m_fLastOrderAt = currentTime;
+					assignment.m_bCombatYield = false;
+					IssueMoveOrder(assignment, true);
+				}
+				else
+				{
+					PrintFormat(
+						"KK: Garrison unit stood still for %1s heading to %2",
+						m_GarrisonWaypoint.GetStuckTimeout(),
+						assignment.m_Target.m_vPosition
+					);
+
+					ReleaseAssignment(i, true);
+					i--;
+					continue;
+				}
 			}
 
 			if (
@@ -724,14 +744,30 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				timeoutMs
 			)
 			{
-				PrintFormat(
-					"KK: Garrison hold timed out at %1",
-					assignment.m_Target.m_vPosition
-				);
+				if (!insideBuilding && attacking)
+				{
+					PrintFormat(
+						"KK: Garrison approach restarted toward %1",
+						assignment.m_Target.m_vPosition
+					);
 
-				ReleaseAssignment(i, true);
-				i--;
-				continue;
+					assignment.m_fStillSince = currentTime;
+					assignment.m_fStartedAt = currentTime;
+					assignment.m_fLastOrderAt = currentTime;
+					assignment.m_bCombatYield = false;
+					IssueMoveOrder(assignment, true);
+				}
+				else
+				{
+					PrintFormat(
+						"KK: Garrison hold timed out at %1",
+						assignment.m_Target.m_vPosition
+					);
+
+					ReleaseAssignment(i, true);
+					i--;
+					continue;
+				}
 			}
 
 			if (
@@ -1511,9 +1547,9 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		);
 	}
 
-	// A fight on the way can be shot, so the move drops under the attack.
-	// Combat movement is then pointed at the post. A forced rotate stays
-	// above the attack.
+	// Outside, the sprint stays above combat so he cannot stop to shoot
+	// before the door. Inside, a fight can be shot while combat movement
+	// is pointed at the post.
 	protected float PriorityForSoldier(
 		notnull AIAgent agent,
 		bool forceTravel,
@@ -1525,7 +1561,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		if (body && !IsInsideBuilding(body.GetOrigin()))
 			entering = true;
 
-		if (!forceTravel && IsEngagingEnemy(agent))
+		if (!forceTravel && !entering && IsEngagingEnemy(agent))
 			return KK_AgentMove.PRIORITY_LEVEL;
 
 		return KK_AgentMove.EnterBuildingPriorityLevel();
@@ -1650,6 +1686,10 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			KK_GarrisonHold.ClearApproachGoal(
 				assignment.m_Agent.GetControlledEntity()
 			);
+			KK_GarrisonHold.SetIgnoringTargets(
+				assignment.m_Agent.GetControlledEntity(),
+				false
+			);
 		}
 	}
 
@@ -1678,6 +1718,10 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			);
 			KK_GarrisonHold.ClearApproachGoal(
 				assignment.m_Agent.GetControlledEntity()
+			);
+			KK_GarrisonHold.SetIgnoringTargets(
+				assignment.m_Agent.GetControlledEntity(),
+				false
 			);
 			assignment.m_bFacingApplied = false;
 
