@@ -308,7 +308,12 @@ class KK_CQBAttrNavImprovements : SCR_BaseEditorAttribute
 		if (!mode)
 			return;
 
-		mode.KK_SetNavMode(var.GetInt());
+		int value = var.GetInt();
+		float asFloat = var.GetFloat();
+		if (asFloat > value)
+			value = Math.Round(asFloat);
+
+		mode.KK_SetNavMode(value);
 	}
 
 	override int GetEntries(notnull array<ref SCR_BaseEditorAttributeEntry> outEntries)

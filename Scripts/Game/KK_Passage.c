@@ -92,7 +92,11 @@ class KK_PassageAgentState
 	vector m_vMakeWayOrigin;
 	vector m_vMakeWayTarget;
 	AIAgent m_MakeWayFor;
-	AIAgent m_PassBlocker;
+	bool m_bPassing;
+	vector m_vPassOrigin;
+	vector m_vStoppedOrigin;
+	float m_fStoppedSince;
+	bool m_bHaveStopped;
 }
 
 class KK_Passage
@@ -116,11 +120,13 @@ class KK_Passage
 	// A new yield waits until the soldiers involved have been stopped this long.
 	protected static const float YIELD_STILL_MS = 500;
 	protected static const float YIELD_STILL_DISTANCE = 0.3;
-	// Pass-through keeps collision until a body is actually in front, then
-	// drops character collision until that body is behind.
-	protected static const float PASS_BLOCK_RANGE = 1.15;
+	// Pass-through drops character collision after the soldier has been
+	// stopped. There is no per-person collision, so who is in front does
+	// not matter. A true stop is quicker than shuffling inside 0.3 m.
+	protected static const float PASS_STOPPED_MS = 250;
+	protected static const float PASS_STOPPED_DISTANCE = 0.1;
+	protected static const float PASS_STILL_MS = 500;
 	protected static const float PASS_CLEAR_RANGE = 1.6;
-	protected static const float PASS_BEHIND = -0.35;
 	protected static const int YIELD_SEARCH_STEPS = 3;
 	protected static const float YIELD_SEARCH_STEP = 0.6;
 	protected static const float YIELD_FALLBACK = 1.0;
@@ -240,7 +246,7 @@ class KK_Passage
 		if (Enabled())
 			ApplyCorridors(soldiers, pathfinding, orders, claimed);
 		else if (PassThrough())
-			ApplyPassThrough(soldiers);
+			ApplyPassThrough(soldiers, orders);
 
 		if (handleDoors)
 			ResumeReleased(soldiers, orders, claimed);
@@ -1314,7 +1320,8 @@ class KK_Passage
 	}
 
 	protected static void ApplyPassThrough(
-		notnull array<ref KK_PassageSoldier> soldiers)
+		notnull array<ref KK_PassageSoldier> soldiers,
+		notnull map<AIAgent, ref KK_PassageOrder> orders)
 	{
 		foreach (KK_PassageSoldier soldier : soldiers)
 		{
@@ -1333,18 +1340,12 @@ class KK_Passage
 			NoteMotion(soldier.m_Agent, origin);
 			state = AgentState(soldier.m_Agent);
 
-			if (state.m_PassBlocker)
+			if (state.m_bPassing)
 			{
-				if (PassStillOpen(soldier, origin, state.m_PassBlocker, soldiers))
+				if (PassStillOpen(origin, state))
 				{
-					KK_SquadCollision.Hold(soldier.m_Agent);
-					continue;
-				}
-
-				AIAgent next = FindPassBlocker(soldier, origin, soldiers);
-				if (next)
-				{
-					StartPass(soldier, next);
+					if (KK_SquadCollision.Hold(soldier.m_Agent))
+						KeepPassMove(soldier, orders, false);
 					continue;
 				}
 
@@ -1352,34 +1353,59 @@ class KK_Passage
 				continue;
 			}
 
-			if (!StoodStill(soldier.m_Agent))
+			if (
+				!StoppedFor(soldier.m_Agent, PASS_STOPPED_MS) &&
+				!StoodFor(soldier.m_Agent, PASS_STILL_MS)
+			)
+			{
 				continue;
+			}
 
-			AIAgent blocker = FindPassBlocker(soldier, origin, soldiers);
-			if (!blocker)
-				continue;
-
-			StartPass(soldier, blocker);
+			StartPass(soldier, origin, orders);
 		}
 	}
 
 	protected static void StartPass(
 		notnull KK_PassageSoldier soldier,
-		notnull AIAgent blocker)
+		vector origin,
+		notnull map<AIAgent, ref KK_PassageOrder> orders)
 	{
 		if (!KK_SquadCollision.Hold(soldier.m_Agent))
 			return;
 
 		KK_PassageAgentState state = AgentState(soldier.m_Agent);
-		bool started = state.m_PassBlocker != blocker;
-		state.m_PassBlocker = blocker;
+		bool started = !state.m_bPassing;
+		state.m_bPassing = true;
+		if (started)
+			state.m_vPassOrigin = origin;
+		KeepPassMove(soldier, orders, started);
 		if (!started)
 			return;
 
 		PrintFormat(
-			"KK: %1 passing through %2",
-			soldier.m_Agent.GetControlledEntity(),
-			blocker.GetControlledEntity()
+			"KK: %1 passing through",
+			soldier.m_Agent.GetControlledEntity()
+		);
+	}
+
+	// A door order already in the map stays. Otherwise send the soldier
+	// at his own goal again so he walks once character collision drops.
+	protected static void KeepPassMove(
+		notnull KK_PassageSoldier soldier,
+		notnull map<AIAgent, ref KK_PassageOrder> orders,
+		bool force)
+	{
+		if (orders.Contains(soldier.m_Agent))
+			return;
+
+		PutOrder(
+			orders,
+			soldier.m_Agent,
+			soldier.m_vGoal,
+			false,
+			false,
+			false,
+			force
 		);
 	}
 
@@ -1387,10 +1413,10 @@ class KK_Passage
 		notnull KK_PassageAgentState state,
 		notnull AIAgent agent)
 	{
-		if (!state.m_PassBlocker)
+		if (!state.m_bPassing)
 			return;
 
-		state.m_PassBlocker = null;
+		state.m_bPassing = false;
 		KK_SquadCollision.ReleaseHold(agent);
 	}
 
@@ -1399,7 +1425,7 @@ class KK_Passage
 		array<AIAgent> agents = {};
 		foreach (AIAgent agent, KK_PassageAgentState state : s_mAgents)
 		{
-			if (state && state.m_PassBlocker)
+			if (state && state.m_bPassing)
 				agents.Insert(agent);
 		}
 
@@ -1412,91 +1438,12 @@ class KK_Passage
 	}
 
 	protected static bool PassStillOpen(
-		notnull KK_PassageSoldier mover,
 		vector moverPos,
-		notnull AIAgent blocker,
-		notnull array<ref KK_PassageSoldier> soldiers)
+		notnull KK_PassageAgentState state)
 	{
-		KK_PassageSoldier other = FindSoldier(soldiers, blocker);
-		if (!Usable(other))
-			return false;
-
-		vector body = other.m_Agent.GetControlledEntity().GetOrigin();
-		return !PassedBody(moverPos, mover.m_vGoal, body);
-	}
-
-	protected static bool PassedBody(vector moverPos, vector goal, vector body)
-	{
-		vector toBody = body - moverPos;
-		toBody[1] = 0;
-		float separation = toBody.Length();
-		if (separation > PASS_CLEAR_RANGE)
-			return true;
-
-		vector toGoal = goal - moverPos;
-		toGoal[1] = 0;
-		if (toGoal.Length() < 0.05)
-			return false;
-
-		toGoal.Normalize();
-		return vector.Dot(toBody, toGoal) < PASS_BEHIND;
-	}
-
-	protected static AIAgent FindPassBlocker(
-		notnull KK_PassageSoldier mover,
-		vector moverPos,
-		notnull array<ref KK_PassageSoldier> soldiers)
-	{
-		AIAgent best = null;
-		float bestSeparation = PASS_BLOCK_RANGE;
-
-		foreach (KK_PassageSoldier other : soldiers)
-		{
-			if (!Usable(other) || other.m_Agent == mover.m_Agent)
-				continue;
-
-			vector body = other.m_Agent.GetControlledEntity().GetOrigin();
-			if (!BodyInFront(moverPos, mover.m_vGoal, body, PASS_BLOCK_RANGE))
-				continue;
-
-			vector flat = body - moverPos;
-			flat[1] = 0;
-			float separation = flat.Length();
-			if (separation >= bestSeparation)
-				continue;
-
-			bestSeparation = separation;
-			best = other.m_Agent;
-		}
-
-		return best;
-	}
-
-	protected static bool BodyInFront(
-		vector moverPos,
-		vector goal,
-		vector body,
-		float range)
-	{
-		vector toGoal = goal - moverPos;
-		toGoal[1] = 0;
-		float goalLength = toGoal.Length();
-		if (goalLength < 0.4)
-			return false;
-
-		vector toBody = body - moverPos;
-		toBody[1] = 0;
-		float separation = toBody.Length();
-		if (separation < 0.05 || separation > range)
-			return false;
-
-		float ahead = vector.Dot(toBody, toGoal) / goalLength;
-		if (ahead < 0.2)
-			return false;
-
-		vector off = toBody - (toGoal * (ahead / goalLength));
-		off[1] = 0;
-		return off.Length() <= 0.85;
+		vector moved = moverPos - state.m_vPassOrigin;
+		moved[1] = 0;
+		return moved.Length() <= PASS_CLEAR_RANGE;
 	}
 
 	protected static void ApplyCorridors(
@@ -2461,23 +2408,46 @@ class KK_Passage
 			state.m_bHaveStill = true;
 			state.m_vStillOrigin = origin;
 			state.m_fStillSince = now;
+			state.m_bHaveStopped = true;
+			state.m_vStoppedOrigin = origin;
+			state.m_fStoppedSince = now;
 			return;
 		}
 
-		if (vector.Distance(origin, state.m_vStillOrigin) <= YIELD_STILL_DISTANCE)
+		if (vector.Distance(origin, state.m_vStillOrigin) > YIELD_STILL_DISTANCE)
+		{
+			state.m_vStillOrigin = origin;
+			state.m_fStillSince = now;
+		}
+
+		if (vector.Distance(origin, state.m_vStoppedOrigin) <= PASS_STOPPED_DISTANCE)
 			return;
 
-		state.m_vStillOrigin = origin;
-		state.m_fStillSince = now;
+		state.m_vStoppedOrigin = origin;
+		state.m_fStoppedSince = now;
 	}
 
 	protected static bool StoodStill(notnull AIAgent agent)
+	{
+		return StoodFor(agent, YIELD_STILL_MS);
+	}
+
+	protected static bool StoodFor(notnull AIAgent agent, float duration)
 	{
 		KK_PassageAgentState state = s_mAgents.Get(agent);
 		if (!state || !state.m_bHaveStill)
 			return false;
 
-		return Now() - state.m_fStillSince >= YIELD_STILL_MS;
+		return Now() - state.m_fStillSince >= duration;
+	}
+
+	protected static bool StoppedFor(notnull AIAgent agent, float duration)
+	{
+		KK_PassageAgentState state = s_mAgents.Get(agent);
+		if (!state || !state.m_bHaveStopped)
+			return false;
+
+		return Now() - state.m_fStoppedSince >= duration;
 	}
 
 	protected static float Now()

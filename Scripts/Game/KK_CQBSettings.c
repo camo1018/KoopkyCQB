@@ -299,6 +299,8 @@ modded class SCR_BaseGameMode
 			KK_ReadInt(context, "SampleAttempts", m_iKK_SampleAttempts);
 			context.EndObject();
 		}
+
+		Print("KK: AI navigation improvements " + KK_NavModeLabel());
 	}
 
 	protected void KK_ReadAuthoringFlag()
@@ -418,7 +420,8 @@ modded class SCR_BaseGameMode
 		context.WriteValue("SharpCombat", m_bKK_SharpCombat);
 		context.WriteValue("PerceptionFactor", m_fKK_PerceptionFactor);
 		context.WriteValue("OpenDoors", m_bKK_OpenDoors);
-		context.WriteValue("NavMode", m_eKK_NavMode);
+		int navMode = KK_GetNavMode();
+		context.WriteValue("NavMode", navMode);
 		context.WriteValue("IgnoreSquadCollision", m_bKK_IgnoreSquadCollision);
 		context.WriteValue("DoorReach", m_fKK_DoorReach);
 		context.WriteValue("DoorSearchInterval", m_fKK_DoorSearchInterval);
@@ -706,7 +709,7 @@ modded class SCR_BaseGameMode
 
 	protected void KK_ReadNavMode(notnull SCR_JsonLoadContext context)
 	{
-		int navMode;
+		int navMode = m_eKK_NavMode;
 		if (context.ReadValue("NavMode", navMode))
 		{
 			m_eKK_NavMode = KK_ClampNavMode(navMode);
@@ -716,6 +719,17 @@ modded class SCR_BaseGameMode
 		bool legacy;
 		if (context.ReadValue("NavImprovements", legacy) && legacy)
 			m_eKK_NavMode = KK_ENavMode.MAKE_WAY;
+	}
+
+	protected string KK_NavModeLabel()
+	{
+		if (m_eKK_NavMode == KK_ENavMode.MAKE_WAY)
+			return "Make Way";
+
+		if (m_eKK_NavMode == KK_ENavMode.PASS_THROUGH)
+			return "Pass-through";
+
+		return "Off";
 	}
 
 	protected KK_ENavMode KK_ClampNavMode(int value)
