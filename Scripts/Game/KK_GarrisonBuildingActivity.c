@@ -15,7 +15,7 @@ class KK_GarrisonAgentAssignment
 	bool m_bFacingApplied;
 	bool m_bCombatMove;
 	bool m_bEntryPriority;
-	bool m_bInsideFight;
+	bool m_bInteriorHold;
 	EMovementType m_eApproachSpeed;
 	ref array<vector> m_aRouteGoals = {};
 	int m_iRouteIndex;
@@ -397,14 +397,19 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 			bool attacking = IsEngagingEnemy(assignment.m_Agent);
 			bool insideBuilding = IsInsideBuilding(unitPosition);
+			bool interiorThreat =
+				insideBuilding &&
+				ThreatInsideBuilding(assignment.m_Agent);
 
-			// Outside, the run-in beats combat. Once he is inside, that order
-			// is dropped so he fights from the building.
+			// Sprint to the building, then run to the post, even in a fight.
+			// The move only drops once he should shoot: on the post, or
+			// because a threat is already inside the building.
 			bool settledAtPost = atHold && !passageOverride;
 			bool releaseEntry =
 				assignment.m_bEntryPriority &&
 				insideBuilding &&
-				!settledAtPost;
+				!settledAtPost &&
+				!interiorThreat;
 			bool commitEntry =
 				!insideBuilding &&
 				!assignment.m_bEntryPriority &&
@@ -420,34 +425,37 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 					IssueMoveOrder(assignment, assignment.m_bRotating);
 			}
 
+			if (!settledAtPost && !interiorThreat)
+			{
+				KK_GarrisonHold.SetPinned(controlledEntity, false);
+				KK_GarrisonHold.SetTraveling(controlledEntity, true);
+			}
+			else
+			{
+				KK_GarrisonHold.SetTraveling(controlledEntity, false);
+			}
+
 			if (atHold && !passageOverride)
 			{
 				if (!assignment.m_bHolding)
 				{
-					bool beatFight =
-						assignment.m_bEntryPriority ||
-						assignment.m_bRotating;
-
 					assignment.m_bHolding = true;
 					assignment.m_bRotating = false;
 					assignment.m_bCombatYield = false;
-					assignment.m_bInsideFight = false;
+					assignment.m_bInteriorHold = false;
 					assignment.m_fRotateAt = NextRotateTime(currentTime);
 					assignment.m_bFacingApplied = false;
 
-					// A run-in or a post change outranks combat. Drop it so the post can shoot.
-					if (!attacking || beatFight)
-					{
-						CancelAgentOrder(assignment.m_Agent);
-						assignment.m_bEntryPriority = false;
+					// The travel order outranks combat. Drop it so the post can shoot.
+					CancelAgentOrder(assignment.m_Agent);
+					assignment.m_bEntryPriority = false;
 
-						if (!attacking)
-						{
-							KK_AgentMove.SetWantedSpeed(
-								assignment.m_Agent,
-								EMovementType.RUN
-							);
-						}
+					if (!attacking)
+					{
+						KK_AgentMove.SetWantedSpeed(
+							assignment.m_Agent,
+							EMovementType.RUN
+						);
 					}
 				}
 
@@ -508,7 +516,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 			if (assignment.m_bHolding && !passageOverride)
 			{
-				if (attacking && insideBuilding)
+				if (interiorThreat)
 				{
 					KK_GarrisonHold.SetPinned(controlledEntity, true);
 					assignment.m_fStartedAt = currentTime;
@@ -517,27 +525,21 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 					continue;
 				}
 
-				// Outside, or the fight is over. Do not plant him in the open.
 				KK_GarrisonHold.SetPinned(controlledEntity, false);
 				assignment.m_bFacingApplied = false;
 				assignment.m_bHolding = false;
-				assignment.m_bInsideFight = false;
+				assignment.m_bInteriorHold = false;
 				assignment.m_fLastOrderAt = currentTime;
-				IssueMoveOrder(assignment, assignment.m_bRotating);
+				IssueMoveOrder(assignment, true);
 			}
 
-			// Inside and in a fight, but not on the post yet. Combat movement
-			// walks toward the enemy and back out the door, so the feet stay.
-			bool plantInside =
-				insideBuilding &&
-				attacking &&
-				!assignment.m_bRotating;
-
-			if (plantInside)
+			// A threat already in the building is the only reason to shoot
+			// before the post. Anything outside waits until he is there.
+			if (interiorThreat)
 			{
-				if (!assignment.m_bInsideFight)
+				if (!assignment.m_bInteriorHold)
 				{
-					assignment.m_bInsideFight = true;
+					assignment.m_bInteriorHold = true;
 					assignment.m_bCombatYield = false;
 					CancelAgentOrder(assignment.m_Agent);
 					assignment.m_bEntryPriority = false;
@@ -550,12 +552,12 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				continue;
 			}
 
-			if (assignment.m_bInsideFight)
+			if (assignment.m_bInteriorHold)
 			{
-				assignment.m_bInsideFight = false;
+				assignment.m_bInteriorHold = false;
 				KK_GarrisonHold.SetPinned(controlledEntity, false);
 				assignment.m_fLastOrderAt = currentTime;
-				IssueMoveOrder(assignment, assignment.m_bRotating);
+				IssueMoveOrder(assignment, true);
 			}
 
 			if (assignment.m_bCombatYield)
@@ -1302,6 +1304,30 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			state == EAIThreatState.THREATENED;
 	}
 
+	protected bool ThreatInsideBuilding(notnull AIAgent agent)
+	{
+		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
+		if (!soldier || !soldier.m_UtilityComponent)
+			return false;
+
+		SCR_AICombatComponent combat =
+			soldier.m_UtilityComponent.m_CombatComponent;
+
+		if (!combat)
+			return false;
+
+		BaseTarget target = combat.GetCurrentTarget();
+		if (!target)
+			return false;
+
+		vector position = target.GetLastSeenPosition();
+		IEntity targetEntity = target.GetTargetEntity();
+		if (targetEntity)
+			position = targetEntity.GetOrigin();
+
+		return IsInsideBuilding(position);
+	}
+
 	protected void CollectPassageSoldiers(
 		notnull array<ref KK_PassageSoldier> soldiers)
 	{
@@ -1412,8 +1438,8 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		);
 	}
 
-	// Outside, or while changing posts, the order beats combat and move-from-danger.
-	// Inside a fight, it drops below attack so he shoots, and his feet stay put.
+	// Outside, and on the run to a post, the order beats combat.
+	// It drops only for a threat that is already inside the building.
 	protected float PriorityForSoldier(
 		notnull AIAgent agent,
 		bool forceTravel,
@@ -1425,13 +1451,17 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		if (body && !IsInsideBuilding(body.GetOrigin()))
 			entering = true;
 
-		if (entering || forceTravel)
-			return KK_AgentMove.EnterBuildingPriorityLevel();
-
-		if (IsEngagingEnemy(agent))
+		if (
+			!entering &&
+			!forceTravel &&
+			ThreatInsideBuilding(agent) &&
+			IsEngagingEnemy(agent)
+		)
+		{
 			return KK_AgentMove.PRIORITY_LEVEL;
+		}
 
-		return KK_AgentMove.AbsolutePriorityLevel();
+		return KK_AgentMove.EnterBuildingPriorityLevel();
 	}
 
 	protected void ApplyMovePriority(
@@ -1546,6 +1576,10 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				assignment.m_Agent.GetControlledEntity(),
 				false
 			);
+			KK_GarrisonHold.SetTraveling(
+				assignment.m_Agent.GetControlledEntity(),
+				false
+			);
 		}
 	}
 
@@ -1565,6 +1599,10 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		if (assignment.m_Agent)
 		{
 			KK_GarrisonHold.SetPinned(
+				assignment.m_Agent.GetControlledEntity(),
+				false
+			);
+			KK_GarrisonHold.SetTraveling(
 				assignment.m_Agent.GetControlledEntity(),
 				false
 			);

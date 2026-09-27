@@ -40,6 +40,7 @@ modded class SCR_AICombatComponent
 class KK_GarrisonHold
 {
 	protected static ref set<IEntity> s_Pinned = new set<IEntity>();
+	protected static ref set<IEntity> s_Traveling = new set<IEntity>();
 
 	static void SetPinned(IEntity soldier, bool pinned)
 	{
@@ -47,9 +48,14 @@ class KK_GarrisonHold
 			return;
 
 		if (pinned)
+		{
+			s_Traveling.RemoveItem(soldier);
 			s_Pinned.Insert(soldier);
+		}
 		else
+		{
 			s_Pinned.RemoveItem(soldier);
+		}
 
 		ApplyFootLock(soldier, pinned);
 	}
@@ -57,6 +63,31 @@ class KK_GarrisonHold
 	static bool IsPinned(IEntity soldier)
 	{
 		return soldier && s_Pinned.Contains(soldier);
+	}
+
+	// On the way to a post, combat must not steer them off the route.
+	// Speed stays free so they can still sprint. A foot lock would stop the run.
+	static void SetTraveling(IEntity soldier, bool traveling)
+	{
+		if (!soldier)
+			return;
+
+		if (!traveling)
+		{
+			s_Traveling.RemoveItem(soldier);
+			return;
+		}
+
+		if (s_Pinned.Contains(soldier))
+			return;
+
+		s_Traveling.Insert(soldier);
+		CancelCombatMove(soldier);
+	}
+
+	static bool IsTraveling(IEntity soldier)
+	{
+		return soldier && s_Traveling.Contains(soldier);
 	}
 
 	// Attack movement ignores the post order. Zero walk speed leaves aiming alone.
@@ -86,6 +117,11 @@ class KK_GarrisonHold
 		if (!locked)
 			return;
 
+		CancelCombatMove(soldier);
+	}
+
+	protected static void CancelCombatMove(IEntity soldier)
+	{
 		SCR_AIUtilityComponent utility =
 			SCR_AIUtilityComponent.Cast(
 				soldier.FindComponent(SCR_AIUtilityComponent)
@@ -114,6 +150,12 @@ modded class SCR_AIAttackBehavior
 		{
 			m_bUseCombatMove = false;
 			KK_GarrisonHold.SetPinned(body, true);
+		}
+		else if (KK_GarrisonHold.IsTraveling(body))
+		{
+			// Keep the garrison route. Do not foot-lock, or the sprint stops.
+			m_bUseCombatMove = false;
+			KK_GarrisonHold.SetTraveling(body, true);
 		}
 
 		return score;
