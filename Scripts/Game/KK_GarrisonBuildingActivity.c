@@ -379,7 +379,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				IsAtHold(
 					unitPosition,
 					assignment.m_Target.m_vPosition,
-					m_GarrisonWaypoint.GetHoldRadius()
+					HoldRadiusFor(assignment.m_Target)
 				);
 
 			KK_PassageOrder passageOrder;
@@ -401,19 +401,21 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				insideBuilding &&
 				ThreatInsideBuilding(assignment.m_Agent);
 
-			// Sprint to the building, then run to the post, even in a fight.
-			// The move only drops once he should shoot: on the post, or
-			// because a threat is already inside the building.
+			// Sprint outside, run inside. A shot on the way slows him down,
+			// but the next step is still the post. He stops only when an
+			// enemy is already inside the building.
 			bool settledAtPost = atHold && !passageOverride;
 			bool releaseEntry =
 				assignment.m_bEntryPriority &&
 				insideBuilding &&
 				!settledAtPost &&
-				!interiorThreat;
+				!interiorThreat &&
+				!attacking;
 			bool commitEntry =
 				!insideBuilding &&
 				!assignment.m_bEntryPriority &&
-				!settledAtPost;
+				!settledAtPost &&
+				!attacking;
 
 			if (releaseEntry || commitEntry)
 			{
@@ -425,14 +427,71 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 					IssueMoveOrder(assignment, assignment.m_bRotating);
 			}
 
+			bool approachFight =
+				attacking &&
+				!interiorThreat &&
+				!settledAtPost;
+
+			if (approachFight)
+			{
+				vector approachGoal = AssignmentMoveGoal(assignment);
+				if (havePassage && passageOrder)
+					approachGoal = passageOrder.m_vMoveTo;
+
+				KK_GarrisonHold.SetApproachGoal(
+					controlledEntity,
+					approachGoal
+				);
+
+				SCR_ChimeraAIAgent approachSoldier =
+					SCR_ChimeraAIAgent.Cast(assignment.m_Agent);
+				if (approachSoldier && approachSoldier.m_UtilityComponent)
+				{
+					KK_GarrisonHold.SteerToward(
+						approachSoldier.m_UtilityComponent,
+						approachGoal,
+						AimPosition(assignment.m_Agent, approachGoal)
+					);
+				}
+
+				if (!assignment.m_bCombatYield)
+				{
+					assignment.m_bCombatYield = true;
+					assignment.m_bEntryPriority = false;
+					assignment.m_fLastOrderAt = currentTime;
+					CancelAgentOrder(assignment.m_Agent);
+					IssueMoveOrder(assignment, false);
+				}
+			}
+			else
+			{
+				KK_GarrisonHold.ClearApproachGoal(controlledEntity);
+
+				if (assignment.m_bCombatYield)
+				{
+					assignment.m_bCombatYield = false;
+					assignment.m_fLastOrderAt = currentTime;
+					IssueMoveOrder(assignment, true);
+				}
+			}
+
 			if (!settledAtPost && !interiorThreat)
 			{
 				KK_GarrisonHold.SetPinned(controlledEntity, false);
-				KK_GarrisonHold.SetTraveling(controlledEntity, true);
+				KK_GarrisonHold.SetTraveling(controlledEntity, false);
+
+				if (!approachFight)
+				{
+					KK_AgentMove.SetWantedSpeed(
+						assignment.m_Agent,
+						GetApproachSpeed(unitPosition)
+					);
+				}
 			}
 			else
 			{
 				KK_GarrisonHold.SetTraveling(controlledEntity, false);
+				KK_GarrisonHold.ClearApproachGoal(controlledEntity);
 			}
 
 			if (atHold && !passageOverride)
@@ -533,8 +592,8 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				IssueMoveOrder(assignment, true);
 			}
 
-			// A threat already in the building is the only reason to shoot
-			// before the post. Anything outside waits until he is there.
+			// An enemy already in the building is the only reason to stop
+			// before the post.
 			if (interiorThreat)
 			{
 				if (!assignment.m_bInteriorHold)
@@ -557,15 +616,6 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				assignment.m_bInteriorHold = false;
 				KK_GarrisonHold.SetPinned(controlledEntity, false);
 				assignment.m_fLastOrderAt = currentTime;
-				IssueMoveOrder(assignment, true);
-			}
-
-			if (assignment.m_bCombatYield)
-			{
-				assignment.m_bCombatYield = false;
-				assignment.m_fLastOrderAt = currentTime;
-				assignment.m_fStartedAt = currentTime;
-				assignment.m_fStillSince = currentTime;
 				IssueMoveOrder(assignment, true);
 			}
 
@@ -605,7 +655,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 					EMovementType.WALK
 				);
 			}
-			else if (!havePassage)
+			else if (!havePassage && !approachFight)
 			{
 				EMovementType approachSpeed = GetApproachSpeed(unitPosition);
 				if (approachSpeed != assignment.m_eApproachSpeed)
@@ -1328,42 +1378,27 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		return IsInsideBuilding(position);
 	}
 
-	protected bool IsAtGarrisonHold(notnull AIAgent agent)
+	protected vector AimPosition(notnull AIAgent agent, vector fallback)
 	{
-		if (!m_GarrisonWaypoint)
-			return false;
+		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
+		if (!soldier || !soldier.m_UtilityComponent)
+			return fallback;
 
-		IEntity body = agent.GetControlledEntity();
-		if (!body || !IsInsideBuilding(body.GetOrigin()))
-			return false;
+		SCR_AICombatComponent combat =
+			soldier.m_UtilityComponent.m_CombatComponent;
 
-		foreach (KK_GarrisonAgentAssignment assignment : m_aAssignments)
-		{
-			if (
-				!assignment ||
-				assignment.m_Agent != agent ||
-				!assignment.m_Target
-			)
-			{
-				continue;
-			}
+		if (!combat)
+			return fallback;
 
-			if (!KK_AuthoredRouteHelper.IsOnFinalGoal(
-				assignment.m_aRouteGoals,
-				assignment.m_iRouteIndex
-			))
-			{
-				return false;
-			}
+		BaseTarget target = combat.GetCurrentTarget();
+		if (!target)
+			return fallback;
 
-			return IsAtHold(
-				body.GetOrigin(),
-				assignment.m_Target.m_vPosition,
-				m_GarrisonWaypoint.GetHoldRadius()
-			);
-		}
+		IEntity targetEntity = target.GetTargetEntity();
+		if (targetEntity)
+			return targetEntity.GetOrigin();
 
-		return false;
+		return target.GetLastSeenPosition();
 	}
 
 	protected void CollectPassageSoldiers(
@@ -1476,8 +1511,9 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		);
 	}
 
-	// Outside, and on the run to a post, the order beats combat.
-	// It drops only for a threat that is already inside the building.
+	// A fight on the way can be shot, so the move drops under the attack.
+	// Combat movement is then pointed at the post. A forced rotate stays
+	// above the attack.
 	protected float PriorityForSoldier(
 		notnull AIAgent agent,
 		bool forceTravel,
@@ -1489,18 +1525,8 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		if (body && !IsInsideBuilding(body.GetOrigin()))
 			entering = true;
 
-		if (
-			!entering &&
-			!forceTravel &&
-			(
-				ThreatInsideBuilding(agent) ||
-				IsAtGarrisonHold(agent)
-			) &&
-			IsEngagingEnemy(agent)
-		)
-		{
+		if (!forceTravel && IsEngagingEnemy(agent))
 			return KK_AgentMove.PRIORITY_LEVEL;
-		}
 
 		return KK_AgentMove.EnterBuildingPriorityLevel();
 	}
@@ -1621,6 +1647,9 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				assignment.m_Agent.GetControlledEntity(),
 				false
 			);
+			KK_GarrisonHold.ClearApproachGoal(
+				assignment.m_Agent.GetControlledEntity()
+			);
 		}
 	}
 
@@ -1646,6 +1675,9 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			KK_GarrisonHold.SetTraveling(
 				assignment.m_Agent.GetControlledEntity(),
 				false
+			);
+			KK_GarrisonHold.ClearApproachGoal(
+				assignment.m_Agent.GetControlledEntity()
 			);
 			assignment.m_bFacingApplied = false;
 
