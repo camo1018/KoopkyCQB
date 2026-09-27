@@ -200,6 +200,11 @@ class KK_GarrisonHold
 		if (utility.m_LookAction)
 			utility.m_LookAction.Cancel();
 
+		// A nearby enemy may already have started a sidestep. Drop it so the
+		// sprint order can take the door.
+		if (utility.m_CombatMoveState && utility.m_CombatMoveState.IsExecutingRequest())
+			utility.m_CombatMoveState.CancelRequest();
+
 		IEntity body = utility.m_OwnerEntity;
 		if (!body)
 		{

@@ -688,10 +688,10 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				assignment.m_fStillSince = currentTime;
 				assignment.m_fStartedAt += timerDelta;
 			}
-			else if (attacking && !insideBuilding)
+			else if (!insideBuilding)
 			{
-				// The firefight does not fail the post, and it does not
-				// count as arriving. The sprint order stays in charge.
+				// Threat is held at zero outside, so a nearby enemy does not
+				// count as a fight. The stall still must not fail the post.
 				assignment.m_fStartedAt += timerDelta;
 			}
 
@@ -711,7 +711,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				m_GarrisonWaypoint.GetStuckTimeout() * 1000.0
 			)
 			{
-				if (!insideBuilding && attacking)
+				if (!insideBuilding)
 				{
 					PrintFormat(
 						"KK: Garrison unit stood still outside, sending him to %1",
@@ -744,7 +744,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				timeoutMs
 			)
 			{
-				if (!insideBuilding && attacking)
+				if (!insideBuilding)
 				{
 					PrintFormat(
 						"KK: Garrison approach restarted toward %1",

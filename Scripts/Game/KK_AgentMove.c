@@ -18,17 +18,27 @@ class KK_AgentMove
 			- 1;
 	}
 
-	// One above move-from-danger, which itself sits above the endangering attack.
-	// A soldier kept on this keeps running into the building instead of fighting outside.
+	// Above the sidestep and the melee retreat. Both of those outrank a
+	// danger move, and a nearby enemy uses them to shove him back from the door.
 	static float EnterBuildingPriorityLevel()
 	{
 		float ceiling =
-			SCR_AIActionBase.PRIORITY_BEHAVIOR_ATTACK_HIGH_PRIORITY;
+			SCR_AIActionBase.PRIORITY_BEHAVIOR_RETREAT_MELEE;
+
+		float avoid =
+			SCR_AIActionBase.PRIORITY_BEHAVIOR_AVOID_CHARACTER;
+		if (avoid > ceiling)
+			ceiling = avoid;
+
 		float danger =
 			SCR_AIActionBase.PRIORITY_BEHAVIOR_MOVE_FROM_DANGER;
-
 		if (danger > ceiling)
 			ceiling = danger;
+
+		float attack =
+			SCR_AIActionBase.PRIORITY_BEHAVIOR_ATTACK_HIGH_PRIORITY;
+		if (attack > ceiling)
+			ceiling = attack;
 
 		return ceiling
 			- SCR_AIActionBase.PRIORITY_BEHAVIOR_MOVE_INDIVIDUALLY
