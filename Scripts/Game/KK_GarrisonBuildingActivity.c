@@ -493,10 +493,11 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			else if (doorHold)
 			{
 				KK_GarrisonHold.SetIgnoringTargets(controlledEntity, false);
+				KK_GarrisonHold.SetDoorFiring(controlledEntity, true);
+				KK_GarrisonHold.ClearApproachGoal(controlledEntity);
 
 				if (waitingOnDoor)
 				{
-					KK_GarrisonHold.ClearApproachGoal(controlledEntity);
 					KK_GarrisonHold.SetPinned(controlledEntity, true);
 
 					if (!assignment.m_bCombatYield)
@@ -507,40 +508,18 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 						CancelAgentOrder(assignment.m_Agent);
 					}
 				}
-				else
+				else if (!assignment.m_bCombatYield)
 				{
-					KK_GarrisonHold.SetPinned(controlledEntity, false);
-					KK_GarrisonHold.SetApproachGoal(
-						controlledEntity,
-						passageOrder.m_vMoveTo
-					);
-
-					SCR_ChimeraAIAgent doorSoldier =
-						SCR_ChimeraAIAgent.Cast(assignment.m_Agent);
-					if (doorSoldier && doorSoldier.m_UtilityComponent)
-					{
-						KK_GarrisonHold.SteerToward(
-							doorSoldier.m_UtilityComponent,
-							passageOrder.m_vMoveTo,
-							AimPosition(
-								assignment.m_Agent,
-								passageOrder.m_vMoveTo
-							)
-						);
-					}
-
-					if (!assignment.m_bCombatYield)
-					{
-						assignment.m_bCombatYield = true;
-						assignment.m_bEntryPriority = false;
-						assignment.m_fLastOrderAt = currentTime;
-						IssuePassageMove(assignment, passageOrder, true);
-					}
+					assignment.m_bCombatYield = true;
+					assignment.m_bEntryPriority = false;
+					assignment.m_fLastOrderAt = currentTime;
+					IssuePassageMove(assignment, passageOrder, true);
 				}
 			}
 			else
 			{
 				KK_GarrisonHold.ClearApproachGoal(controlledEntity);
+				KK_GarrisonHold.SetDoorFiring(controlledEntity, false);
 
 				if (assignment.m_bCombatYield)
 				{
@@ -1622,7 +1601,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		entering = false;
 
 		if (holdForDoor)
-			return KK_AgentMove.PRIORITY_LEVEL;
+			return 0;
 
 		IEntity body = agent.GetControlledEntity();
 		if (body && !IsInsideBuilding(body.GetOrigin()))
@@ -1757,6 +1736,10 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				assignment.m_Agent.GetControlledEntity(),
 				false
 			);
+			KK_GarrisonHold.SetDoorFiring(
+				assignment.m_Agent.GetControlledEntity(),
+				false
+			);
 		}
 	}
 
@@ -1787,6 +1770,10 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				assignment.m_Agent.GetControlledEntity()
 			);
 			KK_GarrisonHold.SetIgnoringTargets(
+				assignment.m_Agent.GetControlledEntity(),
+				false
+			);
+			KK_GarrisonHold.SetDoorFiring(
 				assignment.m_Agent.GetControlledEntity(),
 				false
 			);

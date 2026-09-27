@@ -85,6 +85,7 @@ class KK_GarrisonHold
 	protected static ref set<IEntity> s_Pinned = new set<IEntity>();
 	protected static ref set<IEntity> s_Traveling = new set<IEntity>();
 	protected static ref set<IEntity> s_IgnoringTargets = new set<IEntity>();
+	protected static ref set<IEntity> s_DoorFiring = new set<IEntity>();
 	protected static ref map<IEntity, vector> s_ApproachGoals =
 		new map<IEntity, vector>();
 
@@ -155,6 +156,26 @@ class KK_GarrisonHold
 	{
 		IEntity body = CharacterBody(soldier);
 		return body && s_IgnoringTargets.Contains(body);
+	}
+
+	// A door wait is allowed to shoot. The sidestep otherwise outranks the attack,
+	// so he looks and raises the weapon without firing.
+	static void SetDoorFiring(IEntity soldier, bool firing)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		if (firing)
+			s_DoorFiring.Insert(body);
+		else
+			s_DoorFiring.RemoveItem(body);
+	}
+
+	static bool IsDoorFiring(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		return body && s_DoorFiring.Contains(body);
 	}
 
 	static void SuppressTargeting(notnull AIAgent agent)
@@ -366,15 +387,23 @@ modded class SCR_AIAttackBehavior
 			agentEntity = m_Utility.GetOwner();
 		}
 
-		if (KK_GarrisonHold.IsPinned(character))
+		if (
+			KK_GarrisonHold.IsPinned(character) ||
+			KK_GarrisonHold.IsDoorFiring(character)
+		)
 		{
 			m_bUseCombatMove = false;
-			KK_GarrisonHold.SetPinned(character, true);
+			if (KK_GarrisonHold.IsPinned(character))
+				KK_GarrisonHold.SetPinned(character, true);
 		}
-		else if (KK_GarrisonHold.IsPinned(agentEntity))
+		else if (
+			KK_GarrisonHold.IsPinned(agentEntity) ||
+			KK_GarrisonHold.IsDoorFiring(agentEntity)
+		)
 		{
 			m_bUseCombatMove = false;
-			KK_GarrisonHold.SetPinned(agentEntity, true);
+			if (KK_GarrisonHold.IsPinned(agentEntity))
+				KK_GarrisonHold.SetPinned(agentEntity, true);
 		}
 
 		return score;
@@ -443,6 +472,45 @@ modded class SCR_AICombatMoveLogicBase
 		}
 
 		return super.EOnTaskSimulate(owner, dt);
+	}
+}
+
+modded class SCR_AIAvoidCharacterBehavior
+{
+	override float CustomEvaluate()
+	{
+		if (DoorFiring())
+			return 0;
+
+		return super.CustomEvaluate();
+	}
+
+	protected bool DoorFiring()
+	{
+		return m_Utility &&
+			(
+				KK_GarrisonHold.IsDoorFiring(m_Utility.m_OwnerEntity) ||
+				KK_GarrisonHold.IsDoorFiring(m_Utility.GetOwner())
+			);
+	}
+}
+
+modded class SCR_AIRetreatWhileLookAtBehavior
+{
+	override float CustomEvaluate()
+	{
+		if (
+			m_Utility &&
+			(
+				KK_GarrisonHold.IsDoorFiring(m_Utility.m_OwnerEntity) ||
+				KK_GarrisonHold.IsDoorFiring(m_Utility.GetOwner())
+			)
+		)
+		{
+			return 0;
+		}
+
+		return super.CustomEvaluate();
 	}
 }
 
