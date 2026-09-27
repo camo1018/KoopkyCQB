@@ -589,6 +589,7 @@ class KK_WaypointAuthoring
 		{
 			ok = plan.Generate(
 				group,
+				pathfinding,
 				s_ServerSampleBuilding,
 				horizontal,
 				vertical,

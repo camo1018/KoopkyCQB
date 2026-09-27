@@ -435,6 +435,7 @@ bool EnsureNavmeshLoaded(
 
 	bool Generate(
 		notnull SCR_AIGroup group,
+		notnull AIPathfindingComponent pathfinding,
 		notnull BaseBuilding building,
 		float horizontalSpacing = 2.5,
 		float verticalSpacing = 1.5,
@@ -452,20 +453,6 @@ bool EnsureNavmeshLoaded(
 		m_mAuthoredLinks.Clear();
 		m_mAuthoredWorldPositions.Clear();
 		m_mReachableAuthoredHops.Clear();
-
-		AIPathfindingComponent pathfinding =
-			AIPathfindingComponent.Cast(
-				group.FindComponent(AIPathfindingComponent)
-			);
-
-		if (!pathfinding)
-		{
-			Print(
-				"KK: Group has no AIPathfindingComponent",
-				LogLevel.ERROR
-			);
-			return false;
-		}
 
 		horizontalSpacing = Math.Max(horizontalSpacing, 1.5);
 		verticalSpacing = Math.Max(verticalSpacing, 1.0);

@@ -227,6 +227,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 			if (m_Plan.Generate(
 				m_Group,
+				m_Pathfinding,
 				m_Building,
 				m_GarrisonWaypoint.GetHorizontalSpacing(),
 				m_GarrisonWaypoint.GetVerticalSpacing(),

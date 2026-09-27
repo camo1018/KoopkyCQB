@@ -253,6 +253,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 			if (m_Plan.Generate(
 				m_Group,
+				m_Pathfinding,
 				m_Building,
 				m_ClearWaypoint.GetHorizontalSpacing(),
 				m_ClearWaypoint.GetVerticalSpacing(),
