@@ -1,18 +1,15 @@
 class KK_HoldFacing
 {
-	protected static const float DEFEND_RANGE = 60.0;
-	protected static const float LOOK_DISTANCE = 8.0;
-
 	static bool HasFacing(KK_InteriorTarget target)
 	{
 		return target && target.m_vFacing.Length() > 0.01;
 	}
 
+	// Turn in place. A defend order walks toward a point along the facing
+	// and fights the hold leash.
 	static void Apply(
-		notnull SCR_AIActivityBase activity,
 		notnull AIAgent agent,
-		notnull KK_InteriorTarget target,
-		float priorityLevel)
+		notnull KK_InteriorTarget target)
 	{
 		if (!HasFacing(target))
 			return;
@@ -20,30 +17,6 @@ class KK_HoldFacing
 		IEntity controlled = agent.GetControlledEntity();
 		if (!controlled)
 			return;
-
-		vector lookAt =
-			target.m_vPosition + (target.m_vFacing * LOOK_DISTANCE);
-
-		SCR_AIMessage_Defend message = SCR_AIMessage_Defend.Create(
-			lookAt,
-			DEFEND_RANGE,
-			false,
-			priorityLevel,
-			null,
-			activity
-		);
-
-		message.SetReceiver(agent);
-
-		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
-		if (soldier && soldier.m_UtilityComponent)
-		{
-			soldier.m_UtilityComponent.m_Mailbox.RequestBroadcast(
-				message,
-				agent
-			);
-			return;
-		}
 
 		CharacterControllerComponent controller =
 			CharacterControllerComponent.Cast(
@@ -59,27 +32,7 @@ class KK_HoldFacing
 			return;
 
 		flat.Normalize();
-		float yaw = flat.ToYaw();
-		controller.SetHeadingAngle(yaw * Math.DEG2RAD, true);
-	}
-
-	static void Release(
-		notnull SCR_AIActivityBase activity,
-		notnull AIAgent agent)
-	{
-		SCR_AIMessage_Cancel message =
-			SCR_AIMessage_Cancel.Create(activity);
-
-		message.SetReceiver(agent);
-
-		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
-		if (soldier && soldier.m_UtilityComponent)
-		{
-			soldier.m_UtilityComponent.m_Mailbox.RequestBroadcast(
-				message,
-				agent
-			);
-		}
+		controller.SetHeadingAngle(flat.ToYaw() * Math.DEG2RAD, true);
 	}
 }
 

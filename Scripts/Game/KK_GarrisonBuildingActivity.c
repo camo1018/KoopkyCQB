@@ -10,7 +10,10 @@ class KK_GarrisonAgentAssignment
 	vector m_vStillPosition;
 	IEntity m_DoorEntity;
 	bool m_bHolding;
+	bool m_bRotating;
+	bool m_bCombatYield;
 	bool m_bFacingApplied;
+	bool m_bCombatMove;
 	EMovementType m_eApproachSpeed;
 	ref array<vector> m_aRouteGoals = {};
 	int m_iRouteIndex;
@@ -298,7 +301,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		{
 			passageOrders = new map<AIAgent, ref KK_PassageOrder>();
 			array<ref KK_PassageSoldier> passageSoldiers = {};
-			CollectPassageSoldiers(passageSoldiers, holdRadius);
+			CollectPassageSoldiers(passageSoldiers);
 			KK_Passage.Resolve(
 				passageSoldiers,
 				m_Pathfinding,
@@ -374,7 +377,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				IsAtHold(
 					unitPosition,
 					assignment.m_Target.m_vPosition,
-					holdRadius
+					HoldRadiusFor(assignment.m_Target)
 				);
 
 			KK_PassageOrder passageOrder;
@@ -397,38 +400,54 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				if (!assignment.m_bHolding)
 				{
 					assignment.m_bHolding = true;
+					assignment.m_bRotating = false;
+					assignment.m_bCombatYield = false;
 					assignment.m_fRotateAt = NextRotateTime(currentTime);
-					CancelAgentOrder(assignment.m_Agent);
-					KK_AgentMove.SetWantedSpeed(
-						assignment.m_Agent,
-						EMovementType.RUN
-					);
 					assignment.m_bFacingApplied = false;
+
+					if (!attacking)
+					{
+						CancelAgentOrder(assignment.m_Agent);
+						KK_AgentMove.SetWantedSpeed(
+							assignment.m_Agent,
+							EMovementType.RUN
+						);
+					}
 				}
 
 				if (attacking)
 				{
-					if (assignment.m_bFacingApplied)
+					assignment.m_bFacingApplied = false;
+					assignment.m_bCombatMove = true;
+				}
+				else
+				{
+					if (assignment.m_bCombatMove)
 					{
-						KK_HoldFacing.Release(this, assignment.m_Agent);
+						CancelAgentOrder(assignment.m_Agent);
+						assignment.m_bCombatMove = false;
 						assignment.m_bFacingApplied = false;
 					}
 				}
-				else if (
-					KK_HoldFacing.HasFacing(assignment.m_Target) &&
-					!assignment.m_bFacingApplied
+
+				if (
+					!attacking &&
+					KK_HoldFacing.HasFacing(assignment.m_Target)
 				)
 				{
 					KK_HoldFacing.Apply(
-						this,
 						assignment.m_Agent,
-						assignment.m_Target,
-						KK_AgentMove.AbsolutePriorityLevel()
+						assignment.m_Target
 					);
 					assignment.m_bFacingApplied = true;
 				}
-				else if (
-					!attacking &&
+
+				bool allowRotate =
+					!attacking ||
+					m_GarrisonWaypoint.GetRotateDuringCombat();
+
+				if (
+					allowRotate &&
 					currentTime >= assignment.m_fRotateAt &&
 					!RotateAssignment(assignment, currentTime, unitPosition)
 				)
@@ -438,10 +457,12 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 				if (!assignment.m_bHolding)
 				{
+					KK_GarrisonHold.SetPinned(controlledEntity, false);
 					i--;
 					continue;
 				}
 
+				KK_GarrisonHold.SetPinned(controlledEntity, true);
 				assignment.m_fStartedAt = currentTime;
 				assignment.m_fStillSince = currentTime;
 				assignment.m_vStillPosition = unitPosition;
@@ -451,15 +472,53 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 			if (assignment.m_bHolding && !passageOverride)
 			{
-				if (assignment.m_bFacingApplied)
+				if (attacking)
 				{
-					KK_HoldFacing.Release(this, assignment.m_Agent);
-					assignment.m_bFacingApplied = false;
+					KK_GarrisonHold.SetPinned(controlledEntity, true);
+					assignment.m_fStartedAt = currentTime;
+					assignment.m_fStillSince = currentTime;
+					i--;
+					continue;
 				}
 
+				KK_GarrisonHold.SetPinned(controlledEntity, false);
+				assignment.m_bFacingApplied = false;
 				assignment.m_bHolding = false;
 				assignment.m_fLastOrderAt = currentTime;
 				IssueMoveOrder(assignment);
+			}
+
+			if (
+				assignment.m_bRotating &&
+				HasEmergentThreat(assignment.m_Agent)
+			)
+			{
+				KK_GarrisonHold.SetPinned(controlledEntity, false);
+
+				if (!assignment.m_bCombatYield)
+				{
+					CancelAgentOrder(assignment.m_Agent);
+					assignment.m_bCombatYield = true;
+
+					PrintFormat(
+						"KK: Garrison unit %1 broke rotation for a close threat",
+						assignment.m_Agent
+					);
+				}
+
+				assignment.m_fStillSince = currentTime;
+				assignment.m_fStartedAt += timerDelta;
+				i--;
+				continue;
+			}
+
+			if (assignment.m_bCombatYield)
+			{
+				assignment.m_bCombatYield = false;
+				assignment.m_fLastOrderAt = currentTime;
+				assignment.m_fStartedAt = currentTime;
+				assignment.m_fStillSince = currentTime;
+				IssueMoveOrder(assignment, true);
 			}
 
 			bool waitingOnDoor = false;
@@ -475,7 +534,10 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				}
 
 				if (passageOverride)
+				{
+					KK_GarrisonHold.SetPinned(controlledEntity, false);
 					assignment.m_bHolding = false;
+				}
 			}
 			else if (!passageOn)
 			{
@@ -515,9 +577,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			if (attacking || waitingOnDoor || passageHold)
 			{
 				assignment.m_fStillSince = currentTime;
-
-				if (!attacking)
-					assignment.m_fStartedAt += timerDelta;
+				assignment.m_fStartedAt += timerDelta;
 			}
 
 			if (
@@ -660,6 +720,17 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		return false;
 	}
 
+	protected float HoldRadiusFor(KK_InteriorTarget target)
+	{
+		if (!m_GarrisonWaypoint)
+			return 1;
+
+		if (target && target.m_iAuthoredId >= 0)
+			return m_GarrisonWaypoint.GetAuthoredHoldRadius();
+
+		return m_GarrisonWaypoint.GetHoldRadius();
+	}
+
 	protected bool IsAtHold(
 		vector unitPosition,
 		vector holdPosition,
@@ -711,6 +782,8 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		next.m_eState = KK_EInteriorTargetState.ACTIVE;
 		assignment.m_Target = next;
 		assignment.m_bHolding = false;
+		assignment.m_bRotating = true;
+		assignment.m_bCombatYield = false;
 		assignment.m_bFacingApplied = false;
 		assignment.m_fStartedAt = currentTime;
 		assignment.m_fStillSince = currentTime;
@@ -723,7 +796,16 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			assignment.m_aRouteGoals
 		);
 		assignment.m_iRouteIndex = 0;
-		IssueMoveOrder(assignment);
+
+		if (HasEmergentThreat(assignment.m_Agent))
+		{
+			CancelAgentOrder(assignment.m_Agent);
+			assignment.m_bCombatYield = true;
+		}
+		else
+		{
+			IssueMoveOrder(assignment, true);
+		}
 
 		PrintFormat(
 			"KK: Garrison unit %1 rotating to %2 floor=%3",
@@ -1155,6 +1237,27 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		return false;
 	}
 
+	protected bool HasEmergentThreat(notnull AIAgent agent)
+	{
+		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
+		if (!soldier || !soldier.m_UtilityComponent)
+			return false;
+
+		SCR_AICombatComponent combat =
+			soldier.m_UtilityComponent.m_CombatComponent;
+
+		if (!combat)
+			return false;
+
+		BaseTarget target = combat.GetCurrentTarget();
+		if (!target)
+			return false;
+
+		return target.IsEndangering() ||
+			target.GetTimeSinceEndangered() <
+				SCR_AICombatComponent.TARGET_ENDANGERED_TIMEOUT_S;
+	}
+
 	protected bool IsEngagingEnemy(notnull AIAgent agent)
 	{
 		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
@@ -1171,8 +1274,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 	}
 
 	protected void CollectPassageSoldiers(
-		notnull array<ref KK_PassageSoldier> soldiers,
-		float holdRadius)
+		notnull array<ref KK_PassageSoldier> soldiers)
 	{
 		foreach (KK_GarrisonAgentAssignment assignment : m_aAssignments)
 		{
@@ -1191,7 +1293,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			bool settled = IsAtHold(
 				origin,
 				assignment.m_Target.m_vPosition,
-				holdRadius
+				HoldRadiusFor(assignment.m_Target)
 			);
 
 			soldiers.Insert(
@@ -1222,8 +1324,10 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		notnull KK_PassageOrder passageOrder)
 	{
 		EMovementType speed = assignment.m_eApproachSpeed;
-		if (passageOrder.m_bOverride)
+		if (passageOrder.m_bOverride && passageOrder.m_bWalk)
 			speed = EMovementType.WALK;
+		else if (passageOrder.m_bOverride)
+			speed = EMovementType.RUN;
 
 		KK_AgentMove.Issue(
 			this,
@@ -1237,7 +1341,8 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 	}
 
 	protected void IssueMoveOrder(
-		notnull KK_GarrisonAgentAssignment assignment)
+		notnull KK_GarrisonAgentAssignment assignment,
+		bool forceTravel = false)
 	{
 		if (!assignment.m_Agent || !assignment.m_Target)
 			return;
@@ -1251,13 +1356,17 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 		assignment.m_eApproachSpeed = speed;
 
+		float priority = KK_AgentMove.AbsolutePriorityLevel();
+		if (!forceTravel && IsEngagingEnemy(assignment.m_Agent))
+			priority = KK_AgentMove.PRIORITY_LEVEL;
+
 		KK_AgentMove.Issue(
 			this,
 			m_Group,
 			assignment.m_Agent,
 			AssignmentMoveGoal(assignment),
 			m_mSoloHandlers,
-			KK_AgentMove.AbsolutePriorityLevel(),
+			priority,
 			speed
 		);
 	}
@@ -1353,6 +1462,20 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		KK_AgentMove.ReleaseHandlers(m_Group, m_mSoloHandlers);
 	}
 
+	protected void UnpinAssignments()
+	{
+		foreach (KK_GarrisonAgentAssignment assignment : m_aAssignments)
+		{
+			if (!assignment || !assignment.m_Agent)
+				continue;
+
+			KK_GarrisonHold.SetPinned(
+				assignment.m_Agent.GetControlledEntity(),
+				false
+			);
+		}
+	}
+
 	protected void ReleaseAssignment(
 		int assignmentIndex,
 		bool timedOut)
@@ -1368,11 +1491,11 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 		if (assignment.m_Agent)
 		{
-			if (assignment.m_bFacingApplied)
-			{
-				KK_HoldFacing.Release(this, assignment.m_Agent);
-				assignment.m_bFacingApplied = false;
-			}
+			KK_GarrisonHold.SetPinned(
+				assignment.m_Agent.GetControlledEntity(),
+				false
+			);
+			assignment.m_bFacingApplied = false;
 
 			KK_PerceptionBoost.Restore(
 				assignment.m_Agent,
@@ -1491,6 +1614,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		m_bCancelled = true;
 
 		SendCancelMessagesToAllAgents();
+		UnpinAssignments();
 		KK_PerceptionBoost.RestoreAll(m_mPerceptionFactors);
 		m_aAssignments.Clear();
 		ClearDebug();
@@ -1514,6 +1638,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		m_bFinished = true;
 
 		SendCancelMessagesToAllAgents();
+		UnpinAssignments();
 		KK_PerceptionBoost.RestoreAll(m_mPerceptionFactors);
 		m_aAssignments.Clear();
 		ClearDebug();

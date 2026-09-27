@@ -61,6 +61,7 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 10: return mode.KK_GetGarrisonSearchRadius();
 			case 11: return mode.KK_GetGarrisonArrivalRadius();
 			case 12: return mode.KK_GetHoldRadius();
+			case 28: return mode.KK_GetAuthoredHoldRadius();
 			case 13: return mode.KK_GetReassignmentInterval();
 			case 17: return mode.KK_GetRotateIntervalMin();
 			case 18: return mode.KK_GetRotateIntervalMax();
@@ -96,6 +97,7 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 10: mode.KK_SetGarrisonSearchRadius(value); break;
 			case 11: mode.KK_SetGarrisonArrivalRadius(value); break;
 			case 12: mode.KK_SetHoldRadius(value); break;
+			case 28: mode.KK_SetAuthoredHoldRadius(value); break;
 			case 13: mode.KK_SetReassignmentInterval(value); break;
 			case 17: mode.KK_SetRotateIntervalMin(value); break;
 			case 18: mode.KK_SetRotateIntervalMax(value); break;
@@ -160,6 +162,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 9: return mode.KK_GetClassifyOpenings();
 			case 11: return mode.KK_GetIgnoreSquadCollision();
 			case 12: return mode.KK_GetWaypointAuthoring();
+			case 13: return mode.KK_GetRotateDuringCombat();
 		}
 
 		return mode.KK_GetGarrisonAfterClear();
@@ -180,6 +183,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 9: mode.KK_SetClassifyOpenings(value); break;
 			case 11: mode.KK_SetIgnoreSquadCollision(value); break;
 			case 12: mode.KK_SetWaypointAuthoring(value); break;
+			case 13: mode.KK_SetRotateDuringCombat(value); break;
 			default: mode.KK_SetGarrisonAfterClear(value); break;
 		}
 	}
@@ -228,11 +232,15 @@ class KK_CQBAttrGarrisonArrivalRadius : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrHoldRadius : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrAuthoredHoldRadius : KK_CQBFloatEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrReassignmentInterval : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrRotateIntervalMin : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrRotateIntervalMax : KK_CQBFloatEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrRotateDuringCombat : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrGarrisonMovementTimeout : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]

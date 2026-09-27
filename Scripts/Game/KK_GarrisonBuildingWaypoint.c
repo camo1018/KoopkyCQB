@@ -25,6 +25,9 @@ class KK_GarrisonBuildingWaypoint : SCR_AIWaypoint
 	[Attribute("5", UIWidgets.EditBox, "Allowed combat reposition radius")]
 	protected float m_fHoldRadius;
 
+	[Attribute("1", UIWidgets.EditBox, "Hold radius for a placed window, door, or post")]
+	protected float m_fAuthoredHoldRadius;
+
 	[Attribute("3", UIWidgets.EditBox, "Seconds between hold corrections")]
 	protected float m_fReassignmentInterval;
 
@@ -33,6 +36,9 @@ class KK_GarrisonBuildingWaypoint : SCR_AIWaypoint
 
 	[Attribute("60", UIWidgets.EditBox, "Maximum seconds at a post before rotating")]
 	protected float m_fRotateIntervalMax;
+
+	[Attribute("1", UIWidgets.CheckBox, "Rotate to another post even while in combat")]
+	protected bool m_bRotateDuringCombat = true;
 
 	[Attribute("45", UIWidgets.EditBox, "Movement timeout in seconds")]
 	protected float m_fMovementTimeout;
@@ -96,6 +102,11 @@ class KK_GarrisonBuildingWaypoint : SCR_AIWaypoint
 		);
 	}
 
+	float GetAuthoredHoldRadius()
+	{
+		return Math.Max(m_fAuthoredHoldRadius, 0.25);
+	}
+
 	float GetReassignmentInterval()
 	{
 		return Math.Max(
@@ -112,6 +123,11 @@ class KK_GarrisonBuildingWaypoint : SCR_AIWaypoint
 	float GetRotateIntervalMax()
 	{
 		return Math.Max(m_fRotateIntervalMax, GetRotateIntervalMin());
+	}
+
+	bool GetRotateDuringCombat()
+	{
+		return m_bRotateDuringCombat;
 	}
 
 	float GetMovementTimeout()
@@ -164,9 +180,11 @@ class KK_GarrisonBuildingWaypoint : SCR_AIWaypoint
 		m_fClusterRadius = mode.KK_GetClusterRadius();
 		m_fArrivalRadius = mode.KK_GetGarrisonArrivalRadius();
 		m_fHoldRadius = mode.KK_GetHoldRadius();
+		m_fAuthoredHoldRadius = mode.KK_GetAuthoredHoldRadius();
 		m_fReassignmentInterval = mode.KK_GetReassignmentInterval();
 		m_fRotateIntervalMin = mode.KK_GetRotateIntervalMin();
 		m_fRotateIntervalMax = mode.KK_GetRotateIntervalMax();
+		m_bRotateDuringCombat = mode.KK_GetRotateDuringCombat();
 		m_fMovementTimeout = mode.KK_GetGarrisonMovementTimeout();
 		m_fStuckTimeout = mode.KK_GetGarrisonStuckTimeout();
 		m_iMaximumRetries = mode.KK_GetGarrisonMaximumRetries();

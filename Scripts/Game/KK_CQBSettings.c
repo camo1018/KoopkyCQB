@@ -83,6 +83,9 @@ modded class SCR_BaseGameMode
 	[Attribute("5", UIWidgets.EditBox, "Allowed combat reposition radius (m)", category: "Koopky CQB/Garrison")]
 	protected float m_fKK_HoldRadius;
 
+	[Attribute("1", UIWidgets.EditBox, "Hold radius for a placed window, door, or post (m)", category: "Koopky CQB/Garrison")]
+	protected float m_fKK_AuthoredHoldRadius;
+
 	[Attribute("3", UIWidgets.EditBox, "Time between hold corrections (s)", category: "Koopky CQB/Garrison")]
 	protected float m_fKK_ReassignmentInterval;
 
@@ -91,6 +94,9 @@ modded class SCR_BaseGameMode
 
 	[Attribute("60", UIWidgets.EditBox, "Maximum time at a post before rotating (s)", category: "Koopky CQB/Garrison")]
 	protected float m_fKK_RotateIntervalMax;
+
+	[Attribute("1", UIWidgets.CheckBox, "Rotate to another post even while in combat", category: "Koopky CQB/Garrison")]
+	protected bool m_bKK_RotateDuringCombat;
 
 	[Attribute("45", UIWidgets.EditBox, "Movement timeout (s)", category: "Koopky CQB/Garrison")]
 	protected float m_fKK_GarrisonMovementTimeout;
@@ -255,9 +261,11 @@ modded class SCR_BaseGameMode
 			KK_ReadFloat(context, "SearchRadius", m_fKK_GarrisonSearchRadius);
 			KK_ReadFloat(context, "ArrivalRadius", m_fKK_GarrisonArrivalRadius);
 			KK_ReadFloat(context, "HoldRadius", m_fKK_HoldRadius);
+			KK_ReadFloat(context, "AuthoredHoldRadius", m_fKK_AuthoredHoldRadius);
 			KK_ReadFloat(context, "ReassignmentInterval", m_fKK_ReassignmentInterval);
 			KK_ReadFloat(context, "RotateIntervalMin", m_fKK_RotateIntervalMin);
 			KK_ReadFloat(context, "RotateIntervalMax", m_fKK_RotateIntervalMax);
+			KK_ReadBool(context, "RotateDuringCombat", m_bKK_RotateDuringCombat);
 			KK_ReadFloat(context, "MovementTimeout", m_fKK_GarrisonMovementTimeout);
 			KK_ReadFloat(context, "StuckTimeout", m_fKK_GarrisonStuckTimeout);
 			KK_ReadInt(context, "MaximumRetries", m_iKK_GarrisonMaximumRetries);
@@ -394,9 +402,11 @@ modded class SCR_BaseGameMode
 		context.WriteValue("SearchRadius", m_fKK_GarrisonSearchRadius);
 		context.WriteValue("ArrivalRadius", m_fKK_GarrisonArrivalRadius);
 		context.WriteValue("HoldRadius", m_fKK_HoldRadius);
+		context.WriteValue("AuthoredHoldRadius", m_fKK_AuthoredHoldRadius);
 		context.WriteValue("ReassignmentInterval", m_fKK_ReassignmentInterval);
 		context.WriteValue("RotateIntervalMin", m_fKK_RotateIntervalMin);
 		context.WriteValue("RotateIntervalMax", m_fKK_RotateIntervalMax);
+		context.WriteValue("RotateDuringCombat", m_bKK_RotateDuringCombat);
 		context.WriteValue("MovementTimeout", m_fKK_GarrisonMovementTimeout);
 		context.WriteValue("StuckTimeout", m_fKK_GarrisonStuckTimeout);
 		context.WriteValue("MaximumRetries", m_iKK_GarrisonMaximumRetries);
@@ -535,6 +545,11 @@ modded class SCR_BaseGameMode
 		return m_fKK_HoldRadius;
 	}
 
+	float KK_GetAuthoredHoldRadius()
+	{
+		return Math.Max(m_fKK_AuthoredHoldRadius, 0.25);
+	}
+
 	float KK_GetReassignmentInterval()
 	{
 		return m_fKK_ReassignmentInterval;
@@ -548,6 +563,11 @@ modded class SCR_BaseGameMode
 	float KK_GetRotateIntervalMax()
 	{
 		return m_fKK_RotateIntervalMax;
+	}
+
+	bool KK_GetRotateDuringCombat()
+	{
+		return m_bKK_RotateDuringCombat;
 	}
 
 	float KK_GetGarrisonMovementTimeout()
@@ -669,9 +689,11 @@ modded class SCR_BaseGameMode
 	void KK_SetGarrisonSearchRadius(float value) { m_fKK_GarrisonSearchRadius = value; }
 	void KK_SetGarrisonArrivalRadius(float value) { m_fKK_GarrisonArrivalRadius = value; }
 	void KK_SetHoldRadius(float value) { m_fKK_HoldRadius = value; }
+	void KK_SetAuthoredHoldRadius(float value) { m_fKK_AuthoredHoldRadius = value; }
 	void KK_SetReassignmentInterval(float value) { m_fKK_ReassignmentInterval = value; }
 	void KK_SetRotateIntervalMin(float value) { m_fKK_RotateIntervalMin = value; }
 	void KK_SetRotateIntervalMax(float value) { m_fKK_RotateIntervalMax = value; }
+	void KK_SetRotateDuringCombat(bool value) { m_bKK_RotateDuringCombat = value; }
 	void KK_SetGarrisonMovementTimeout(float value) { m_fKK_GarrisonMovementTimeout = value; }
 	void KK_SetGarrisonStuckTimeout(float value) { m_fKK_GarrisonStuckTimeout = value; }
 	void KK_SetGarrisonMaximumRetries(int value) { m_iKK_GarrisonMaximumRetries = value; }

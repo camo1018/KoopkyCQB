@@ -11,6 +11,7 @@ class KK_InteriorAgentAssignment
 	IEntity m_DoorEntity;
 	bool m_bClearsPoint;
 	bool m_bFacingApplied;
+	bool m_bCombatOwnsWeapon;
 	ref array<vector> m_aRouteGoals = {};
 	int m_iRouteIndex;
 
@@ -383,14 +384,38 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					assignment.m_fStillSince = currentTime;
 					assignment.m_fStartedAt += timerDelta;
 
-					if (assignment.m_bFacingApplied)
-					{
-						KK_HoldFacing.Release(this, assignment.m_Agent);
-						assignment.m_bFacingApplied = false;
-					}
+					assignment.m_bFacingApplied = false;
 				}
 
-				SetWeaponRaised(assignment.m_Agent, true);
+				if (
+					KK_Passage.Enabled() &&
+					IsEngagingEnemy(assignment.m_Agent)
+				)
+				{
+					if (!assignment.m_bCombatOwnsWeapon)
+					{
+						assignment.m_bCombatOwnsWeapon = true;
+						SetWeaponRaised(assignment.m_Agent, false);
+						OrderWeaponRaised(assignment.m_Agent, false);
+					}
+				}
+				else if (
+					KK_Passage.Enabled() &&
+					assignment.m_bCombatOwnsWeapon
+				)
+				{
+					assignment.m_bCombatOwnsWeapon = false;
+					SetWeaponRaised(assignment.m_Agent, true);
+					OrderWeaponRaised(assignment.m_Agent, true);
+					KK_AgentMove.SetWantedSpeed(
+						assignment.m_Agent,
+						EMovementType.RUN
+					);
+				}
+				else
+				{
+					SetWeaponRaised(assignment.m_Agent, true);
+				}
 
 				vector unitPosition =
 					assignment.m_Agent.GetControlledEntity().GetOrigin();
@@ -446,29 +471,19 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 					if (IsEngagingEnemy(assignment.m_Agent))
 					{
-						if (assignment.m_bFacingApplied)
-						{
-							KK_HoldFacing.Release(this, assignment.m_Agent);
-							assignment.m_bFacingApplied = false;
-						}
+						assignment.m_bFacingApplied = false;
 					}
-					else if (
-						KK_HoldFacing.HasFacing(assignment.m_Target) &&
-						!assignment.m_bFacingApplied
-					)
+					else if (KK_HoldFacing.HasFacing(assignment.m_Target))
 					{
 						KK_HoldFacing.Apply(
-							this,
 							assignment.m_Agent,
-							assignment.m_Target,
-							KK_AgentMove.PRIORITY_LEVEL
+							assignment.m_Target
 						);
 						assignment.m_bFacingApplied = true;
 					}
 				}
-				else if (assignment.m_bFacingApplied)
+				else
 				{
-					KK_HoldFacing.Release(this, assignment.m_Agent);
 					assignment.m_bFacingApplied = false;
 				}
 
@@ -501,7 +516,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					if (passageOrder.m_bIssueNow || advancedRoute)
 					{
 						EMovementType passageSpeed = EMovementType.RUN;
-						if (passageOrder.m_bOverride)
+						if (passageOrder.m_bOverride && passageOrder.m_bWalk)
 							passageSpeed = EMovementType.WALK;
 
 						assignment.m_fLastOrderAt = currentTime;
@@ -537,6 +552,23 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 					if (!IsEngagingEnemy(assignment.m_Agent))
 						assignment.m_fStartedAt += timerDelta;
+				}
+
+				bool passageWalk =
+					KK_Passage.Enabled() &&
+					havePassage &&
+					passageOrder.m_bOverride &&
+					passageOrder.m_bWalk;
+				if (
+					KK_Passage.Enabled() &&
+					!waitingOnDoor &&
+					!passageWalk
+				)
+				{
+					KK_AgentMove.SetWantedSpeed(
+						assignment.m_Agent,
+						EMovementType.RUN
+					);
 				}
 
 				if (
@@ -1643,12 +1675,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		vector origin =
 			assignment.m_Agent.GetControlledEntity().GetOrigin();
 
-		if (assignment.m_bFacingApplied)
-		{
-			KK_HoldFacing.Release(this, assignment.m_Agent);
-			assignment.m_bFacingApplied = false;
-		}
-
+		assignment.m_bFacingApplied = false;
 		assignment.m_Target = target;
 		assignment.m_fStartedAt = currentTime;
 		assignment.m_fStillSince = currentTime;
@@ -1788,6 +1815,9 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			KK_AgentMove.PRIORITY_LEVEL,
 			movementType
 		);
+
+		if (KK_Passage.Enabled() && IsEngagingEnemy(agent))
+			return;
 
 		SetWeaponRaised(agent, true);
 		OrderWeaponRaised(agent, true);
@@ -2104,11 +2134,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 		if (assignment && assignment.m_Agent)
 		{
-			if (assignment.m_bFacingApplied)
-			{
-				KK_HoldFacing.Release(this, assignment.m_Agent);
-				assignment.m_bFacingApplied = false;
-			}
+			assignment.m_bFacingApplied = false;
 
 			KK_PerceptionBoost.Restore(
 				assignment.m_Agent,
@@ -2131,11 +2157,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 		if (assignment && assignment.m_Agent)
 		{
-			if (assignment.m_bFacingApplied)
-			{
-				KK_HoldFacing.Release(this, assignment.m_Agent);
-				assignment.m_bFacingApplied = false;
-			}
+			assignment.m_bFacingApplied = false;
 
 			KK_PerceptionBoost.Restore(
 				assignment.m_Agent,
