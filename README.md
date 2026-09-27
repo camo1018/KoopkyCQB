@@ -29,7 +29,7 @@ Puts the squad on posts inside the building. Until a soldier is inside, getting 
 
 A post only counts if the soldier is on that floor. A sampled interior post allows a wider drift (the garrison hold radius, 5 m). A placed window, door, or post uses the tighter placed-waypoint hold radius (1 m).
 
-A soldier who leaves his post is pulled back on an interval. He rotates to another spot after a random wait between the minimum and maximum (20–60 s). **Rotate during combat** lets that wait count down while he is alerted or threatened. An endangering threat during the walk drops the route until it is gone.
+A soldier who leaves his post is pulled back on an interval. He rotates to another spot after a random wait between the minimum and maximum (20–60 s). **Rotate during combat** lets that wait count down while he is alerted or threatened, and he walks to the next post instead of chasing. While he is fighting and not on that walk, he stays inside and shoots. Combat movement does not take him back out.
 
 **Hold doors and windows** marks openings and sends soldiers there first. Off, garrison uses the normal interior posts.
 

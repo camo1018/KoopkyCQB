@@ -15,6 +15,7 @@ class KK_GarrisonAgentAssignment
 	bool m_bFacingApplied;
 	bool m_bCombatMove;
 	bool m_bEntryPriority;
+	bool m_bInsideFight;
 	EMovementType m_eApproachSpeed;
 	ref array<vector> m_aRouteGoals = {};
 	int m_iRouteIndex;
@@ -369,7 +370,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 					assignment.m_fStillSince = currentTime;
 					assignment.m_fStartedAt = currentTime;
 					advancedRoute = true;
-					IssueMoveOrder(assignment);
+					IssueMoveOrder(assignment, assignment.m_bRotating);
 				}
 			}
 
@@ -416,21 +417,26 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				if (havePassage)
 					IssuePassageMove(assignment, passageOrder);
 				else
-					IssueMoveOrder(assignment);
+					IssueMoveOrder(assignment, assignment.m_bRotating);
 			}
 
 			if (atHold && !passageOverride)
 			{
 				if (!assignment.m_bHolding)
 				{
+					bool beatFight =
+						assignment.m_bEntryPriority ||
+						assignment.m_bRotating;
+
 					assignment.m_bHolding = true;
 					assignment.m_bRotating = false;
 					assignment.m_bCombatYield = false;
+					assignment.m_bInsideFight = false;
 					assignment.m_fRotateAt = NextRotateTime(currentTime);
 					assignment.m_bFacingApplied = false;
 
-					// The run-in order outranks combat. Drop it so the post can shoot.
-					if (!attacking || assignment.m_bEntryPriority)
+					// A run-in or a post change outranks combat. Drop it so the post can shoot.
+					if (!attacking || beatFight)
 					{
 						CancelAgentOrder(assignment.m_Agent);
 						assignment.m_bEntryPriority = false;
@@ -502,7 +508,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 			if (assignment.m_bHolding && !passageOverride)
 			{
-				if (attacking)
+				if (attacking && insideBuilding)
 				{
 					KK_GarrisonHold.SetPinned(controlledEntity, true);
 					assignment.m_fStartedAt = currentTime;
@@ -511,36 +517,45 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 					continue;
 				}
 
+				// Outside, or the fight is over. Do not plant him in the open.
 				KK_GarrisonHold.SetPinned(controlledEntity, false);
 				assignment.m_bFacingApplied = false;
 				assignment.m_bHolding = false;
+				assignment.m_bInsideFight = false;
 				assignment.m_fLastOrderAt = currentTime;
-				IssueMoveOrder(assignment);
+				IssueMoveOrder(assignment, assignment.m_bRotating);
 			}
 
-			if (
-				assignment.m_bRotating &&
+			// Inside and in a fight, but not on the post yet. Combat movement
+			// walks toward the enemy and back out the door, so the feet stay.
+			bool plantInside =
 				insideBuilding &&
-				HasEmergentThreat(assignment.m_Agent)
-			)
+				attacking &&
+				!assignment.m_bRotating;
+
+			if (plantInside)
 			{
-				KK_GarrisonHold.SetPinned(controlledEntity, false);
-
-				if (!assignment.m_bCombatYield)
+				if (!assignment.m_bInsideFight)
 				{
+					assignment.m_bInsideFight = true;
+					assignment.m_bCombatYield = false;
 					CancelAgentOrder(assignment.m_Agent);
-					assignment.m_bCombatYield = true;
-
-					PrintFormat(
-						"KK: Garrison unit %1 broke rotation for a close threat",
-						assignment.m_Agent
-					);
+					assignment.m_bEntryPriority = false;
 				}
 
+				KK_GarrisonHold.SetPinned(controlledEntity, true);
+				assignment.m_fStartedAt = currentTime;
 				assignment.m_fStillSince = currentTime;
-				assignment.m_fStartedAt += timerDelta;
 				i--;
 				continue;
+			}
+
+			if (assignment.m_bInsideFight)
+			{
+				assignment.m_bInsideFight = false;
+				KK_GarrisonHold.SetPinned(controlledEntity, false);
+				assignment.m_fLastOrderAt = currentTime;
+				IssueMoveOrder(assignment, assignment.m_bRotating);
 			}
 
 			if (assignment.m_bCombatYield)
@@ -594,7 +609,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				if (approachSpeed != assignment.m_eApproachSpeed)
 				{
 					assignment.m_fLastOrderAt = currentTime;
-					IssueMoveOrder(assignment);
+					IssueMoveOrder(assignment, assignment.m_bRotating);
 				}
 				else
 				{
@@ -675,7 +690,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			)
 			{
 				assignment.m_fLastOrderAt = currentTime;
-				IssueMoveOrder(assignment);
+				IssueMoveOrder(assignment, assignment.m_bRotating);
 			}
 
 			i--;
@@ -840,19 +855,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			assignment.m_aRouteGoals
 		);
 		assignment.m_iRouteIndex = 0;
-
-		if (
-			IsInsideBuilding(unitPosition) &&
-			HasEmergentThreat(assignment.m_Agent)
-		)
-		{
-			CancelAgentOrder(assignment.m_Agent);
-			assignment.m_bCombatYield = true;
-		}
-		else
-		{
-			IssueMoveOrder(assignment, true);
-		}
+		IssueMoveOrder(assignment, true);
 
 		PrintFormat(
 			"KK: Garrison unit %1 rotating to %2 floor=%3",
@@ -1284,27 +1287,6 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		return false;
 	}
 
-	protected bool HasEmergentThreat(notnull AIAgent agent)
-	{
-		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
-		if (!soldier || !soldier.m_UtilityComponent)
-			return false;
-
-		SCR_AICombatComponent combat =
-			soldier.m_UtilityComponent.m_CombatComponent;
-
-		if (!combat)
-			return false;
-
-		BaseTarget target = combat.GetCurrentTarget();
-		if (!target)
-			return false;
-
-		return target.IsEndangering() ||
-			target.GetTimeSinceEndangered() <
-				SCR_AICombatComponent.TARGET_ENDANGERED_TIMEOUT_S;
-	}
-
 	protected bool IsEngagingEnemy(notnull AIAgent agent)
 	{
 		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
@@ -1430,8 +1412,8 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		);
 	}
 
-	// Outside, the order beats combat and move-from-danger.
-	// Inside, an engagement drops below attack so the soldier fights from the building.
+	// Outside, or while changing posts, the order beats combat and move-from-danger.
+	// Inside a fight, it drops below attack so he shoots, and his feet stay put.
 	protected float PriorityForSoldier(
 		notnull AIAgent agent,
 		bool forceTravel,
@@ -1443,10 +1425,10 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		if (body && !IsInsideBuilding(body.GetOrigin()))
 			entering = true;
 
-		if (entering)
+		if (entering || forceTravel)
 			return KK_AgentMove.EnterBuildingPriorityLevel();
 
-		if (!forceTravel && IsEngagingEnemy(agent))
+		if (IsEngagingEnemy(agent))
 			return KK_AgentMove.PRIORITY_LEVEL;
 
 		return KK_AgentMove.AbsolutePriorityLevel();
