@@ -25,7 +25,7 @@ A finished clear garrisons that building when nothing else is queued and **Garri
 
 ## Garrison
 
-Puts the squad on posts inside the building. On the way there they ignore ordinary fights and only break off for an emergent threat. Once they are on the post, they fight as usual. They sprint to the building and run once they are inside.
+Puts the squad on posts inside the building. Until a soldier is inside, getting in outranks fighting, even if he is shot at on the way. Once inside, he fights from the building, and on a post he stays there to shoot. They sprint to the building and run once they are inside.
 
 A post only counts if the soldier is on that floor. A sampled interior post allows a wider drift (the garrison hold radius, 5 m). A placed window, door, or post uses the tighter placed-waypoint hold radius (1 m).
 

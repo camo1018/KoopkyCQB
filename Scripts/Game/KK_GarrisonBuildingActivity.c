@@ -14,6 +14,7 @@ class KK_GarrisonAgentAssignment
 	bool m_bCombatYield;
 	bool m_bFacingApplied;
 	bool m_bCombatMove;
+	bool m_bEntryPriority;
 	EMovementType m_eApproachSpeed;
 	ref array<vector> m_aRouteGoals = {};
 	int m_iRouteIndex;
@@ -394,6 +395,29 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			assignment.m_fLastTimerUpdate = currentTime;
 
 			bool attacking = IsEngagingEnemy(assignment.m_Agent);
+			bool insideBuilding = IsInsideBuilding(unitPosition);
+
+			// Outside, the run-in beats combat. Once he is inside, that order
+			// is dropped so he fights from the building.
+			bool settledAtPost = atHold && !passageOverride;
+			bool releaseEntry =
+				assignment.m_bEntryPriority &&
+				insideBuilding &&
+				!settledAtPost;
+			bool commitEntry =
+				!insideBuilding &&
+				!assignment.m_bEntryPriority &&
+				!settledAtPost;
+
+			if (releaseEntry || commitEntry)
+			{
+				assignment.m_fLastOrderAt = currentTime;
+
+				if (havePassage)
+					IssuePassageMove(assignment, passageOrder);
+				else
+					IssueMoveOrder(assignment);
+			}
 
 			if (atHold && !passageOverride)
 			{
@@ -405,13 +429,19 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 					assignment.m_fRotateAt = NextRotateTime(currentTime);
 					assignment.m_bFacingApplied = false;
 
-					if (!attacking)
+					// The run-in order outranks combat. Drop it so the post can shoot.
+					if (!attacking || assignment.m_bEntryPriority)
 					{
 						CancelAgentOrder(assignment.m_Agent);
-						KK_AgentMove.SetWantedSpeed(
-							assignment.m_Agent,
-							EMovementType.RUN
-						);
+						assignment.m_bEntryPriority = false;
+
+						if (!attacking)
+						{
+							KK_AgentMove.SetWantedSpeed(
+								assignment.m_Agent,
+								EMovementType.RUN
+							);
+						}
 					}
 				}
 
@@ -490,6 +520,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 			if (
 				assignment.m_bRotating &&
+				insideBuilding &&
 				HasEmergentThreat(assignment.m_Agent)
 			)
 			{
@@ -574,10 +605,23 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				}
 			}
 
-			if (attacking || waitingOnDoor || passageHold)
+			if (
+				waitingOnDoor ||
+				passageHold ||
+				(attacking && insideBuilding)
+			)
 			{
 				assignment.m_fStillSince = currentTime;
 				assignment.m_fStartedAt += timerDelta;
+			}
+			else if (attacking)
+			{
+				// Still outside. Travel time pauses. Standing still fails the post
+				// only after the run-in order is already above combat.
+				assignment.m_fStartedAt += timerDelta;
+
+				if (!assignment.m_bEntryPriority)
+					assignment.m_fStillSince = currentTime;
 			}
 
 			if (
@@ -797,7 +841,10 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		);
 		assignment.m_iRouteIndex = 0;
 
-		if (HasEmergentThreat(assignment.m_Agent))
+		if (
+			IsInsideBuilding(unitPosition) &&
+			HasEmergentThreat(assignment.m_Agent)
+		)
 		{
 			CancelAgentOrder(assignment.m_Agent);
 			assignment.m_bCombatYield = true;
@@ -1329,13 +1376,21 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		else if (passageOrder.m_bOverride)
 			speed = EMovementType.RUN;
 
+		bool entering;
+		float priority = PriorityForSoldier(
+			assignment.m_Agent,
+			false,
+			entering
+		);
+		ApplyMovePriority(assignment, entering);
+
 		KK_AgentMove.Issue(
 			this,
 			m_Group,
 			assignment.m_Agent,
 			passageOrder.m_vMoveTo,
 			m_mSoloHandlers,
-			KK_AgentMove.AbsolutePriorityLevel(),
+			priority,
 			speed
 		);
 	}
@@ -1356,9 +1411,13 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 		assignment.m_eApproachSpeed = speed;
 
-		float priority = KK_AgentMove.AbsolutePriorityLevel();
-		if (!forceTravel && IsEngagingEnemy(assignment.m_Agent))
-			priority = KK_AgentMove.PRIORITY_LEVEL;
+		bool entering;
+		float priority = PriorityForSoldier(
+			assignment.m_Agent,
+			forceTravel,
+			entering
+		);
+		ApplyMovePriority(assignment, entering);
 
 		KK_AgentMove.Issue(
 			this,
@@ -1369,6 +1428,38 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			priority,
 			speed
 		);
+	}
+
+	// Outside, the order beats combat and move-from-danger.
+	// Inside, an engagement drops below attack so the soldier fights from the building.
+	protected float PriorityForSoldier(
+		notnull AIAgent agent,
+		bool forceTravel,
+		out bool entering)
+	{
+		entering = false;
+
+		IEntity body = agent.GetControlledEntity();
+		if (body && !IsInsideBuilding(body.GetOrigin()))
+			entering = true;
+
+		if (entering)
+			return KK_AgentMove.EnterBuildingPriorityLevel();
+
+		if (!forceTravel && IsEngagingEnemy(agent))
+			return KK_AgentMove.PRIORITY_LEVEL;
+
+		return KK_AgentMove.AbsolutePriorityLevel();
+	}
+
+	protected void ApplyMovePriority(
+		notnull KK_GarrisonAgentAssignment assignment,
+		bool entering)
+	{
+		if (assignment.m_bEntryPriority && !entering)
+			CancelAgentOrder(assignment.m_Agent);
+
+		assignment.m_bEntryPriority = entering;
 	}
 
 	protected bool GetFilterUnreachableIslands()

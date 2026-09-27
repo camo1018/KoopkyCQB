@@ -18,6 +18,23 @@ class KK_AgentMove
 			- 1;
 	}
 
+	// One above move-from-danger, which itself sits above the endangering attack.
+	// A soldier kept on this keeps running into the building instead of fighting outside.
+	static float EnterBuildingPriorityLevel()
+	{
+		float ceiling =
+			SCR_AIActionBase.PRIORITY_BEHAVIOR_ATTACK_HIGH_PRIORITY;
+		float danger =
+			SCR_AIActionBase.PRIORITY_BEHAVIOR_MOVE_FROM_DANGER;
+
+		if (danger > ceiling)
+			ceiling = danger;
+
+		return ceiling
+			- SCR_AIActionBase.PRIORITY_BEHAVIOR_MOVE_INDIVIDUALLY
+			+ 1;
+	}
+
 	// A target counts as seen only from inside the space being cleared.
 	// CRX observe turns the head and would otherwise finish nodes through a doorway.
 	static const float SIGHT_VISIT_RANGE = 8.0;
