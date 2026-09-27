@@ -52,6 +52,11 @@ class KK_WaypointAuthoring
 	protected static float s_fHeightNotified = -100000;
 	protected static int s_iHeightHoldFrames;
 	protected static bool s_bHeightSliderTicking;
+	protected static bool s_bHeightClickListening;
+	protected static bool s_bHeightClickArmed;
+	protected static float s_fHeightClickReadyAt;
+	protected static bool s_bHeightWeaponLocked;
+	protected static bool s_bHeightWeaponWasDisabled;
 
 	static BaseBuilding GetLockedBuilding()
 	{
@@ -1319,6 +1324,17 @@ class KK_WaypointAuthoring
 		if (s_bHeightSliderTicking)
 			return;
 
+		s_bHeightClickArmed = false;
+		s_fHeightClickReadyAt = 0;
+		BaseWorld world = GetGame().GetWorld();
+		if (world)
+		{
+			// The click that chose this radial entry can still be held.
+			// Wait it out, then the next press confirms the line.
+			s_fHeightClickReadyAt = world.GetWorldTime() + 350;
+		}
+
+		BeginHeightClick();
 		s_bHeightSliderTicking = true;
 		GetGame().GetCallqueue().CallLater(HeightSliderTick, 50, true);
 	}
@@ -1328,12 +1344,117 @@ class KK_WaypointAuthoring
 		s_iHeightMode = HEIGHT_NONE;
 		s_iHeightHoldFrames = 0;
 		s_fHeightNotified = -100000;
+		s_bHeightClickArmed = false;
+		EndHeightClick();
 
 		if (!s_bHeightSliderTicking)
 			return;
 
 		s_bHeightSliderTicking = false;
 		GetGame().GetCallqueue().Remove(HeightSliderTick);
+	}
+
+	protected static void BeginHeightClick()
+	{
+		HoldWeaponFire(true);
+
+		if (s_bHeightClickListening)
+			return;
+
+		InputManager input = GetGame().GetInputManager();
+		if (!input)
+			return;
+
+		input.AddActionListener("CharacterFire", EActionTrigger.DOWN, OnHeightConfirmClick);
+		s_bHeightClickListening = true;
+	}
+
+	protected static void EndHeightClick()
+	{
+		if (s_bHeightClickListening)
+		{
+			InputManager input = GetGame().GetInputManager();
+			if (input)
+				input.RemoveActionListener("CharacterFire", EActionTrigger.DOWN, OnHeightConfirmClick);
+
+			s_bHeightClickListening = false;
+		}
+
+		HoldWeaponFire(false);
+	}
+
+	protected static void OnHeightConfirmClick()
+	{
+		if (s_iHeightMode == HEIGHT_NONE || !s_bHeightClickArmed)
+			return;
+
+		s_bHeightClickArmed = false;
+		GetGame().GetCallqueue().CallLater(ConfirmHeightFromClick, 1, false);
+	}
+
+	protected static void ConfirmHeightFromClick()
+	{
+		if (s_iHeightMode == HEIGHT_NONE)
+			return;
+
+		ConfirmHeightLimit();
+	}
+
+	protected static void ArmHeightClick(notnull InputManager input)
+	{
+		if (s_bHeightClickArmed)
+			return;
+
+		float now = 0;
+		BaseWorld world = GetGame().GetWorld();
+		if (world)
+			now = world.GetWorldTime();
+
+		if (now < s_fHeightClickReadyAt)
+			return;
+
+		if (input.GetActionValue("CharacterFire") > 0.2)
+			return;
+
+		s_bHeightClickArmed = true;
+	}
+
+	protected static void HoldWeaponFire(bool hold)
+	{
+		IEntity player = GetLocalPlayerEntity();
+		CharacterControllerComponent controller;
+		if (player)
+		{
+			controller = CharacterControllerComponent.Cast(
+				player.FindComponent(CharacterControllerComponent)
+			);
+		}
+
+		if (hold)
+		{
+			if (!controller)
+				return;
+
+			if (!s_bHeightWeaponLocked)
+			{
+				s_bHeightWeaponWasDisabled = controller.GetDisableWeaponControls();
+				s_bHeightWeaponLocked = true;
+			}
+
+			controller.SetDisableWeaponControls(true);
+			controller.SetWeaponNoFireTime(1.0);
+			return;
+		}
+
+		if (!s_bHeightWeaponLocked)
+			return;
+
+		s_bHeightWeaponLocked = false;
+		if (!controller)
+			return;
+
+		controller.SetDisableWeaponControls(s_bHeightWeaponWasDisabled);
+		controller.SetWeaponNoFireTime(0);
 	}
 
 	protected static void HeightSliderTick()
@@ -1345,6 +1466,7 @@ class KK_WaypointAuthoring
 			return;
 		}
 
+		BeginHeightClick();
 		UpdateHeightPreview();
 		RefreshDebugDraw();
 	}
@@ -1354,7 +1476,10 @@ class KK_WaypointAuthoring
 		InputManager input = GetGame().GetInputManager();
 		float wheel = 0;
 		if (input)
+		{
+			ArmHeightClick(input);
 			wheel = input.GetActionValue("MouseWheel");
+		}
 
 		if (wheel > 0.01)
 		{
@@ -1391,7 +1516,7 @@ class KK_WaypointAuthoring
 			side = "below";
 
 		Notify(string.Format(
-			"Aim the %1 line, now %2. Pick it again to set it.",
+			"Aim the %1 line, now %2. Left click to set it.",
 			side,
 			FormatMeters(s_fHeightPreview)
 		));
