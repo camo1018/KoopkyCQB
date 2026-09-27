@@ -27,6 +27,14 @@ class KK_OpeningLeaf
 {
 	IEntity m_Entity;
 	BaseDoorComponent m_Door;
+	vector m_vHinge;
+	vector m_vClosedDir;
+	vector m_vSwing;
+	vector m_vLatchLocal;
+	vector m_vClosedFar;
+	float m_fRadius;
+	bool m_bSwingKnown;
+	bool m_bSwingsOut;
 }
 
 class KK_Opening
@@ -46,6 +54,8 @@ class KK_Opening
 	bool m_bOpenCalled;
 	bool m_bStallAnchorSet;
 	vector m_vStallAnchor;
+	float m_fLastOpenCall;
+	bool m_bLoggedHold;
 }
 
 class KK_PassageAgentState
@@ -73,6 +83,11 @@ class KK_Passage
 	protected static const float STALL_GAP = 0.08;
 	protected static const float STALL_RATE = 0.05;
 	protected static const float RAY_HEIGHT = 1.0;
+	// Body radius plus a small margin. The leaf still collides with characters
+	// when they pass through each other, so the quarter in front of an outswing
+	// door has to be empty before it can move.
+	protected static const float SWING_CLEARANCE = 0.5;
+	protected static const float OPEN_RETRY_MS = 1200;
 
 	protected static ref map<IEntity, ref KK_Opening> s_mOpenings =
 		new map<IEntity, ref KK_Opening>();
@@ -91,6 +106,20 @@ class KK_Passage
 			return false;
 
 		return mode.KK_GetNavImprovements();
+	}
+
+	// Door swing clearance runs with Open doors ahead. Corridor yielding stays
+	// on the navigation-improvements setting.
+	static bool Active()
+	{
+		if (Enabled())
+			return true;
+
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return true;
+
+		return mode.KK_GetOpenDoors();
 	}
 
 	static void Resolve(
@@ -119,7 +148,8 @@ class KK_Passage
 			ApplyDoor(opening, soldiers, pathfinding, orders, claimed);
 		}
 
-		ApplyCorridors(soldiers, pathfinding, orders, claimed);
+		if (Enabled())
+			ApplyCorridors(soldiers, pathfinding, orders, claimed);
 		ResumeReleased(soldiers, orders, claimed);
 		ForgetAbsentAgents(present);
 	}
@@ -244,6 +274,7 @@ class KK_Passage
 		KK_OpeningLeaf leaf = new KK_OpeningLeaf();
 		leaf.m_Entity = entity;
 		leaf.m_Door = door;
+		RememberLeaf(opening, leaf, entity);
 		opening.m_aLeaves.Insert(leaf);
 	}
 
@@ -396,7 +427,12 @@ class KK_Passage
 
 		foreach (IEntity doorEntity, KK_Opening opening : s_mOpenings)
 		{
-			if (!opening || !opening.m_bOpenCalled)
+			if (!opening)
+				continue;
+
+			UpdateSwing(opening);
+
+			if (!opening.m_bOpenCalled)
 				continue;
 
 			BaseDoorComponent door = BlockingLeaf(opening);
@@ -449,6 +485,7 @@ class KK_Passage
 		array<ref KK_PassageSoldier> queue = {};
 		array<float> depth = {};
 		array<vector> feet = {};
+		bool reserve = ReserveApproach(opening);
 
 		foreach (KK_PassageSoldier soldier : soldiers)
 		{
@@ -460,11 +497,18 @@ class KK_Passage
 				continue;
 
 			vector origin = user.GetOrigin();
-			if (HasGoneThrough(opening, origin) && OpeningPassable(opening))
+			bool inDisk = reserve && InSwingDisk(opening, origin);
+			if (HasGoneThrough(opening, origin) && OpeningPassable(opening) && !inDisk)
 				continue;
 
-			if (!InLane(opening, origin))
+			if (
+				!InLane(opening, origin) &&
+				!inDisk &&
+				!(reserve && HeadingThrough(opening, origin, soldier.m_vGoal))
+			)
+			{
 				continue;
+			}
 
 			float along = ApproachDepth(opening, origin);
 			InsertByDepth(queue, depth, feet, soldier, along, origin);
@@ -486,11 +530,15 @@ class KK_Passage
 			bool atSlot = vector.Distance(feet[i], slot) <= AT_SLOT;
 			mayMove[i] = false;
 
-			bool stalledBody =
-				opening.m_bStalled &&
-				i == ClosestToHinge(opening, feet);
+			// Anyone standing in the swing has to leave now. Waiting for the
+			// file behind them leaves a body against the leaf.
+			if (InSwingDisk(opening, feet[i]))
+			{
+				mayMove[i] = true;
+				continue;
+			}
 
-			if (atSlot && !stalledBody)
+			if (atSlot)
 				continue;
 
 			if (!releasePeel)
@@ -540,10 +588,6 @@ class KK_Passage
 				if (atSlot)
 					dest = SlotPosition(opening, pathfinding, index + 1);
 
-				vector aside;
-				if (AsidePoint(opening, pathfinding, feet[index], aside))
-					dest = aside;
-
 				PutOrder(orders, soldier.m_Agent, dest, true, false);
 				continue;
 			}
@@ -557,19 +601,20 @@ class KK_Passage
 			);
 		}
 
-		TryOpen(opening, queue[0], feet[0], pathfinding);
+		TryOpen(opening, queue[0], feet[0], soldiers);
 	}
 
 	protected static void TryOpen(
 		notnull KK_Opening opening,
 		notnull KK_PassageSoldier opener,
 		vector openerFeet,
-		AIPathfindingComponent pathfinding)
+		notnull array<ref KK_PassageSoldier> soldiers)
 	{
 		if (OpeningPassable(opening))
 		{
 			opening.m_bStalled = false;
 			opening.m_bStallAnchorSet = false;
+			opening.m_bLoggedHold = false;
 			return;
 		}
 
@@ -577,28 +622,49 @@ class KK_Passage
 		if (!user)
 			return;
 
-		vector slot = SlotPosition(opening, pathfinding, 0);
-		bool atSlot = vector.Distance(openerFeet, slot) <= AT_SLOT;
+		BaseWorld world = GetGame().GetWorld();
+		float now = 0;
+		if (world)
+			now = world.GetWorldTime();
 
-		if (opening.m_bStalled)
+		// UseDoorAction toggles. Ask again only after the leaf has settled
+		// shut, and not on the same tick the last request went out.
+		if (opening.m_bOpenCalled)
 		{
-			if (!opening.m_bStallAnchorSet)
-			{
-				opening.m_bStallAnchorSet = true;
-				opening.m_vStallAnchor = openerFeet;
-			}
-
-			if (vector.Distance(openerFeet, opening.m_vStallAnchor) < BODY_LENGTH)
+			if (now - opening.m_fLastOpenCall < OPEN_RETRY_MS)
 				return;
 
-			AskOpen(opening, user);
+			if (!ClosedAndIdle(opening))
+				return;
+
+			opening.m_bOpenCalled = false;
+		}
+
+		if (!SwingClear(opening, soldiers))
+		{
+			if (!opening.m_bLoggedHold)
+			{
+				opening.m_bLoggedHold = true;
+				PrintFormat(
+					"KK: Waiting for a clear swing on %1",
+					FirstLeaf(opening)
+				);
+			}
+
 			return;
 		}
 
-		if (!atSlot || opening.m_bOpenCalled)
+		// The opener only has to be near the door, not standing in the swing.
+		float limit = ClearanceBack(opening) + 0.8;
+		float reach = DoorReach();
+		if (reach > limit)
+			limit = reach;
+
+		if (FlatDistance(openerFeet, opening.m_vCenter) > limit)
 			return;
 
 		AskOpen(opening, user);
+		opening.m_fLastOpenCall = now;
 	}
 
 	protected static void AskOpen(
@@ -610,13 +676,15 @@ class KK_Passage
 			if (!leaf || !leaf.m_Door)
 				continue;
 
-			if (leaf.m_Door.IsOpen() || leaf.m_Door.CanCharacterPass(PASS_WIDTH))
-				continue;
-
-			if (leaf.m_Door.IsOpening())
+			if (!WantsOpenCommand(leaf.m_Door))
 				continue;
 
 			leaf.m_Door.UseDoorAction(user);
+			PrintFormat(
+				"KK: Opening door %1 for %2",
+				leaf.m_Entity,
+				user
+			);
 		}
 
 		opening.m_bOpenCalled = true;
@@ -625,49 +693,417 @@ class KK_Passage
 		opening.m_bStallAnchorSet = false;
 	}
 
-	protected static int ClosestToHinge(
-		notnull KK_Opening opening,
-		notnull array<vector> feet)
+	protected static bool WantsOpenCommand(notnull BaseDoorComponent door)
 	{
-		int best = 0;
-		float bestDistance = float.MAX;
-
-		for (int i = 0; i < feet.Count(); i++)
-		{
-			vector delta = feet[i] - opening.m_vHinge;
-			delta[1] = 0;
-			float distance = delta.Length();
-			if (distance >= bestDistance)
-				continue;
-
-			bestDistance = distance;
-			best = i;
-		}
-
-		return best;
-	}
-
-	protected static bool AsidePoint(
-		notnull KK_Opening opening,
-		AIPathfindingComponent pathfinding,
-		vector origin,
-		out vector aside)
-	{
-		aside = origin;
-		vector toHinge = opening.m_vHinge - opening.m_vCenter;
-		toHinge[1] = 0;
-		if (toHinge.Length() < 0.05)
+		if (door.IsOpen() || door.CanCharacterPass(PASS_WIDTH))
 			return false;
 
-		toHinge.Normalize();
-		return Project(
-			pathfinding,
-			origin + (toHinge * SIDE_SAMPLE),
-			aside
-		);
+		if (door.IsOpening())
+			return false;
+
+		// A second UseDoorAction toggles the leaf shut. Only ask when it is
+		// closed and nothing is already commanding it open.
+		if (door.GetNormalizedDoorState() > 0.05)
+			return false;
+
+		if (Math.AbsFloat(door.GetControlValue()) > 0.2)
+			return false;
+
+		return true;
+	}
+
+	protected static bool ClosedAndIdle(notnull KK_Opening opening)
+	{
+		foreach (KK_OpeningLeaf leaf : opening.m_aLeaves)
+		{
+			if (!leaf || !leaf.m_Door)
+				continue;
+
+			if (leaf.m_Door.IsOpen() || leaf.m_Door.CanCharacterPass(PASS_WIDTH))
+				continue;
+
+			if (!WantsOpenCommand(leaf.m_Door))
+				return false;
+		}
+
+		return true;
+	}
+
+	protected static bool SwingClear(
+		notnull KK_Opening opening,
+		notnull array<ref KK_PassageSoldier> soldiers)
+	{
+		if (!ReserveApproach(opening))
+			return true;
+
+		foreach (KK_PassageSoldier soldier : soldiers)
+		{
+			if (!soldier || !soldier.m_Agent)
+				continue;
+
+			IEntity user = soldier.m_Agent.GetControlledEntity();
+			if (!user)
+				continue;
+
+			if (InSwingDisk(opening, user.GetOrigin()))
+				return false;
+		}
+
+		return true;
+	}
+
+	protected static bool ReserveApproach(notnull KK_Opening opening)
+	{
+		if (opening.m_bStalled)
+			return true;
+
+		foreach (KK_OpeningLeaf leaf : opening.m_aLeaves)
+		{
+			if (!LeafSweeps(opening, leaf))
+				continue;
+
+			return true;
+		}
+
+		return false;
+	}
+
+	protected static bool LeafSweeps(
+		notnull KK_Opening opening,
+		KK_OpeningLeaf leaf)
+	{
+		if (!leaf || !leaf.m_Door)
+			return false;
+
+		if (leaf.m_fRadius <= 0.05)
+			return false;
+
+		if (leaf.m_Door.IsOpen() || leaf.m_Door.CanCharacterPass(PASS_WIDTH))
+			return false;
+
+		// Known inswing opens away from the squad, so the approach side can stay.
+		if (leaf.m_bSwingKnown && !leaf.m_bSwingsOut && !opening.m_bStalled)
+			return false;
+
+		return true;
+	}
+
+	protected static bool InSwingDisk(
+		notnull KK_Opening opening,
+		vector origin)
+	{
+		foreach (KK_OpeningLeaf leaf : opening.m_aLeaves)
+		{
+			if (LeafSweeps(opening, leaf) && InsideLeaf(leaf, origin))
+				return true;
+		}
+
+		return false;
+	}
+
+	// Quarter-disk from the closed leaf toward the squad, grown by a body width.
+	protected static bool InsideLeaf(
+		notnull KK_OpeningLeaf leaf,
+		vector origin)
+	{
+		vector from = origin - leaf.m_vHinge;
+		from[1] = 0;
+
+		float outward = vector.Dot(from, leaf.m_vSwing);
+		if (outward < -0.2)
+			return false;
+
+		float across = vector.Dot(from, leaf.m_vClosedDir);
+		float clampedAcross = across;
+		if (clampedAcross < 0)
+			clampedAcross = 0;
+
+		float clampedOut = outward;
+		if (clampedOut < 0)
+			clampedOut = 0;
+
+		vector clamped =
+			(leaf.m_vClosedDir * clampedAcross) +
+			(leaf.m_vSwing * clampedOut);
+
+		float length = clamped.Length();
+		if (length > leaf.m_fRadius && length > 0.001)
+			clamped = clamped * (leaf.m_fRadius / length);
+
+		vector gap = from - clamped;
+		return gap.Length() <= SWING_CLEARANCE;
+	}
+
+	protected static bool HeadingThrough(
+		notnull KK_Opening opening,
+		vector origin,
+		vector goal)
+	{
+		float depth = ApproachDepth(opening, origin);
+		float reach = opening.m_fWidth + 2.0;
+		if (depth < -0.3 || depth > reach)
+			return false;
+
+		if (ApproachDepth(opening, goal) > -0.5)
+			return false;
+
+		vector goalDelta = goal - opening.m_vCenter;
+		goalDelta[1] = 0;
+		float goalLateral = Math.AbsFloat(vector.Dot(goalDelta, opening.m_vWidth));
+		if (goalLateral > (opening.m_fWidth * 0.5) + 0.75)
+			return false;
+
+		vector delta = origin - opening.m_vCenter;
+		delta[1] = 0;
+		float lateral = Math.AbsFloat(vector.Dot(delta, opening.m_vWidth));
+		return lateral <= (opening.m_fWidth * 0.5) + 2.5;
+	}
+
+	protected static void UpdateSwing(notnull KK_Opening opening)
+	{
+		if (!opening.m_bOpenCalled)
+			return;
+
+		foreach (KK_OpeningLeaf leaf : opening.m_aLeaves)
+		{
+			if (!leaf || leaf.m_bSwingKnown || !leaf.m_Entity)
+				continue;
+
+			vector now = leaf.m_Entity.CoordToParent(leaf.m_vLatchLocal);
+			vector moved = now - leaf.m_vClosedFar;
+			moved[1] = 0;
+			if (moved.Length() < 0.06)
+				continue;
+
+			leaf.m_bSwingKnown = true;
+			float toward = vector.Dot(moved.Normalized(), leaf.m_vSwing);
+			leaf.m_bSwingsOut = toward > 0;
+
+			string direction = "in";
+			if (leaf.m_bSwingsOut)
+				direction = "out";
+
+			PrintFormat(
+				"KK: Door %1 swings %2",
+				leaf.m_Entity,
+				direction
+			);
+		}
+	}
+
+	protected static void RememberLeaf(
+		notnull KK_Opening opening,
+		notnull KK_OpeningLeaf leaf,
+		notnull IEntity entity)
+	{
+		vector hinge = leaf.m_Door.GetDoorPivotPointWS();
+		vector local;
+		vector far;
+		FarCorner(entity, hinge, local, far);
+
+		vector closed = far - hinge;
+		closed[1] = 0;
+		float radius = closed.Length();
+
+		if (radius < 0.4)
+		{
+			closed = opening.m_vWidth;
+			radius = opening.m_fWidth;
+			if (radius < 0.75)
+				radius = 0.9;
+
+			far = hinge + (closed * radius);
+			local = entity.CoordToLocal(far);
+		}
+		else
+		{
+			closed = closed.Normalized();
+		}
+
+		if (radius < 0.75)
+			radius = 0.75;
+
+		vector swing = opening.m_vApproach;
+		float parallel = vector.Dot(swing, closed);
+		swing = swing - (closed * parallel);
+		swing[1] = 0;
+
+		if (swing.Length() < 0.01)
+			swing = opening.m_vApproach;
+		else
+			swing.Normalize();
+
+		if (vector.Dot(swing, opening.m_vApproach) < 0)
+			swing = -swing;
+
+		leaf.m_vHinge = hinge;
+		leaf.m_vClosedDir = closed;
+		leaf.m_vSwing = swing;
+		leaf.m_fRadius = radius;
+		leaf.m_vLatchLocal = local;
+		leaf.m_vClosedFar = far;
+	}
+
+	protected static void FarCorner(
+		notnull IEntity entity,
+		vector hinge,
+		out vector local,
+		out vector far)
+	{
+		vector mins;
+		vector maxs;
+		entity.GetBounds(mins, maxs);
+		float y = (mins[1] + maxs[1]) * 0.5;
+
+		local = Vector(mins[0], y, mins[2]);
+		far = entity.CoordToParent(local);
+		float best = FlatDistance(far, hinge);
+
+		vector candidateLocal;
+		vector candidateFar;
+		float distance;
+		if (ConsiderCorner(entity, hinge, Vector(maxs[0], y, mins[2]), best, candidateLocal, candidateFar, distance))
+		{
+			best = distance;
+			local = candidateLocal;
+			far = candidateFar;
+		}
+
+		if (ConsiderCorner(entity, hinge, Vector(mins[0], y, maxs[2]), best, candidateLocal, candidateFar, distance))
+		{
+			best = distance;
+			local = candidateLocal;
+			far = candidateFar;
+		}
+
+		if (ConsiderCorner(entity, hinge, Vector(maxs[0], y, maxs[2]), best, candidateLocal, candidateFar, distance))
+		{
+			local = candidateLocal;
+			far = candidateFar;
+		}
+	}
+
+	protected static bool ConsiderCorner(
+		notnull IEntity entity,
+		vector hinge,
+		vector candidate,
+		float best,
+		out vector local,
+		out vector far,
+		out float distance)
+	{
+		local = candidate;
+		far = entity.CoordToParent(candidate);
+		distance = FlatDistance(far, hinge);
+		return distance > best;
+	}
+
+	protected static float FlatDistance(vector from, vector to)
+	{
+		vector delta = from - to;
+		delta[1] = 0;
+		return delta.Length();
+	}
+
+	protected static float DoorReach()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return 2;
+
+		float reach = mode.KK_GetDoorReach();
+		if (reach < 1)
+			return 1;
+
+		return reach;
+	}
+
+	protected static IEntity FirstLeaf(notnull KK_Opening opening)
+	{
+		if (opening.m_aLeaves.IsEmpty())
+			return null;
+
+		KK_OpeningLeaf leaf = opening.m_aLeaves[0];
+		if (!leaf)
+			return null;
+
+		return leaf.m_Entity;
 	}
 
 	protected static vector SlotPosition(
+		notnull KK_Opening opening,
+		AIPathfindingComponent pathfinding,
+		int index)
+	{
+		if (ReserveApproach(opening))
+			return ClearSlot(opening, pathfinding, index);
+
+		return LaneSlot(opening, pathfinding, index);
+	}
+
+	protected static vector ClearSlot(
+		notnull KK_Opening opening,
+		AIPathfindingComponent pathfinding,
+		int index)
+	{
+		float along = 0.85 + (index * 0.9);
+		vector side = opening.m_vWidth;
+		vector approach = opening.m_vApproach;
+		vector projected;
+
+		// Back along the approach first, so the squad steps away from the leaf
+		// instead of crossing the doorway to reach the hinge.
+		vector backPocket =
+			opening.m_vCenter +
+			(approach * (ClearanceBack(opening) + (index * SLOT_GAP)));
+		if (AcceptSlot(opening, pathfinding, backPocket, projected))
+			return projected;
+
+		vector hingePocket =
+			opening.m_vHinge - (side * along) + (approach * 0.3);
+		if (AcceptSlot(opening, pathfinding, hingePocket, projected))
+			return projected;
+
+		vector latchPocket =
+			opening.m_vLatch + (side * along) + (approach * 0.3);
+		if (AcceptSlot(opening, pathfinding, latchPocket, projected))
+			return projected;
+
+		return backPocket;
+	}
+
+	protected static bool AcceptSlot(
+		notnull KK_Opening opening,
+		AIPathfindingComponent pathfinding,
+		vector desired,
+		out vector projected)
+	{
+		projected = desired;
+		if (InSwingDisk(opening, desired))
+			return false;
+
+		if (!Project(pathfinding, desired, projected))
+			return false;
+
+		return !InSwingDisk(opening, projected);
+	}
+
+	protected static float ClearanceBack(notnull KK_Opening opening)
+	{
+		float back = 0.8;
+		for (int step = 0; step < 10; step++)
+		{
+			vector point = opening.m_vCenter + (opening.m_vApproach * back);
+			if (!InSwingDisk(opening, point))
+				return back;
+
+			back += 0.35;
+		}
+
+		return back;
+	}
+
+	protected static vector LaneSlot(
 		notnull KK_Opening opening,
 		AIPathfindingComponent pathfinding,
 		int index)

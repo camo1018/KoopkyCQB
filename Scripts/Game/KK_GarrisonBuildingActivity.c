@@ -291,7 +291,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		float timeoutMs =
 			m_GarrisonWaypoint.GetMovementTimeout() * 1000.0;
 
-		bool passageOn = KK_Passage.Enabled();
+		bool passageOn = KK_Passage.Active();
 		ref map<AIAgent, ref KK_PassageOrder> passageOrders;
 		if (passageOn)
 		{
@@ -351,6 +351,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				assignment.m_iRouteIndex
 			);
 
+			bool advancedRoute = false;
 			if (!onFinalGoal)
 			{
 				if (
@@ -362,6 +363,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 					assignment.m_fLastOrderAt = currentTime;
 					assignment.m_fStillSince = currentTime;
 					assignment.m_fStartedAt = currentTime;
+					advancedRoute = true;
 					IssueMoveOrder(assignment);
 				}
 			}
@@ -465,7 +467,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			if (havePassage)
 			{
 				passageHold = passageOrder.m_bHoldTimers;
-				if (passageOrder.m_bIssueNow)
+				if (passageOrder.m_bIssueNow || advancedRoute)
 				{
 					assignment.m_fLastOrderAt = currentTime;
 					IssuePassageMove(assignment, passageOrder);

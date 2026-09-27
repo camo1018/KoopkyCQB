@@ -106,13 +106,13 @@ modded class SCR_BaseGameMode
 	[Attribute("1", UIWidgets.EditBox, "Recognition speed while clearing or garrisoning. 1 is normal.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_PerceptionFactor;
 
-	[Attribute("1", UIWidgets.CheckBox, "Open a closed door in front of a clear or garrison move", category: "Koopky CQB/Combat")]
+	[Attribute("1", UIWidgets.CheckBox, "Open a closed door ahead, after the squad steps out of its swing", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_OpenDoors;
 
 	[Attribute("0", UIWidgets.CheckBox, "Enable AI navigation improvements (Experimental)", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_NavImprovements;
 
-	[Attribute("0", UIWidgets.CheckBox, "While clearing or garrisoning, squad members pass through other characters", category: "Koopky CQB/Combat")]
+	[Attribute("0", UIWidgets.CheckBox, "While clearing or garrisoning, squad members pass through other characters. Doors stay solid", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_IgnoreSquadCollision;
 
 	[Attribute("2", UIWidgets.EditBox, "How far ahead a door is searched, in metres", category: "Koopky CQB/Combat")]

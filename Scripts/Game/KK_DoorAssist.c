@@ -2,12 +2,17 @@ class KK_DoorSearchStamp
 {
 	vector m_vOrigin;
 	float m_fTime;
+	vector m_vHeading;
+	bool m_bHaveHeading;
 }
 
 class KK_DoorAssist
 {
 	protected static const float PASS_WIDTH = 0.5;
 	protected static const float RAY_HEIGHT = 1.0;
+	// Below this horizontal speed the last walk direction is kept.
+	// A goal several floors away is not the corridor he is walking now.
+	protected static const float MOVE_SPEED = 0.45;
 
 	protected static vector s_Unit;
 	protected static vector s_Target;
@@ -40,7 +45,7 @@ class KK_DoorAssist
 			s_Reach = mode.KK_GetDoorReach();
 
 		s_Unit = user.GetOrigin();
-		s_Target = targetPosition;
+		s_Target = WalkAim(agent, user, targetPosition);
 		s_Door = null;
 		s_DoorEntity = null;
 
@@ -64,7 +69,7 @@ class KK_DoorAssist
 			return false;
 
 		s_Unit = user.GetOrigin();
-		s_Target = targetPosition;
+		s_Target = WalkAim(agent, user, targetPosition);
 		float now = world.GetWorldTime();
 
 		if (!DueForSearch(agent, s_Unit, now))
@@ -165,6 +170,68 @@ class KK_DoorAssist
 			return false;
 
 		return true;
+	}
+
+	// The ray follows the way he is walking. While he is stopped, it keeps
+	// the last direction. The goal is only used before he has moved.
+	protected static vector WalkAim(
+		notnull AIAgent agent,
+		notnull IEntity user,
+		vector goal)
+	{
+		vector origin = user.GetOrigin();
+		vector flat = HorizontalVelocity(user);
+		if (flat.Length() >= MOVE_SPEED)
+		{
+			flat.Normalize();
+			StoreHeading(agent, flat);
+			return origin + flat;
+		}
+
+		vector heading;
+		if (StoredHeading(agent, heading))
+			return origin + heading;
+
+		return goal;
+	}
+
+	protected static vector HorizontalVelocity(notnull IEntity user)
+	{
+		Physics physics = user.GetPhysics();
+		if (!physics)
+			return vector.Zero;
+
+		vector velocity = physics.GetVelocity();
+		velocity[1] = 0;
+		return velocity;
+	}
+
+	protected static void StoreHeading(
+		notnull AIAgent agent,
+		vector heading)
+	{
+		KK_DoorSearchStamp stamp = s_mStamps.Get(agent);
+		if (!stamp)
+		{
+			stamp = new KK_DoorSearchStamp();
+			s_mStamps.Set(agent, stamp);
+		}
+
+		stamp.m_vHeading = heading;
+		stamp.m_bHaveHeading = true;
+	}
+
+	protected static bool StoredHeading(
+		notnull AIAgent agent,
+		out vector heading)
+	{
+		heading = vector.Zero;
+		KK_DoorSearchStamp stamp = s_mStamps.Get(agent);
+		if (!stamp || !stamp.m_bHaveHeading)
+			return false;
+
+		heading = stamp.m_vHeading;
+		return heading.Length() > 0.5;
 	}
 
 	protected static bool TraceDoor(BaseWorld world, IEntity user)

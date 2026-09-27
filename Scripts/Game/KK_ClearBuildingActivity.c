@@ -288,7 +288,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 	protected void EvaluateAssignments(float currentTime)
 	{
-		bool passageOn = KK_Passage.Enabled();
+		bool passageOn = KK_Passage.Active();
 		ref map<AIAgent, ref KK_PassageOrder> passageOrders;
 		if (passageOn)
 		{
@@ -400,6 +400,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					assignment.m_iRouteIndex
 				);
 
+				bool advancedRoute = false;
 				if (
 					!onFinalGoal &&
 					vector.Distance(unitPosition, moveGoal) <=
@@ -415,6 +416,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 						assignment.m_aRouteGoals,
 						assignment.m_iRouteIndex
 					);
+					advancedRoute = true;
 					IssueMoveOrder(assignment.m_Agent, moveGoal);
 				}
 
@@ -495,7 +497,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				if (havePassage)
 				{
 					passageHold = passageOrder.m_bHoldTimers;
-					if (passageOrder.m_bIssueNow)
+					if (passageOrder.m_bIssueNow || advancedRoute)
 					{
 						EMovementType passageSpeed = EMovementType.RUN;
 						if (passageOrder.m_bOverride)
