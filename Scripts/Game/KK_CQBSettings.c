@@ -680,6 +680,7 @@ modded class SCR_BaseGameMode
 	void KK_SetDoorSearchDistance(float value) { m_fKK_DoorSearchDistance = value; }
 	void KK_SetDebugDraw(bool value) { m_bKK_DebugDraw = value; }
 	void KK_SetWaypointAuthoring(bool value) { m_bKK_WaypointAuthoring = value; }
+	void KK_SetSampleAttempts(int value) { m_iKK_SampleAttempts = Math.Max(value, 1); }
 }
 
 class KK_SavedCollision

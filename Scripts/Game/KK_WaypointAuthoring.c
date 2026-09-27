@@ -36,7 +36,11 @@ class KK_WaypointAuthoring
 	protected static bool s_bDebugTicking;
 	protected static bool s_bSamplePending;
 	protected static bool s_bSampleAnnounce;
-	protected static int s_iSampleAttempts;
+	protected static int s_iServerSampleAttempts;
+	protected static int s_iServerSamplePlayerId = -1;
+	protected static int s_iServerGroupId = -1;
+	protected static BaseBuilding s_ServerSampleBuilding;
+	protected static string s_sServerSamplePrefab;
 	protected static const int SAMPLE_ATTEMPTS_BASELINE = 20;
 	protected static const int HEIGHT_NONE = 0;
 	protected static const int HEIGHT_ABOVE = 1;
@@ -187,8 +191,7 @@ class KK_WaypointAuthoring
 
 		StopHeightSlider();
 		s_bSamplePending = false;
-		s_iSampleAttempts = 0;
-		GetGame().GetCallqueue().Remove(RetryBuildSampleCache);
+		GetGame().GetCallqueue().Remove(RetryServerSample);
 
 		s_LockedBuilding = null;
 		s_sLockedPrefab = string.Empty;
@@ -470,25 +473,35 @@ class KK_WaypointAuthoring
 		if (prefabSet.m_bHasSampleCache && !prefabSet.m_aSamples.IsEmpty())
 			return true;
 
-		SCR_AIGroup group = FindLocalPlayerGroup();
+		SCR_PlayerControllerGroupComponent groupController =
+			SCR_PlayerControllerGroupComponent.GetLocalPlayerControllerGroupComponent();
+		SCR_GroupsManagerComponent groupsManager =
+			SCR_GroupsManagerComponent.GetInstance();
+		SCR_AIGroup group;
+		if (groupController && groupsManager)
+			group = groupsManager.FindGroup(groupController.GetGroupID());
+
 		if (!group)
 		{
 			Notify("Need a squad with you to build the floor list");
 			return false;
 		}
 
-		AIPathfindingComponent pathfinding =
-			AIPathfindingComponent.Cast(
-				group.FindComponent(AIPathfindingComponent)
-			);
-
-		if (!pathfinding)
+		SCR_PlayerController controller = SCR_PlayerController.Cast(
+			GetGame().GetPlayerController()
+		);
+		if (!controller)
 			return false;
 
 		s_bSampleAnnounce = announce;
-		s_iSampleAttempts = 0;
-		GetGame().GetCallqueue().Remove(RetryBuildSampleCache);
-		return BuildSampleCache();
+		s_bSamplePending = true;
+		Notify("Sampling this building");
+		controller.KK_RequestBuildingSamples(
+			SCR_EntityHelper.GetEntityCenterWorld(s_LockedBuilding),
+			s_sLockedPrefab,
+			groupController.GetGroupID()
+		);
+		return false;
 	}
 
 	protected static int SampleAttemptLimit()
@@ -500,40 +513,58 @@ class KK_WaypointAuthoring
 		return mode.KK_GetSampleAttempts();
 	}
 
-	protected static bool BuildSampleCache()
+	static void BeginServerSample(int playerId, vector origin, string prefabName, int groupId)
 	{
-		if (!s_LockedBuilding)
+		s_iServerSamplePlayerId = playerId;
+		s_iServerGroupId = groupId;
+		s_sServerSamplePrefab = prefabName;
+		s_iServerSampleAttempts = 0;
+		s_ServerSampleBuilding = FindServerBuilding(origin, prefabName);
+		GetGame().GetCallqueue().Remove(RetryServerSample);
+
+		if (!s_ServerSampleBuilding)
 		{
-			s_bSamplePending = false;
-			return false;
+			Print("KK: Server could not find the locked building", LogLevel.WARNING);
+			FinishServerSample(false);
+			return;
 		}
 
-		KK_PrefabWaypointSet prefabSet = GetLockedSet();
-		if (prefabSet && prefabSet.m_bHasSampleCache && !prefabSet.m_aSamples.IsEmpty())
+		KK_BuildingWaypointLibrary.ReloadPrefabFromDisk(prefabName);
+		RetryServerSample();
+	}
+
+	protected static void RetryServerSample()
+	{
+		if (!s_ServerSampleBuilding)
 		{
-			s_bSamplePending = false;
-			return true;
+			FinishServerSample(false);
+			return;
 		}
 
-		SCR_AIGroup group = FindLocalPlayerGroup();
+		SCR_AIGroup group = FindServerGroup(s_iServerSamplePlayerId, s_iServerGroupId);
 		AIPathfindingComponent pathfinding;
 		if (group)
-		{
-			pathfinding = AIPathfindingComponent.Cast(
-				group.FindComponent(AIPathfindingComponent)
-			);
-		}
+			pathfinding = FindPathfinding(group);
 
 		if (!group || !pathfinding)
 		{
-			s_bSamplePending = false;
-			return false;
+			Print(
+				string.Format(
+					"KK: Server squad has no pathfinding for sampling groupId=%1 group=%2",
+					s_iServerGroupId,
+					group
+				),
+				LogLevel.WARNING
+			);
+			FinishServerSample(false);
+			return;
 		}
 
 		float horizontal = 2.5;
 		float vertical = 1.5;
 		float dedup = 1.25;
 		float cluster = 4.0;
+		bool filterSurfaces = true;
 
 		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
 		if (mode)
@@ -542,14 +573,15 @@ class KK_WaypointAuthoring
 			vertical = mode.KK_GetVerticalSpacing();
 			dedup = mode.KK_GetDeduplicateDistance();
 			cluster = mode.KK_GetClusterRadius();
+			filterSurfaces = mode.KK_GetFilterBuildingSurfaces();
 		}
 
-		RequestNavmeshAtBuilding(pathfinding, s_LockedBuilding);
+		RequestNavmeshAtBuilding(pathfinding, s_ServerSampleBuilding);
 
 		KK_BuildingInteriorPlan plan = new KK_BuildingInteriorPlan();
 		bool tilesLoaded = plan.EnsureNavmeshLoaded(
 			pathfinding,
-			s_LockedBuilding
+			s_ServerSampleBuilding
 		);
 
 		bool ok = false;
@@ -557,37 +589,207 @@ class KK_WaypointAuthoring
 		{
 			ok = plan.Generate(
 				group,
-				s_LockedBuilding,
+				s_ServerSampleBuilding,
 				horizontal,
 				vertical,
 				dedup,
 				cluster,
 				false,
-				true,
+				filterSurfaces,
 				false
 			);
 		}
 
 		if (ok)
 		{
-			s_bSamplePending = false;
-			RefreshDebugDraw();
-			return true;
+			FinishServerSample(true);
+			return;
 		}
 
-		// Tiles stream in after LoadTileIn. Sampling before that returns
-		// no interior points, which is what a clear order used to wait out.
-		if (s_iSampleAttempts < SampleAttemptLimit())
+		s_iServerSampleAttempts++;
+		if (s_iServerSampleAttempts < SampleAttemptLimit())
 		{
-			s_iSampleAttempts++;
-			s_bSamplePending = true;
-			GetGame().GetCallqueue().CallLater(RetryBuildSampleCache, 500, false);
-			return false;
+			GetGame().GetCallqueue().CallLater(RetryServerSample, 500, false);
+			return;
 		}
+
+		PrintFormat(
+			"KK: Server samples failed for %1 tilesLoaded=%2",
+			s_ServerSampleBuilding,
+			tilesLoaded
+		);
+		FinishServerSample(false);
+	}
+
+	protected static void FinishServerSample(bool ok)
+	{
+		GetGame().GetCallqueue().Remove(RetryServerSample);
+
+		int playerId = s_iServerSamplePlayerId;
+		string prefabName = s_sServerSamplePrefab;
+		s_ServerSampleBuilding = null;
+		s_sServerSamplePrefab = string.Empty;
+		s_iServerSamplePlayerId = -1;
+		s_iServerGroupId = -1;
+
+		PlayerController controller =
+			GetGame().GetPlayerManager().GetPlayerController(playerId);
+		SCR_PlayerController player = SCR_PlayerController.Cast(controller);
+		if (!player)
+			return;
+
+		player.KK_FinishBuildingSamples(ok, prefabName);
+	}
+
+	static void OnServerSampleFinished(bool ok, string prefabName)
+	{
+		if (!s_bSamplePending)
+			return;
+
+		if (prefabName != s_sLockedPrefab)
+			return;
 
 		s_bSamplePending = false;
+
+		if (ok)
+			KK_BuildingWaypointLibrary.ReloadPrefabFromDisk(prefabName);
+
+		KK_PrefabWaypointSet prefabSet = GetLockedSet();
+		bool ready = prefabSet &&
+			prefabSet.m_bHasSampleCache &&
+			!prefabSet.m_aSamples.IsEmpty();
+
+		if (!ready)
+			KK_AuthorEditHistory.Discard();
+
+		if (s_bSampleAnnounce)
+		{
+			if (ready)
+				Notify("Floor list ready");
+			else
+				Notify("Could not build the floor list");
+		}
+		else if (ready)
+		{
+			Notify("Locked this building");
+		}
+		else
+		{
+			Notify("Locked this building, but samples failed");
+		}
+
 		RefreshDebugDraw();
-		return false;
+	}
+
+	protected static BaseBuilding FindServerBuilding(vector origin, string prefabName)
+	{
+		array<BaseBuilding> buildings =
+			KK_BuildingResolver.FindOccupiableBuildings(origin, 25.0);
+
+		BaseBuilding prefabMatch;
+		float prefabDistance = 100000.0;
+
+		foreach (BaseBuilding candidate : buildings)
+		{
+			if (!candidate)
+				continue;
+
+			if (KK_BuildingWaypointLibrary.ResolvePrefabName(candidate) != prefabName)
+				continue;
+
+			float distance = vector.Distance(
+				origin,
+				SCR_EntityHelper.GetEntityCenterWorld(candidate)
+			);
+
+			if (distance < prefabDistance)
+			{
+				prefabDistance = distance;
+				prefabMatch = candidate;
+			}
+		}
+
+		if (prefabMatch)
+			return prefabMatch;
+
+		if (buildings.IsEmpty())
+			return null;
+
+		return buildings[0];
+	}
+
+	protected static SCR_AIGroup FindServerGroup(int playerId, int groupId)
+	{
+		SCR_GroupsManagerComponent groupsManager =
+			SCR_GroupsManagerComponent.GetInstance();
+
+		if (groupsManager && groupId >= 0)
+		{
+			SCR_AIGroup fromId = groupsManager.FindGroup(groupId);
+			if (fromId)
+				return fromId;
+		}
+
+		PlayerController controller =
+			GetGame().GetPlayerManager().GetPlayerController(playerId);
+		if (!controller)
+			return null;
+
+		IEntity controlled = controller.GetControlledEntity();
+		if (!controlled)
+			return null;
+
+		AIControlComponent control = AIControlComponent.Cast(
+			controlled.FindComponent(AIControlComponent)
+		);
+		if (!control)
+			return null;
+
+		AIAgent agent = control.GetAIAgent();
+		if (!agent)
+			return null;
+
+		SCR_AIGroup fromAgent = SCR_AIGroup.Cast(agent);
+		if (fromAgent)
+			return fromAgent;
+
+		return SCR_AIGroup.Cast(agent.GetParentGroup());
+	}
+
+	protected static AIPathfindingComponent FindPathfinding(notnull SCR_AIGroup group)
+	{
+		AIPathfindingComponent pathfinding = AIPathfindingComponent.Cast(
+			group.FindComponent(AIPathfindingComponent)
+		);
+		if (pathfinding)
+			return pathfinding;
+
+		array<AIAgent> agents = {};
+		group.GetAgents(agents);
+
+		foreach (AIAgent agent : agents)
+		{
+			if (!agent)
+				continue;
+
+			pathfinding = AIPathfindingComponent.Cast(
+				agent.FindComponent(AIPathfindingComponent)
+			);
+			if (pathfinding)
+				return pathfinding;
+
+			AIAgent parent = agent.GetParentGroup();
+			if (!parent)
+				continue;
+
+			pathfinding = AIPathfindingComponent.Cast(
+				parent.FindComponent(AIPathfindingComponent)
+			);
+			if (pathfinding)
+				return pathfinding;
+		}
+
+		return null;
 	}
 
 	protected static void RequestNavmeshAtBuilding(
@@ -604,32 +806,6 @@ class KK_WaypointAuthoring
 		);
 
 		pathfinding.GetClosestPositionOnNavmesh(center, extents, closest);
-	}
-
-	protected static void RetryBuildSampleCache()
-	{
-		bool ok = BuildSampleCache();
-		if (s_bSamplePending)
-			return;
-
-		if (!ok)
-			KK_AuthorEditHistory.Discard();
-
-		if (s_bSampleAnnounce)
-		{
-			if (ok)
-				Notify("Floor list ready");
-			else
-				Notify("Could not build the floor list");
-		}
-		else if (ok)
-		{
-			Notify("Locked this building");
-		}
-		else
-		{
-			Notify("Locked this building, but samples failed");
-		}
 	}
 
 	static bool ToggleRoof()
@@ -1623,5 +1799,35 @@ class KK_WaypointAuthorCommand : SCR_BaseGroupCommand
 		}
 
 		return false;
+	}
+}
+
+modded class SCR_PlayerController
+{
+	void KK_RequestBuildingSamples(vector origin, string prefabName, int groupId)
+	{
+		Rpc(Rpc_KK_AskBuildingSamples, origin, prefabName, groupId);
+	}
+
+	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
+	protected void Rpc_KK_AskBuildingSamples(vector origin, string prefabName, int groupId)
+	{
+		KK_WaypointAuthoring.BeginServerSample(
+			GetPlayerId(),
+			origin,
+			prefabName,
+			groupId
+		);
+	}
+
+	void KK_FinishBuildingSamples(bool ok, string prefabName)
+	{
+		Rpc(Rpc_KK_BuildingSamplesFinished, ok, prefabName);
+	}
+
+	[RplRpc(RplChannel.Reliable, RplRcver.Owner)]
+	protected void Rpc_KK_BuildingSamplesFinished(bool ok, string prefabName)
+	{
+		KK_WaypointAuthoring.OnServerSampleFinished(ok, prefabName);
 	}
 }

@@ -608,7 +608,22 @@ class KK_BuildingWaypointLibrary
 			prefabSet.m_aSamples.Insert(sample);
 		}
 
-		SaveToDisk();
+		SaveSet(prefabSet);
+	}
+
+	static bool ReloadPrefabFromDisk(string prefabName)
+	{
+		EnsureLoaded();
+
+		if (prefabName.IsEmpty())
+			return false;
+
+		string path = PrefabFilePath(prefabName);
+		if (!FileIO.FileExists(path))
+			return false;
+
+		LoadSetFile(path);
+		return true;
 	}
 
 	static bool HasUsableSampleCache(

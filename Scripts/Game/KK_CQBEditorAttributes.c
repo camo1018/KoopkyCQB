@@ -68,6 +68,7 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 15: return mode.KK_GetGarrisonStuckTimeout();
 			case 16: return mode.KK_GetGarrisonMaximumRetries();
 			case 19: return mode.KK_GetPerceptionFactor();
+			case 27: return mode.KK_GetSampleAttempts();
 		}
 
 		return mode.KK_GetHorizontalSpacing();
@@ -102,6 +103,7 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 15: mode.KK_SetGarrisonStuckTimeout(value); break;
 			case 16: mode.KK_SetGarrisonMaximumRetries((int)Math.Round(value)); break;
 			case 19: mode.KK_SetPerceptionFactor(value); break;
+			case 27: mode.KK_SetSampleAttempts((int)Math.Round(value)); break;
 			default: mode.KK_SetHorizontalSpacing(value); break;
 		}
 	}
@@ -263,6 +265,8 @@ class KK_CQBAttrDoorSearchDistance : KK_CQBFloatEditorAttribute {}
 class KK_CQBAttrDebugDraw : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrWaypointAuthoring : KK_CQBBoolEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrSampleAttempts : KK_CQBFloatEditorAttribute {}
 
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrClearSpareMode : SCR_BaseEditorAttribute
