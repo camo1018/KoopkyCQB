@@ -158,7 +158,6 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 7: return mode.KK_GetStopWhenSeen();
 			case 8: return mode.KK_GetFilterBuildingSurfaces();
 			case 9: return mode.KK_GetClassifyOpenings();
-			case 10: return mode.KK_GetNavImprovements();
 			case 11: return mode.KK_GetIgnoreSquadCollision();
 			case 12: return mode.KK_GetWaypointAuthoring();
 		}
@@ -179,7 +178,6 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 7: mode.KK_SetStopWhenSeen(value); break;
 			case 8: mode.KK_SetFilterBuildingSurfaces(value); break;
 			case 9: mode.KK_SetClassifyOpenings(value); break;
-			case 10: mode.KK_SetNavImprovements(value); break;
 			case 11: mode.KK_SetIgnoreSquadCollision(value); break;
 			case 12: mode.KK_SetWaypointAuthoring(value); break;
 			default: mode.KK_SetGarrisonAfterClear(value); break;
@@ -252,7 +250,70 @@ class KK_CQBAttrPerceptionFactor : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrOpenDoors : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
-class KK_CQBAttrNavImprovements : KK_CQBBoolEditorAttribute {}
+class KK_CQBAttrNavImprovements : SCR_BaseEditorAttribute
+{
+	[Attribute()]
+	protected ref array<ref SCR_EditorAttributeFloatStringValueHolder> m_aValues;
+
+	override SCR_BaseEditorAttributeVar ReadVariable(
+		Managed item,
+		SCR_AttributesManagerEditorComponent manager)
+	{
+		if (!IsGameMode(item))
+			return null;
+
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return null;
+
+		return SCR_BaseEditorAttributeVar.CreateInt(mode.KK_GetNavMode());
+	}
+
+	override void WriteVariable(
+		Managed item,
+		SCR_BaseEditorAttributeVar var,
+		SCR_AttributesManagerEditorComponent manager,
+		int playerID)
+	{
+		Apply(var);
+	}
+
+	override void UpdateInterlinkedVariables(
+		SCR_BaseEditorAttributeVar var,
+		SCR_AttributesManagerEditorComponent manager,
+		bool isInit = false)
+	{
+		super.UpdateInterlinkedVariables(var, manager, isInit);
+
+		if (isInit)
+			return;
+
+		Apply(var);
+	}
+
+	protected void Apply(SCR_BaseEditorAttributeVar var)
+	{
+		if (!var)
+			return;
+
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return;
+
+		mode.KK_SetNavMode(var.GetInt());
+	}
+
+	override int GetEntries(notnull array<ref SCR_BaseEditorAttributeEntry> outEntries)
+	{
+		int count = 3;
+		if (m_aValues)
+			count = m_aValues.Count();
+
+		outEntries.Insert(new SCR_EditorAttributePresetEntry(count, false));
+		outEntries.Insert(new SCR_BaseEditorAttributeFloatStringValues(m_aValues));
+		return outEntries.Count();
+	}
+}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrIgnoreSquadCollision : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]

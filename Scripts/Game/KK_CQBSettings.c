@@ -8,18 +8,25 @@ enum KK_EClearSpareMode
 	SPREAD_PAIRS
 }
 
+enum KK_ENavMode
+{
+	OFF,
+	MAKE_WAY,
+	PASS_THROUGH
+}
+
 modded class SCR_BaseGameMode
 {
-	[Attribute("2.5", UIWidgets.EditBox, "Horizontal sample spacing", category: "Koopky CQB/Interior")]
+	[Attribute("2.5", UIWidgets.EditBox, "Horizontal sample spacing (m)", category: "Koopky CQB/Interior")]
 	protected float m_fKK_HorizontalSpacing;
 
-	[Attribute("1.0", UIWidgets.EditBox, "Vertical sample spacing", category: "Koopky CQB/Interior")]
+	[Attribute("1.0", UIWidgets.EditBox, "Vertical sample spacing (m)", category: "Koopky CQB/Interior")]
 	protected float m_fKK_VerticalSpacing;
 
-	[Attribute("1.25", UIWidgets.EditBox, "Sample deduplication distance", category: "Koopky CQB/Interior")]
+	[Attribute("1.25", UIWidgets.EditBox, "Sample deduplication distance (m)", category: "Koopky CQB/Interior")]
 	protected float m_fKK_DeduplicateDistance;
 
-	[Attribute("4", UIWidgets.EditBox, "Room-like cluster radius", category: "Koopky CQB/Interior")]
+	[Attribute("4", UIWidgets.EditBox, "Room-like cluster radius (m)", category: "Koopky CQB/Interior")]
 	protected float m_fKK_ClusterRadius;
 
 	[Attribute("0", UIWidgets.CheckBox, "Drop interior points that are not walk-connected to the squad, including upper floors", category: "Koopky CQB/Interior")]
@@ -34,28 +41,28 @@ modded class SCR_BaseGameMode
 	[Attribute("3", UIWidgets.ComboBox, "How the squad splits up while clearing", "", ParamEnumArray.FromEnum(KK_EClearSpareMode))]
 	protected KK_EClearSpareMode m_eKK_ClearSpareMode;
 
-	[Attribute("75", UIWidgets.EditBox, "Building search radius", category: "Koopky CQB/Clear")]
+	[Attribute("75", UIWidgets.EditBox, "Building search radius (m)", category: "Koopky CQB/Clear")]
 	protected float m_fKK_ClearSearchRadius;
 
-	[Attribute("1", UIWidgets.EditBox, "Distance considered visited", category: "Koopky CQB/Clear")]
+	[Attribute("1", UIWidgets.EditBox, "Distance considered visited (m)", category: "Koopky CQB/Clear")]
 	protected float m_fKK_ClearArrivalRadius;
 
-	[Attribute("8", UIWidgets.EditBox, "Distance at which seeing a point counts as visited", category: "Koopky CQB/Clear")]
+	[Attribute("8", UIWidgets.EditBox, "Distance at which seeing a point counts as visited (m)", category: "Koopky CQB/Clear")]
 	protected float m_fKK_SightVisitRange;
 
-	[Attribute("0.5", UIWidgets.EditBox, "Height above a clear point the sight trace aims at", category: "Koopky CQB/Clear")]
+	[Attribute("0.5", UIWidgets.EditBox, "Height above a clear point the sight trace aims at (m)", category: "Koopky CQB/Clear")]
 	protected float m_fKK_SightAimHeight;
 
-	[Attribute("0.25", UIWidgets.EditBox, "Seconds before a blocked line of sight to the same point is traced again", category: "Koopky CQB/Clear")]
+	[Attribute("0.25", UIWidgets.EditBox, "Time before a blocked line of sight to the same point is traced again (s)", category: "Koopky CQB/Clear")]
 	protected float m_fKK_SightRetry;
 
 	[Attribute("1", UIWidgets.CheckBox, "Leave a clear point as soon as the sight check marks it done", category: "Koopky CQB/Clear")]
 	protected bool m_bKK_StopWhenSeen;
 
-	[Attribute("45", UIWidgets.EditBox, "Movement timeout in seconds", category: "Koopky CQB/Clear")]
+	[Attribute("45", UIWidgets.EditBox, "Movement timeout (s)", category: "Koopky CQB/Clear")]
 	protected float m_fKK_ClearMovementTimeout;
 
-	[Attribute("3", UIWidgets.EditBox, "Fail if standing still with no progress this many seconds", category: "Koopky CQB/Clear")]
+	[Attribute("3", UIWidgets.EditBox, "Fail if standing still with no progress this long (s)", category: "Koopky CQB/Clear")]
 	protected float m_fKK_ClearStuckTimeout;
 
 	[Attribute("1", UIWidgets.EditBox, "Attempts before a target is unreachable", category: "Koopky CQB/Clear")]
@@ -67,28 +74,28 @@ modded class SCR_BaseGameMode
 	[Attribute("1", UIWidgets.CheckBox, "If one node in a room is unreachable, fail the rest of that room", category: "Koopky CQB/Clear")]
 	protected bool m_bKK_ClearFailCluster;
 
-	[Attribute("75", UIWidgets.EditBox, "Building search radius", category: "Koopky CQB/Garrison")]
+	[Attribute("75", UIWidgets.EditBox, "Building search radius (m)", category: "Koopky CQB/Garrison")]
 	protected float m_fKK_GarrisonSearchRadius;
 
-	[Attribute("2.5", UIWidgets.EditBox, "Distance considered arrived", category: "Koopky CQB/Garrison")]
+	[Attribute("2.5", UIWidgets.EditBox, "Distance considered arrived (m)", category: "Koopky CQB/Garrison")]
 	protected float m_fKK_GarrisonArrivalRadius;
 
-	[Attribute("5", UIWidgets.EditBox, "Allowed combat reposition radius", category: "Koopky CQB/Garrison")]
+	[Attribute("5", UIWidgets.EditBox, "Allowed combat reposition radius (m)", category: "Koopky CQB/Garrison")]
 	protected float m_fKK_HoldRadius;
 
-	[Attribute("3", UIWidgets.EditBox, "Seconds between hold corrections", category: "Koopky CQB/Garrison")]
+	[Attribute("3", UIWidgets.EditBox, "Time between hold corrections (s)", category: "Koopky CQB/Garrison")]
 	protected float m_fKK_ReassignmentInterval;
 
-	[Attribute("20", UIWidgets.EditBox, "Minimum seconds at a post before rotating", category: "Koopky CQB/Garrison")]
+	[Attribute("20", UIWidgets.EditBox, "Minimum time at a post before rotating (s)", category: "Koopky CQB/Garrison")]
 	protected float m_fKK_RotateIntervalMin;
 
-	[Attribute("60", UIWidgets.EditBox, "Maximum seconds at a post before rotating", category: "Koopky CQB/Garrison")]
+	[Attribute("60", UIWidgets.EditBox, "Maximum time at a post before rotating (s)", category: "Koopky CQB/Garrison")]
 	protected float m_fKK_RotateIntervalMax;
 
-	[Attribute("45", UIWidgets.EditBox, "Movement timeout in seconds", category: "Koopky CQB/Garrison")]
+	[Attribute("45", UIWidgets.EditBox, "Movement timeout (s)", category: "Koopky CQB/Garrison")]
 	protected float m_fKK_GarrisonMovementTimeout;
 
-	[Attribute("3", UIWidgets.EditBox, "Fail if standing still with no progress this many seconds", category: "Koopky CQB/Garrison")]
+	[Attribute("3", UIWidgets.EditBox, "Fail if standing still with no progress this long (s)", category: "Koopky CQB/Garrison")]
 	protected float m_fKK_GarrisonStuckTimeout;
 
 	[Attribute("1", UIWidgets.EditBox, "Attempts before a hold is unreachable", category: "Koopky CQB/Garrison")]
@@ -103,25 +110,25 @@ modded class SCR_BaseGameMode
 	[Attribute("1", UIWidgets.CheckBox, "While clearing or garrisoning, suppression does not slow recognition and the first shot does not wait", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_SharpCombat;
 
-	[Attribute("1", UIWidgets.EditBox, "Recognition speed while clearing or garrisoning. 1 is normal.", category: "Koopky CQB/Combat")]
+	[Attribute("1", UIWidgets.EditBox, "Recognition speed while clearing or garrisoning (×). 1 is normal.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_PerceptionFactor;
 
 	[Attribute("1", UIWidgets.CheckBox, "Open a closed door ahead, after the squad steps out of its swing", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_OpenDoors;
 
-	[Attribute("0", UIWidgets.CheckBox, "Enable AI navigation improvements (Experimental)", category: "Koopky CQB/Combat")]
-	protected bool m_bKK_NavImprovements;
+	[Attribute("0", UIWidgets.ComboBox, "AI navigation improvements", "Off leaves movement alone. Make Way yields. Pass-through drops character collision only while blocked.", ParamEnumArray.FromEnum(KK_ENavMode))]
+	protected KK_ENavMode m_eKK_NavMode;
 
 	[Attribute("0", UIWidgets.CheckBox, "While clearing or garrisoning, squad members pass through other characters. Doors stay solid", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_IgnoreSquadCollision;
 
-	[Attribute("2", UIWidgets.EditBox, "How far ahead a door is searched, in metres", category: "Koopky CQB/Combat")]
+	[Attribute("2", UIWidgets.EditBox, "How far ahead a door is searched (m)", category: "Koopky CQB/Combat")]
 	protected float m_fKK_DoorReach;
 
-	[Attribute("0.2", UIWidgets.EditBox, "Seconds before another door search", category: "Koopky CQB/Combat")]
+	[Attribute("0.2", UIWidgets.EditBox, "Time before another door search (s)", category: "Koopky CQB/Combat")]
 	protected float m_fKK_DoorSearchInterval;
 
-	[Attribute("0.4", UIWidgets.EditBox, "Metres moved before another door search", category: "Koopky CQB/Combat")]
+	[Attribute("0.4", UIWidgets.EditBox, "Distance moved before another door search (m)", category: "Koopky CQB/Combat")]
 	protected float m_fKK_DoorSearchDistance;
 
 	[Attribute("0", UIWidgets.CheckBox, "Draw interior points while playing from Workbench", category: "Koopky CQB/Debug")]
@@ -264,7 +271,7 @@ modded class SCR_BaseGameMode
 			KK_ReadBool(context, "SharpCombat", m_bKK_SharpCombat);
 			KK_ReadFloat(context, "PerceptionFactor", m_fKK_PerceptionFactor);
 			KK_ReadBool(context, "OpenDoors", m_bKK_OpenDoors);
-			KK_ReadBool(context, "NavImprovements", m_bKK_NavImprovements);
+			KK_ReadNavMode(context);
 			KK_ReadBool(context, "IgnoreSquadCollision", m_bKK_IgnoreSquadCollision);
 			KK_ReadFloat(context, "DoorReach", m_fKK_DoorReach);
 			KK_ReadFloat(context, "DoorSearchInterval", m_fKK_DoorSearchInterval);
@@ -401,7 +408,7 @@ modded class SCR_BaseGameMode
 		context.WriteValue("SharpCombat", m_bKK_SharpCombat);
 		context.WriteValue("PerceptionFactor", m_fKK_PerceptionFactor);
 		context.WriteValue("OpenDoors", m_bKK_OpenDoors);
-		context.WriteValue("NavImprovements", m_bKK_NavImprovements);
+		context.WriteValue("NavMode", m_eKK_NavMode);
 		context.WriteValue("IgnoreSquadCollision", m_bKK_IgnoreSquadCollision);
 		context.WriteValue("DoorReach", m_fKK_DoorReach);
 		context.WriteValue("DoorSearchInterval", m_fKK_DoorSearchInterval);
@@ -583,9 +590,9 @@ modded class SCR_BaseGameMode
 		return m_bKK_OpenDoors;
 	}
 
-	bool KK_GetNavImprovements()
+	int KK_GetNavMode()
 	{
-		return m_bKK_NavImprovements;
+		return KK_ClampNavMode(m_eKK_NavMode);
 	}
 
 	bool KK_GetIgnoreSquadCollision()
@@ -673,7 +680,32 @@ modded class SCR_BaseGameMode
 	void KK_SetSharpCombat(bool value) { m_bKK_SharpCombat = value; }
 	void KK_SetPerceptionFactor(float value) { m_fKK_PerceptionFactor = value; }
 	void KK_SetOpenDoors(bool value) { m_bKK_OpenDoors = value; }
-	void KK_SetNavImprovements(bool value) { m_bKK_NavImprovements = value; }
+	void KK_SetNavMode(int value) { m_eKK_NavMode = KK_ClampNavMode(value); }
+
+	protected void KK_ReadNavMode(notnull SCR_JsonLoadContext context)
+	{
+		int navMode;
+		if (context.ReadValue("NavMode", navMode))
+		{
+			m_eKK_NavMode = KK_ClampNavMode(navMode);
+			return;
+		}
+
+		bool legacy;
+		if (context.ReadValue("NavImprovements", legacy) && legacy)
+			m_eKK_NavMode = KK_ENavMode.MAKE_WAY;
+	}
+
+	protected KK_ENavMode KK_ClampNavMode(int value)
+	{
+		if (value == KK_ENavMode.MAKE_WAY)
+			return KK_ENavMode.MAKE_WAY;
+
+		if (value == KK_ENavMode.PASS_THROUGH)
+			return KK_ENavMode.PASS_THROUGH;
+
+		return KK_ENavMode.OFF;
+	}
 	void KK_SetIgnoreSquadCollision(bool value) { m_bKK_IgnoreSquadCollision = value; }
 	void KK_SetDoorReach(float value) { m_fKK_DoorReach = value; }
 	void KK_SetDoorSearchInterval(float value) { m_fKK_DoorSearchInterval = value; }
@@ -690,6 +722,7 @@ class KK_SavedCollision
 	int m_iAppliedMask;
 	ref array<int> m_aGeomMasks = {};
 	bool m_bLogged;
+	bool m_bPassHold;
 }
 
 class KK_SquadCollision
@@ -710,20 +743,59 @@ class KK_SquadCollision
 				Print("KK: Pass through characters is off");
 			}
 
+			if (PassHoldKept(agent))
+				return;
+
 			Restore(agent);
 			return;
 		}
 
+		BeginGhost(agent);
+	}
+
+	// Drops character collision for one soldier until ReleaseHold.
+	// The layer applies to every character, not one opponent.
+	static bool Hold(notnull AIAgent agent)
+	{
+		if (!BeginGhost(agent))
+			return false;
+
+		KK_SavedCollision saved = s_Saved.Get(agent);
+		if (!saved)
+			return false;
+
+		saved.m_bPassHold = true;
+		return true;
+	}
+
+	static void ReleaseHold(AIAgent agent)
+	{
+		if (!agent || !s_Saved.Contains(agent))
+			return;
+
+		KK_SavedCollision saved = s_Saved.Get(agent);
+		if (!saved || !saved.m_bPassHold)
+			return;
+
+		saved.m_bPassHold = false;
+		if (Enabled())
+			return;
+
+		Restore(agent);
+	}
+
+	protected static bool BeginGhost(notnull AIAgent agent)
+	{
 		IEntity entity = agent.GetControlledEntity();
 		if (!entity || IsPlayer(entity))
 		{
 			Restore(agent);
-			return;
+			return false;
 		}
 
 		Physics physics = entity.GetPhysics();
 		if (!physics)
-			return;
+			return false;
 
 		KK_SavedCollision saved;
 		if (s_Saved.Contains(agent))
@@ -744,6 +816,25 @@ class KK_SquadCollision
 
 		Ghost(entity, physics, saved);
 		EnsureTick();
+		return true;
+	}
+
+	protected static bool PassHoldKept(notnull AIAgent agent)
+	{
+		if (!NavPassThrough())
+			return false;
+
+		KK_SavedCollision saved = s_Saved.Get(agent);
+		return saved && saved.m_bPassHold;
+	}
+
+	protected static bool NavPassThrough()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return false;
+
+		return mode.KK_GetNavMode() == KK_ENavMode.PASS_THROUGH;
 	}
 
 	static void Restore(AIAgent agent)
@@ -973,6 +1064,9 @@ class KK_PerceptionBoost
 
 	static void Apply(notnull AIAgent agent, notnull map<AIAgent, float> saved)
 	{
+		if (!KK_Passage.PassThrough())
+			KK_Passage.ReleasePass(agent);
+
 		KK_SquadCollision.Apply(agent);
 
 		SCR_AICombatComponent combat = Combat(agent);

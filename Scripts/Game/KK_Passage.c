@@ -21,6 +21,14 @@ class KK_PassageOrder
 	bool m_bOverride;
 	bool m_bHoldTimers;
 	bool m_bIssueNow;
+	bool m_bWalk;
+}
+
+class KK_AsideChoice
+{
+	bool m_bFound;
+	vector m_vSpot;
+	float m_fDist;
 }
 
 class KK_OpeningLeaf
@@ -63,10 +71,28 @@ class KK_PassageAgentState
 	vector m_vIssued;
 	bool m_bHaveIssued;
 	bool m_bWasOverride;
+	bool m_bWasWalk;
 	vector m_vPeelOrigin;
 	bool m_bPeelOriginSet;
 	vector m_vHoldPoint;
 	bool m_bHaveHold;
+	vector m_vYieldStart;
+	bool m_bYieldStartSet;
+	float m_fYieldStartedAt;
+	float m_fYieldResumeAt;
+	vector m_vStillOrigin;
+	float m_fStillSince;
+	bool m_bHaveStill;
+	vector m_vYieldTarget;
+	bool m_bHaveYieldTarget;
+	bool m_bMakeWay;
+	bool m_bMakeWayFresh;
+	bool m_bMakeWayRepathed;
+	float m_fMakeWayStartedAt;
+	vector m_vMakeWayOrigin;
+	vector m_vMakeWayTarget;
+	AIAgent m_MakeWayFor;
+	AIAgent m_PassBlocker;
 }
 
 class KK_Passage
@@ -77,7 +103,36 @@ class KK_Passage
 	protected static const float BODY_LENGTH = 0.8;
 	protected static const float LANE_STEP = 0.5;
 	protected static const float AT_SLOT = 0.6;
-	protected static const float PAIR_RANGE = 1.5;
+	// A yield is a short step out of the way, then both soldiers go back to
+	// their goals. Waiting for a wide gap, or backing up the whole corridor,
+	// leaves the squad standing.
+	protected static const float YIELD_RANGE = 1.6;
+	protected static const float HOLD_RANGE = 0.9;
+	protected static const float FOLLOW_HOLD = 0.75;
+	protected static const float YIELD_DONE = 0.5;
+	protected static const float YIELD_MAX_MS = 1000;
+	protected static const float YIELD_RESUME_MS = 1500;
+	protected static const float YIELD_STALE_MS = 500;
+	// A new yield waits until the soldiers involved have been stopped this long.
+	protected static const float YIELD_STILL_MS = 500;
+	protected static const float YIELD_STILL_DISTANCE = 0.3;
+	// Pass-through keeps collision until a body is actually in front, then
+	// drops character collision until that body is behind.
+	protected static const float PASS_BLOCK_RANGE = 1.15;
+	protected static const float PASS_CLEAR_RANGE = 1.6;
+	protected static const float PASS_BEHIND = -0.35;
+	protected static const int YIELD_SEARCH_STEPS = 3;
+	protected static const float YIELD_SEARCH_STEP = 0.6;
+	protected static const float YIELD_FALLBACK = 1.0;
+	// A teammate standing on the path is told to step off it. This covers a
+	// posted soldier or a body in a wide room, which corridor yield ignores.
+	protected static const float MAKE_WAY_REACH = 2.0;
+	protected static const float MAKE_WAY_AHEAD = 0.35;
+	protected static const float MAKE_WAY_LATERAL = 1.05;
+	protected static const float MAKE_WAY_GOAL = 1.0;
+	protected static const float MAKE_WAY_SIDE = 1.3;
+	protected static const float MAKE_WAY_MIN_MS = 1200;
+	protected static const float MAKE_WAY_MAX_MS = 2800;
 	protected static const float SIDE_SAMPLE = 0.8;
 	protected static const float SNAP_TOLERANCE = 0.75;
 	protected static const float STALL_GAP = 0.08;
@@ -99,22 +154,49 @@ class KK_Passage
 	protected static IEntity s_TraceUser;
 	protected static vector s_vProjection = Vector(0.55, 1.0, 0.55);
 
-	static bool Enabled()
+	static int Mode()
 	{
 		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
 		if (!mode)
-			return false;
+			return KK_ENavMode.OFF;
 
-		return mode.KK_GetNavImprovements();
+		return mode.KK_GetNavMode();
 	}
 
-	// Door swing clearance runs with Open doors ahead. Corridor yielding stays
-	// on the navigation-improvements setting.
+	static bool Enabled()
+	{
+		return Mode() == KK_ENavMode.MAKE_WAY;
+	}
+
+	static bool PassThrough()
+	{
+		return Mode() == KK_ENavMode.PASS_THROUGH;
+	}
+
+	static void ReleasePass(AIAgent agent)
+	{
+		if (!agent)
+			return;
+
+		KK_PassageAgentState state = s_mAgents.Get(agent);
+		if (!state)
+			return;
+
+		EndPass(state, agent);
+	}
+
+	// Door swing clearance runs with Open doors ahead, and with Make Way.
+	// Pass-through only joins that door work when Open doors ahead is on.
 	static bool Active()
 	{
-		if (Enabled())
+		if (Enabled() || PassThrough())
 			return true;
 
+		return OpenDoors();
+	}
+
+	protected static bool OpenDoors()
+	{
 		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
 		if (!mode)
 			return true;
@@ -136,21 +218,32 @@ class KK_Passage
 				present.Insert(soldier.m_Agent);
 		}
 
-		DiscoverDoors(soldiers);
-		UpdateStalls();
+		if (!PassThrough())
+			ReleasePassHolds();
 
+		bool handleDoors = Enabled() || OpenDoors();
 		set<AIAgent> claimed = new set<AIAgent>();
-		foreach (IEntity doorEntity, KK_Opening opening : s_mOpenings)
+		if (handleDoors)
 		{
-			if (!opening)
-				continue;
+			DiscoverDoors(soldiers);
+			UpdateStalls();
 
-			ApplyDoor(opening, soldiers, pathfinding, orders, claimed);
+			foreach (IEntity doorEntity, KK_Opening opening : s_mOpenings)
+			{
+				if (!opening)
+					continue;
+
+				ApplyDoor(opening, soldiers, pathfinding, orders, claimed);
+			}
 		}
 
 		if (Enabled())
 			ApplyCorridors(soldiers, pathfinding, orders, claimed);
-		ResumeReleased(soldiers, orders, claimed);
+		else if (PassThrough())
+			ApplyPassThrough(soldiers);
+
+		if (handleDoors)
+			ResumeReleased(soldiers, orders, claimed);
 		ForgetAbsentAgents(present);
 	}
 
@@ -1220,6 +1313,192 @@ class KK_Passage
 		feet.InsertAt(origin, index);
 	}
 
+	protected static void ApplyPassThrough(
+		notnull array<ref KK_PassageSoldier> soldiers)
+	{
+		foreach (KK_PassageSoldier soldier : soldiers)
+		{
+			if (!soldier || !soldier.m_Agent)
+				continue;
+
+			KK_PassageAgentState state = s_mAgents.Get(soldier.m_Agent);
+			if (!Usable(soldier) || soldier.m_bSettled)
+			{
+				if (state)
+					EndPass(state, soldier.m_Agent);
+				continue;
+			}
+
+			vector origin = soldier.m_Agent.GetControlledEntity().GetOrigin();
+			NoteMotion(soldier.m_Agent, origin);
+			state = AgentState(soldier.m_Agent);
+
+			if (state.m_PassBlocker)
+			{
+				if (PassStillOpen(soldier, origin, state.m_PassBlocker, soldiers))
+				{
+					KK_SquadCollision.Hold(soldier.m_Agent);
+					continue;
+				}
+
+				AIAgent next = FindPassBlocker(soldier, origin, soldiers);
+				if (next)
+				{
+					StartPass(soldier, next);
+					continue;
+				}
+
+				EndPass(state, soldier.m_Agent);
+				continue;
+			}
+
+			if (!StoodStill(soldier.m_Agent))
+				continue;
+
+			AIAgent blocker = FindPassBlocker(soldier, origin, soldiers);
+			if (!blocker)
+				continue;
+
+			StartPass(soldier, blocker);
+		}
+	}
+
+	protected static void StartPass(
+		notnull KK_PassageSoldier soldier,
+		notnull AIAgent blocker)
+	{
+		if (!KK_SquadCollision.Hold(soldier.m_Agent))
+			return;
+
+		KK_PassageAgentState state = AgentState(soldier.m_Agent);
+		bool started = state.m_PassBlocker != blocker;
+		state.m_PassBlocker = blocker;
+		if (!started)
+			return;
+
+		PrintFormat(
+			"KK: %1 passing through %2",
+			soldier.m_Agent.GetControlledEntity(),
+			blocker.GetControlledEntity()
+		);
+	}
+
+	protected static void EndPass(
+		notnull KK_PassageAgentState state,
+		notnull AIAgent agent)
+	{
+		if (!state.m_PassBlocker)
+			return;
+
+		state.m_PassBlocker = null;
+		KK_SquadCollision.ReleaseHold(agent);
+	}
+
+	protected static void ReleasePassHolds()
+	{
+		array<AIAgent> agents = {};
+		foreach (AIAgent agent, KK_PassageAgentState state : s_mAgents)
+		{
+			if (state && state.m_PassBlocker)
+				agents.Insert(agent);
+		}
+
+		foreach (AIAgent agent : agents)
+		{
+			KK_PassageAgentState state = s_mAgents.Get(agent);
+			if (state)
+				EndPass(state, agent);
+		}
+	}
+
+	protected static bool PassStillOpen(
+		notnull KK_PassageSoldier mover,
+		vector moverPos,
+		notnull AIAgent blocker,
+		notnull array<ref KK_PassageSoldier> soldiers)
+	{
+		KK_PassageSoldier other = FindSoldier(soldiers, blocker);
+		if (!Usable(other))
+			return false;
+
+		vector body = other.m_Agent.GetControlledEntity().GetOrigin();
+		return !PassedBody(moverPos, mover.m_vGoal, body);
+	}
+
+	protected static bool PassedBody(vector moverPos, vector goal, vector body)
+	{
+		vector toBody = body - moverPos;
+		toBody[1] = 0;
+		float separation = toBody.Length();
+		if (separation > PASS_CLEAR_RANGE)
+			return true;
+
+		vector toGoal = goal - moverPos;
+		toGoal[1] = 0;
+		if (toGoal.Length() < 0.05)
+			return false;
+
+		toGoal.Normalize();
+		return vector.Dot(toBody, toGoal) < PASS_BEHIND;
+	}
+
+	protected static AIAgent FindPassBlocker(
+		notnull KK_PassageSoldier mover,
+		vector moverPos,
+		notnull array<ref KK_PassageSoldier> soldiers)
+	{
+		AIAgent best = null;
+		float bestSeparation = PASS_BLOCK_RANGE;
+
+		foreach (KK_PassageSoldier other : soldiers)
+		{
+			if (!Usable(other) || other.m_Agent == mover.m_Agent)
+				continue;
+
+			vector body = other.m_Agent.GetControlledEntity().GetOrigin();
+			if (!BodyInFront(moverPos, mover.m_vGoal, body, PASS_BLOCK_RANGE))
+				continue;
+
+			vector flat = body - moverPos;
+			flat[1] = 0;
+			float separation = flat.Length();
+			if (separation >= bestSeparation)
+				continue;
+
+			bestSeparation = separation;
+			best = other.m_Agent;
+		}
+
+		return best;
+	}
+
+	protected static bool BodyInFront(
+		vector moverPos,
+		vector goal,
+		vector body,
+		float range)
+	{
+		vector toGoal = goal - moverPos;
+		toGoal[1] = 0;
+		float goalLength = toGoal.Length();
+		if (goalLength < 0.4)
+			return false;
+
+		vector toBody = body - moverPos;
+		toBody[1] = 0;
+		float separation = toBody.Length();
+		if (separation < 0.05 || separation > range)
+			return false;
+
+		float ahead = vector.Dot(toBody, toGoal) / goalLength;
+		if (ahead < 0.2)
+			return false;
+
+		vector off = toBody - (toGoal * (ahead / goalLength));
+		off[1] = 0;
+		return off.Length() <= 0.85;
+	}
+
 	protected static void ApplyCorridors(
 		notnull array<ref KK_PassageSoldier> soldiers,
 		AIPathfindingComponent pathfinding,
@@ -1228,6 +1507,29 @@ class KK_Passage
 	{
 		map<AIAgent, vector> backups = new map<AIAgent, vector>();
 		set<AIAgent> holds = new set<AIAgent>();
+		map<AIAgent, vector> asides = new map<AIAgent, vector>();
+		set<AIAgent> aside = new set<AIAgent>();
+		set<AIAgent> goingThrough = new set<AIAgent>();
+
+		foreach (KK_PassageSoldier soldier : soldiers)
+		{
+			if (!Usable(soldier))
+				continue;
+
+			NoteMotion(
+				soldier.m_Agent,
+				soldier.m_Agent.GetControlledEntity().GetOrigin()
+			);
+		}
+
+		ApplyMakeWay(
+			soldiers,
+			pathfinding,
+			claimed,
+			asides,
+			aside,
+			goingThrough
+		);
 
 		for (int i = 0; i < soldiers.Count(); i++)
 		{
@@ -1246,7 +1548,19 @@ class KK_Passage
 
 				IEntity secondUser = second.m_Agent.GetControlledEntity();
 				vector secondPos = secondUser.GetOrigin();
+				if (
+					aside.Contains(first.m_Agent) ||
+					aside.Contains(second.m_Agent) ||
+					goingThrough.Contains(first.m_Agent) ||
+					goingThrough.Contains(second.m_Agent)
+				)
+				{
+					continue;
+				}
+
 				float separation = vector.Distance(firstPos, secondPos);
+				if (separation > YIELD_RANGE)
+					continue;
 
 				bool secondBlocksFirst = BlocksSegment(
 					secondPos,
@@ -1273,27 +1587,29 @@ class KK_Passage
 
 					if (firstYields)
 					{
-						AssignBackup(
+						YieldTo(
 							backups,
+							holds,
 							first,
 							firstPos,
 							second.m_vGoal,
-							pathfinding
+							pathfinding,
+							second.m_Agent,
+							separation
 						);
-						if (separation <= PAIR_RANGE)
-							holds.Insert(second.m_Agent);
 					}
 					else
 					{
-						AssignBackup(
+						YieldTo(
 							backups,
+							holds,
 							second,
 							secondPos,
 							first.m_vGoal,
-							pathfinding
+							pathfinding,
+							first.m_Agent,
+							separation
 						);
-						if (separation <= PAIR_RANGE)
-							holds.Insert(first.m_Agent);
 					}
 
 					continue;
@@ -1301,33 +1617,35 @@ class KK_Passage
 
 				if (secondBlocksFirst)
 				{
-					AssignBackup(
+					YieldTo(
 						backups,
+						holds,
 						second,
 						secondPos,
 						first.m_vGoal,
-						pathfinding
+						pathfinding,
+						first.m_Agent,
+						separation
 					);
-					if (separation <= PAIR_RANGE)
-						holds.Insert(first.m_Agent);
 					continue;
 				}
 
 				if (firstBlocksSecond)
 				{
-					AssignBackup(
+					YieldTo(
 						backups,
+						holds,
 						first,
 						firstPos,
 						second.m_vGoal,
-						pathfinding
+						pathfinding,
+						second.m_Agent,
+						separation
 					);
-					if (separation <= PAIR_RANGE)
-						holds.Insert(second.m_Agent);
 					continue;
 				}
 
-				if (separation > PAIR_RANGE)
+				if (separation > FOLLOW_HOLD)
 					continue;
 
 				if (!NarrowAt(pathfinding, firstPos, secondPos - firstPos))
@@ -1337,17 +1655,37 @@ class KK_Passage
 					continue;
 
 				if (IsBehind(firstPos, first.m_vGoal, secondPos))
-					holds.Insert(first.m_Agent);
+				{
+					if (YieldWindowOpen(first.m_Agent, firstPos))
+						holds.Insert(first.m_Agent);
+				}
 				else if (IsBehind(secondPos, second.m_vGoal, firstPos))
-					holds.Insert(second.m_Agent);
+				{
+					if (YieldWindowOpen(second.m_Agent, secondPos))
+						holds.Insert(second.m_Agent);
+				}
 			}
+		}
+
+		for (int asideIndex = 0; asideIndex < asides.Count(); asideIndex++)
+		{
+			AIAgent agent = asides.GetKey(asideIndex);
+			holds.RemoveItem(agent);
+			backups.Remove(agent);
+
+			KK_PassageAgentState state = AgentState(agent);
+			if (!state.m_MakeWayFor)
+				continue;
+
+			holds.RemoveItem(state.m_MakeWayFor);
+			backups.Remove(state.m_MakeWayFor);
 		}
 
 		foreach (AIAgent agent, vector backup : backups)
 		{
 			holds.RemoveItem(agent);
 			claimed.Insert(agent);
-			PutOrder(orders, agent, backup, true, false);
+			PutOrder(orders, agent, backup, true, false, false);
 		}
 
 		foreach (AIAgent agent : holds)
@@ -1368,6 +1706,562 @@ class KK_Passage
 				true
 			);
 		}
+
+		foreach (AIAgent agent, vector spot : asides)
+		{
+			claimed.Insert(agent);
+			PutOrder(orders, agent, spot, true, true, false);
+			ReleaseMakeWayMover(soldiers, orders, claimed, agent);
+		}
+	}
+
+	protected static void ApplyMakeWay(
+		notnull array<ref KK_PassageSoldier> soldiers,
+		AIPathfindingComponent pathfinding,
+		notnull set<AIAgent> claimed,
+		notnull map<AIAgent, vector> asides,
+		notnull set<AIAgent> aside,
+		notnull set<AIAgent> goingThrough)
+	{
+		foreach (KK_PassageSoldier soldier : soldiers)
+		{
+			if (!Usable(soldier))
+				continue;
+
+			if (claimed.Contains(soldier.m_Agent))
+			{
+				KK_PassageAgentState claimedState =
+					s_mAgents.Get(soldier.m_Agent);
+				if (claimedState && claimedState.m_bMakeWay)
+					ClearMakeWay(claimedState);
+				continue;
+			}
+
+			KK_PassageAgentState state = s_mAgents.Get(soldier.m_Agent);
+			if (!state || !state.m_bMakeWay)
+				continue;
+
+			vector origin = soldier.m_Agent.GetControlledEntity().GetOrigin();
+			if (!KeepMakeWay(state, soldiers, origin))
+				continue;
+
+			asides.Set(soldier.m_Agent, state.m_vMakeWayTarget);
+			aside.Insert(soldier.m_Agent);
+			if (state.m_MakeWayFor)
+				goingThrough.Insert(state.m_MakeWayFor);
+		}
+
+		for (int i = 0; i < soldiers.Count(); i++)
+		{
+			KK_PassageSoldier first = soldiers[i];
+			if (!Usable(first) || claimed.Contains(first.m_Agent))
+				continue;
+
+			vector firstPos = first.m_Agent.GetControlledEntity().GetOrigin();
+
+			for (int j = i + 1; j < soldiers.Count(); j++)
+			{
+				KK_PassageSoldier second = soldiers[j];
+				if (!Usable(second) || claimed.Contains(second.m_Agent))
+					continue;
+
+				if (
+					aside.Contains(first.m_Agent) ||
+					aside.Contains(second.m_Agent)
+				)
+				{
+					continue;
+				}
+
+				vector secondPos =
+					second.m_Agent.GetControlledEntity().GetOrigin();
+				KK_PassageSoldier mover;
+				KK_PassageSoldier blocker;
+				vector moverPos;
+				vector blockerPos;
+				if (!ChooseMakeWay(
+					first,
+					firstPos,
+					second,
+					secondPos,
+					mover,
+					blocker,
+					moverPos,
+					blockerPos
+				))
+				{
+					continue;
+				}
+
+				if (
+					aside.Contains(blocker.m_Agent) ||
+					goingThrough.Contains(blocker.m_Agent) ||
+					claimed.Contains(blocker.m_Agent)
+				)
+				{
+					continue;
+				}
+
+				if (
+					!StoodStill(mover.m_Agent) ||
+					!StoodStill(blocker.m_Agent)
+				)
+				{
+					continue;
+				}
+
+				vector spot;
+				if (!StepAside(
+					blockerPos,
+					moverPos,
+					mover.m_vGoal,
+					pathfinding,
+					spot
+				))
+				{
+					continue;
+				}
+
+				KK_PassageAgentState state = AgentState(blocker.m_Agent);
+				state.m_bMakeWay = true;
+				state.m_bMakeWayFresh = true;
+				state.m_bMakeWayRepathed = false;
+				state.m_fMakeWayStartedAt = Now();
+				state.m_vMakeWayOrigin = blockerPos;
+				state.m_vMakeWayTarget = spot;
+				state.m_MakeWayFor = mover.m_Agent;
+				asides.Set(blocker.m_Agent, spot);
+				aside.Insert(blocker.m_Agent);
+				goingThrough.Insert(mover.m_Agent);
+
+				PrintFormat(
+					"KK: %1 stepping aside for %2",
+					blocker.m_Agent.GetControlledEntity(),
+					mover.m_Agent.GetControlledEntity()
+				);
+			}
+		}
+	}
+
+	protected static bool KeepMakeWay(
+		notnull KK_PassageAgentState state,
+		notnull array<ref KK_PassageSoldier> soldiers,
+		vector blockerPos)
+	{
+		float age = Now() - state.m_fMakeWayStartedAt;
+		if (age >= MAKE_WAY_MAX_MS)
+		{
+			ClearMakeWay(state);
+			return false;
+		}
+
+		if (age < MAKE_WAY_MIN_MS)
+			return true;
+
+		KK_PassageSoldier mover = FindSoldier(soldiers, state.m_MakeWayFor);
+		if (!Usable(mover))
+		{
+			ClearMakeWay(state);
+			return false;
+		}
+
+		vector moverPos = mover.m_Agent.GetControlledEntity().GetOrigin();
+		if (!MoverHasPassed(blockerPos, moverPos, mover.m_vGoal))
+			return true;
+
+		ClearMakeWay(state);
+		return false;
+	}
+
+	protected static bool MoverHasPassed(
+		vector blockerPos,
+		vector moverPos,
+		vector moverGoal)
+	{
+		vector toBlocker = blockerPos - moverPos;
+		toBlocker[1] = 0;
+		if (toBlocker.Length() > MAKE_WAY_REACH + 1.0)
+			return true;
+
+		vector toGoal = moverGoal - moverPos;
+		toGoal[1] = 0;
+		if (toGoal.Length() < 0.3)
+			return true;
+
+		float ahead = vector.Dot(toBlocker, toGoal) / toGoal.Length();
+		return ahead < -0.35;
+	}
+
+	protected static void ClearMakeWay(notnull KK_PassageAgentState state)
+	{
+		state.m_bMakeWay = false;
+		state.m_bMakeWayFresh = false;
+		state.m_bMakeWayRepathed = false;
+		state.m_MakeWayFor = null;
+	}
+
+	protected static bool ChooseMakeWay(
+		notnull KK_PassageSoldier first,
+		vector firstPos,
+		notnull KK_PassageSoldier second,
+		vector secondPos,
+		out KK_PassageSoldier mover,
+		out KK_PassageSoldier blocker,
+		out vector moverPos,
+		out vector blockerPos)
+	{
+		mover = null;
+		blocker = null;
+		moverPos = vector.Zero;
+		blockerPos = vector.Zero;
+
+		bool secondInFirst = InTheWay(secondPos, firstPos, first.m_vGoal);
+		bool firstInSecond = InTheWay(firstPos, secondPos, second.m_vGoal);
+		if (!secondInFirst && !firstInSecond)
+			return false;
+
+		if (secondInFirst && !firstInSecond)
+		{
+			mover = first;
+			blocker = second;
+			moverPos = firstPos;
+			blockerPos = secondPos;
+		}
+		else if (firstInSecond && !secondInFirst)
+		{
+			mover = second;
+			blocker = first;
+			moverPos = secondPos;
+			blockerPos = firstPos;
+		}
+		else if (first.m_bSettled && !second.m_bSettled)
+		{
+			mover = second;
+			blocker = first;
+			moverPos = secondPos;
+			blockerPos = firstPos;
+		}
+		else if (second.m_bSettled && !first.m_bSettled)
+		{
+			mover = first;
+			blocker = second;
+			moverPos = firstPos;
+			blockerPos = secondPos;
+		}
+		else if (
+			vector.Distance(firstPos, first.m_vGoal) >=
+			vector.Distance(secondPos, second.m_vGoal)
+		)
+		{
+			mover = first;
+			blocker = second;
+			moverPos = firstPos;
+			blockerPos = secondPos;
+		}
+		else
+		{
+			mover = second;
+			blocker = first;
+			moverPos = secondPos;
+			blockerPos = firstPos;
+		}
+
+		// Only a soldier who still has a node to reach can demand the way.
+		if (mover.m_bSettled)
+			return false;
+
+		// Two soldiers moving the same way are a file. Pulling the lead
+		// off his node makes him turn around and breaks the flow.
+		if (SameWayFile(mover, moverPos, blocker, blockerPos))
+			return false;
+
+		return true;
+	}
+
+	protected static bool SameWayFile(
+		notnull KK_PassageSoldier mover,
+		vector moverPos,
+		notnull KK_PassageSoldier blocker,
+		vector blockerPos)
+	{
+		if (blocker.m_bSettled)
+			return false;
+
+		if (!SameDirection(
+			moverPos,
+			mover.m_vGoal,
+			blockerPos,
+			blocker.m_vGoal
+		))
+		{
+			return false;
+		}
+
+		return IsBehind(moverPos, mover.m_vGoal, blockerPos);
+	}
+
+	protected static bool InTheWay(vector body, vector from, vector goal)
+	{
+		vector toGoal = goal - from;
+		toGoal[1] = 0;
+		float goalLength = toGoal.Length();
+		if (goalLength < MAKE_WAY_GOAL)
+			return false;
+
+		vector toBody = body - from;
+		toBody[1] = 0;
+		float separation = toBody.Length();
+		if (separation < 0.05 || separation > MAKE_WAY_REACH)
+			return false;
+
+		float ahead = vector.Dot(toBody, toGoal) / goalLength;
+		if (ahead < MAKE_WAY_AHEAD || ahead > goalLength - 0.3)
+			return false;
+
+		vector off = toBody - (toGoal * (ahead / goalLength));
+		off[1] = 0;
+		if (off.Length() <= MAKE_WAY_LATERAL)
+			return true;
+
+		if (separation > 1.5)
+			return false;
+
+		toGoal.Normalize();
+		toBody.Normalize();
+		return vector.Dot(toGoal, toBody) >= 0.55;
+	}
+
+	protected static bool StepAside(
+		vector blockerPos,
+		vector moverPos,
+		vector moverGoal,
+		AIPathfindingComponent pathfinding,
+		out vector spot)
+	{
+		spot = blockerPos;
+
+		vector forward = moverGoal - moverPos;
+		forward[1] = 0;
+		if (forward.Length() < 0.05)
+		{
+			forward = blockerPos - moverPos;
+			forward[1] = 0;
+		}
+
+		if (forward.Length() < 0.05)
+			return false;
+
+		forward.Normalize();
+		vector side = Vector(-forward[2], 0, forward[0]);
+		KK_AsideChoice choice = new KK_AsideChoice();
+
+		TakeAside(
+			choice,
+			blockerPos + (side * MAKE_WAY_SIDE),
+			moverPos,
+			moverGoal,
+			pathfinding
+		);
+		TakeAside(
+			choice,
+			blockerPos - (side * MAKE_WAY_SIDE),
+			moverPos,
+			moverGoal,
+			pathfinding
+		);
+
+		if (!choice.m_bFound)
+		{
+			TakeAside(
+				choice,
+				blockerPos + (side * (MAKE_WAY_SIDE + 0.6)),
+				moverPos,
+				moverGoal,
+				pathfinding
+			);
+			TakeAside(
+				choice,
+				blockerPos - (side * (MAKE_WAY_SIDE + 0.6)),
+				moverPos,
+				moverGoal,
+				pathfinding
+			);
+		}
+
+		if (!choice.m_bFound)
+		{
+			vector rear = moverPos - (forward * 1.2);
+			TakeAside(
+				choice,
+				rear + (side * 0.8),
+				moverPos,
+				moverGoal,
+				pathfinding
+			);
+			TakeAside(
+				choice,
+				rear - (side * 0.8),
+				moverPos,
+				moverGoal,
+				pathfinding
+			);
+		}
+
+		if (!choice.m_bFound)
+			return false;
+
+		spot = choice.m_vSpot;
+		return true;
+	}
+
+	protected static void TakeAside(
+		notnull KK_AsideChoice choice,
+		vector desired,
+		vector moverPos,
+		vector moverGoal,
+		AIPathfindingComponent pathfinding)
+	{
+		vector candidate;
+		if (!AsideCandidate(
+			desired,
+			moverPos,
+			moverGoal,
+			pathfinding,
+			candidate
+		))
+		{
+			return;
+		}
+
+		vector flat = candidate - moverPos;
+		flat[1] = 0;
+		float dist = flat.Length();
+		if (choice.m_bFound && dist <= choice.m_fDist)
+			return;
+
+		choice.m_bFound = true;
+		choice.m_vSpot = candidate;
+		choice.m_fDist = dist;
+	}
+
+	protected static bool AsideCandidate(
+		vector desired,
+		vector moverPos,
+		vector moverGoal,
+		AIPathfindingComponent pathfinding,
+		out vector spot)
+	{
+		spot = desired;
+		vector projected;
+		bool onMesh = Project(pathfinding, desired, projected);
+		if (!onMesh)
+			onMesh = ProjectLoose(pathfinding, desired, projected);
+
+		if (!onMesh)
+			return false;
+
+		vector flat = projected - moverPos;
+		flat[1] = 0;
+		if (flat.Length() < 0.95)
+			return false;
+
+		if (StillOnPath(projected, moverPos, moverGoal))
+			return false;
+
+		spot = projected;
+		return true;
+	}
+
+	protected static bool StillOnPath(vector body, vector from, vector goal)
+	{
+		vector toGoal = goal - from;
+		toGoal[1] = 0;
+		float goalLength = toGoal.Length();
+		if (goalLength < 0.3)
+			return false;
+
+		vector toBody = body - from;
+		toBody[1] = 0;
+		float ahead = vector.Dot(toBody, toGoal) / goalLength;
+		if (ahead < 0.0)
+			return false;
+
+		vector off = toBody - (toGoal * (ahead / goalLength));
+		off[1] = 0;
+		return off.Length() <= 0.9;
+	}
+
+	protected static void ReleaseMakeWayMover(
+		notnull array<ref KK_PassageSoldier> soldiers,
+		notnull map<AIAgent, ref KK_PassageOrder> orders,
+		notnull set<AIAgent> claimed,
+		notnull AIAgent blocker)
+	{
+		KK_PassageAgentState state = AgentState(blocker);
+		if (!state.m_bMakeWay || !state.m_MakeWayFor)
+			return;
+
+		if (claimed.Contains(state.m_MakeWayFor))
+			return;
+
+		KK_PassageSoldier mover = FindSoldier(soldiers, state.m_MakeWayFor);
+		if (!Usable(mover))
+			return;
+
+		state.m_bMakeWayFresh = false;
+		claimed.Insert(mover.m_Agent);
+
+		if (state.m_bMakeWayRepathed)
+			return;
+
+		IEntity blockerUser = blocker.GetControlledEntity();
+		bool stepped =
+			blockerUser &&
+			vector.Distance(
+				blockerUser.GetOrigin(),
+				state.m_vMakeWayOrigin
+			) >= 0.4;
+
+		if (!stepped)
+		{
+			IEntity moverUser = mover.m_Agent.GetControlledEntity();
+			PutOrder(
+				orders,
+				mover.m_Agent,
+				HoldPoint(mover.m_Agent, moverUser.GetOrigin()),
+				true,
+				true,
+				false
+			);
+			return;
+		}
+
+		state.m_bMakeWayRepathed = true;
+		PutOrder(
+			orders,
+			mover.m_Agent,
+			mover.m_vGoal,
+			false,
+			false,
+			true,
+			true
+		);
+	}
+
+	protected static KK_PassageSoldier FindSoldier(
+		notnull array<ref KK_PassageSoldier> soldiers,
+		AIAgent agent)
+	{
+		if (!agent)
+			return null;
+
+		foreach (KK_PassageSoldier soldier : soldiers)
+		{
+			if (soldier && soldier.m_Agent == agent)
+				return soldier;
+		}
+
+		return null;
 	}
 
 	protected static bool Usable(KK_PassageSoldier soldier)
@@ -1486,6 +2380,115 @@ class KK_Passage
 		return firstDistance <= secondDistance;
 	}
 
+	protected static void YieldTo(
+		notnull map<AIAgent, vector> backups,
+		notnull set<AIAgent> holds,
+		notnull KK_PassageSoldier yielder,
+		vector yielderPos,
+		vector awayFromGoal,
+		AIPathfindingComponent pathfinding,
+		notnull AIAgent priorityAgent,
+		float separation)
+	{
+		if (!YieldWindowOpen(yielder.m_Agent, yielderPos, priorityAgent))
+			return;
+
+		AssignBackup(
+			backups,
+			yielder,
+			yielderPos,
+			awayFromGoal,
+			pathfinding
+		);
+
+		if (separation <= HOLD_RANGE)
+			holds.Insert(priorityAgent);
+	}
+
+	protected static bool YieldWindowOpen(
+		notnull AIAgent agent,
+		vector origin,
+		AIAgent other = null)
+	{
+		KK_PassageAgentState state = AgentState(agent);
+		float now = Now();
+
+		if (now < state.m_fYieldResumeAt)
+			return false;
+
+		if (state.m_bYieldStartSet)
+		{
+			float age = now - state.m_fYieldStartedAt;
+			bool stepped =
+				vector.Distance(origin, state.m_vYieldStart) >= YIELD_DONE;
+			bool finished = stepped || age >= YIELD_MAX_MS;
+
+			if (!finished)
+				return true;
+
+			state.m_bYieldStartSet = false;
+			state.m_bHaveYieldTarget = false;
+
+			// Soldiers who separated and came back are a new meeting.
+			// Only a yield that just finished keeps them moving.
+			if (age < YIELD_MAX_MS + YIELD_STALE_MS)
+			{
+				state.m_fYieldResumeAt = now + YIELD_RESUME_MS;
+				return false;
+			}
+		}
+
+		if (!StoodStill(agent))
+			return false;
+
+		if (other && !StoodStill(other))
+			return false;
+
+		state.m_bYieldStartSet = true;
+		state.m_bHaveYieldTarget = false;
+		state.m_vYieldStart = origin;
+		state.m_fYieldStartedAt = now;
+		return true;
+	}
+
+	protected static void NoteMotion(notnull AIAgent agent, vector origin)
+	{
+		KK_PassageAgentState state = AgentState(agent);
+		float now = Now();
+
+		if (!state.m_bHaveStill)
+		{
+			state.m_bHaveStill = true;
+			state.m_vStillOrigin = origin;
+			state.m_fStillSince = now;
+			return;
+		}
+
+		if (vector.Distance(origin, state.m_vStillOrigin) <= YIELD_STILL_DISTANCE)
+			return;
+
+		state.m_vStillOrigin = origin;
+		state.m_fStillSince = now;
+	}
+
+	protected static bool StoodStill(notnull AIAgent agent)
+	{
+		KK_PassageAgentState state = s_mAgents.Get(agent);
+		if (!state || !state.m_bHaveStill)
+			return false;
+
+		return Now() - state.m_fStillSince >= YIELD_STILL_MS;
+	}
+
+	protected static float Now()
+	{
+		BaseWorld world = GetGame().GetWorld();
+		if (!world)
+			return 0;
+
+		return world.GetWorldTime();
+	}
+
 	protected static void AssignBackup(
 		notnull map<AIAgent, vector> backups,
 		notnull KK_PassageSoldier soldier,
@@ -1496,8 +2499,18 @@ class KK_Passage
 		if (backups.Contains(soldier.m_Agent))
 			return;
 
-		vector widening = FindWidening(origin, awayFromGoal, pathfinding);
-		backups.Set(soldier.m_Agent, widening);
+		KK_PassageAgentState state = AgentState(soldier.m_Agent);
+		if (!state.m_bHaveYieldTarget)
+		{
+			state.m_bHaveYieldTarget = true;
+			state.m_vYieldTarget = FindWidening(
+				origin,
+				awayFromGoal,
+				pathfinding
+			);
+		}
+
+		backups.Set(soldier.m_Agent, state.m_vYieldTarget);
 	}
 
 	protected static float WideningDistance(
@@ -1529,9 +2542,9 @@ class KK_Passage
 
 		vector side = Vector(-away[2], 0, away[0]);
 
-		for (int step = 1; step <= 12; step++)
+		for (int step = 1; step <= YIELD_SEARCH_STEPS; step++)
 		{
-			vector point = origin + (away * (step * 0.6));
+			vector point = origin + (away * (step * YIELD_SEARCH_STEP));
 			vector center;
 			if (!Project(pathfinding, point, center))
 				continue;
@@ -1548,10 +2561,11 @@ class KK_Passage
 		}
 
 		vector fallback;
-		if (ProjectLoose(pathfinding, origin + (away * 2), fallback))
+		vector fallbackDesired = origin + (away * YIELD_FALLBACK);
+		if (ProjectLoose(pathfinding, fallbackDesired, fallback))
 			return fallback;
 
-		return origin + (away * 2);
+		return fallbackDesired;
 	}
 
 	protected static bool Project(
@@ -1639,23 +2653,28 @@ class KK_Passage
 		notnull AIAgent agent,
 		vector moveTo,
 		bool overrideMove,
-		bool holdTimers)
+		bool holdTimers,
+		bool walk = true,
+		bool force = false)
 	{
 		KK_PassageAgentState state = AgentState(agent);
 		bool changed = !state.m_bHaveIssued ||
 			vector.Distance(state.m_vIssued, moveTo) > 0.35 ||
-			state.m_bWasOverride != overrideMove;
+			state.m_bWasOverride != overrideMove ||
+			state.m_bWasWalk != walk;
 
 		KK_PassageOrder order = new KK_PassageOrder();
 		order.m_vMoveTo = moveTo;
 		order.m_bOverride = overrideMove;
 		order.m_bHoldTimers = holdTimers;
-		order.m_bIssueNow = changed;
+		order.m_bWalk = walk;
+		order.m_bIssueNow = changed || force;
 		orders.Set(agent, order);
 
 		state.m_bHaveIssued = true;
 		state.m_vIssued = moveTo;
 		state.m_bWasOverride = overrideMove;
+		state.m_bWasWalk = walk;
 
 		if (!holdTimers)
 			state.m_bHaveHold = false;
@@ -1704,7 +2723,10 @@ class KK_Passage
 		}
 
 		foreach (AIAgent agent : stale)
+		{
+			KK_SquadCollision.ReleaseHold(agent);
 			s_mAgents.Remove(agent);
+		}
 	}
 
 	protected static BaseDoorComponent FindDoor(
