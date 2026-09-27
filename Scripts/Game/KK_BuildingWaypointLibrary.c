@@ -419,6 +419,48 @@ class KK_BuildingWaypointLibrary
 		return bestIndex;
 	}
 
+	static int FindWaypointAlongRay(
+		notnull BaseBuilding building,
+		vector rayStart,
+		vector rayDirection,
+		float maxAlong,
+		float maxOffRay)
+	{
+		KK_PrefabWaypointSet prefabSet = FindSet(ResolvePrefabName(building));
+		if (!prefabSet)
+			return -1;
+
+		int bestId = -1;
+		float bestAlong = maxAlong;
+
+		foreach (KK_AuthoredBuildingWaypoint waypoint : prefabSet.m_aWaypoints)
+		{
+			if (!waypoint)
+				continue;
+
+			// Match the debug sphere, which sits above the waypoint.
+			vector world =
+				building.CoordToParent(waypoint.m_vLocalPosition) + Vector(0, 0.35, 0);
+			vector offset = world - rayStart;
+			float along = vector.Dot(offset, rayDirection);
+			if (along < 0.15 || along > maxAlong)
+				continue;
+
+			vector closest = rayStart + (rayDirection * along);
+			float offRay = vector.Distance(closest, world);
+			if (offRay > maxOffRay)
+				continue;
+
+			if (along >= bestAlong)
+				continue;
+
+			bestAlong = along;
+			bestId = waypoint.m_iId;
+		}
+
+		return bestId;
+	}
+
 	static bool RemoveSampleAt(notnull BaseBuilding building, int sampleIndex)
 	{
 		KK_PrefabWaypointSet prefabSet = FindSet(ResolvePrefabName(building));
@@ -552,6 +594,30 @@ class KK_BuildingWaypointLibrary
 
 		if (to.m_aLinks.Find(fromId) < 0)
 			to.m_aLinks.Insert(fromId);
+
+		return true;
+	}
+
+	static bool UnlinkWaypoints(
+		notnull KK_PrefabWaypointSet prefabSet,
+		int fromId,
+		int toId)
+	{
+		KK_AuthoredBuildingWaypoint from = FindWaypoint(prefabSet, fromId);
+		KK_AuthoredBuildingWaypoint to = FindWaypoint(prefabSet, toId);
+		if (!from || !to || fromId == toId)
+			return false;
+
+		int fromIndex = from.m_aLinks.Find(toId);
+		int toIndex = to.m_aLinks.Find(fromId);
+		if (fromIndex < 0 && toIndex < 0)
+			return false;
+
+		if (fromIndex >= 0)
+			from.m_aLinks.Remove(fromIndex);
+
+		if (toIndex >= 0)
+			to.m_aLinks.Remove(toIndex);
 
 		return true;
 	}

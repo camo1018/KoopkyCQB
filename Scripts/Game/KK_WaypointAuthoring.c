@@ -23,7 +23,8 @@ enum KK_EWaypointAuthorAction
 	RELEASE_BUILDING,
 	FORBID_ABOVE,
 	FORBID_BELOW,
-	CLEAR_HEIGHTS
+	CLEAR_HEIGHTS,
+	LINK
 }
 
 class KK_WaypointAuthoring
@@ -31,6 +32,7 @@ class KK_WaypointAuthoring
 	protected static BaseBuilding s_LockedBuilding;
 	protected static string s_sLockedPrefab;
 	protected static int s_iLastWaypointId = -1;
+	protected static int s_iLinkFromId = -1;
 	protected static bool s_bDebugDraw = true;
 	protected static ref array<ref Shape> s_aDebugShapes = {};
 	protected static bool s_bDebugTicking;
@@ -159,6 +161,7 @@ class KK_WaypointAuthoring
 		s_LockedBuilding = building;
 		s_sLockedPrefab = prefabName;
 		s_iLastWaypointId = -1;
+		s_iLinkFromId = -1;
 
 		KK_PrefabWaypointSet existing =
 			KK_BuildingWaypointLibrary.FindSet(prefabName);
@@ -196,6 +199,7 @@ class KK_WaypointAuthoring
 		s_LockedBuilding = null;
 		s_sLockedPrefab = string.Empty;
 		s_iLastWaypointId = -1;
+		s_iLinkFromId = -1;
 		RefreshDebugDraw();
 		Notify("Released the building");
 		return true;
@@ -233,6 +237,9 @@ class KK_WaypointAuthoring
 
 		if (s_iLastWaypointId == removedId)
 			s_iLastWaypointId = -1;
+
+		if (s_iLinkFromId == removedId)
+			s_iLinkFromId = -1;
 
 		Notify(string.Format(
 			"Deleted %1, id %2",
@@ -379,6 +386,8 @@ class KK_WaypointAuthoring
 		if (prefabName == s_sLockedPrefab)
 			s_iLastWaypointId = lastWaypointId;
 
+		s_iLinkFromId = -1;
+
 		Notify("Undid last edit");
 		RefreshDebugDraw();
 		return true;
@@ -402,8 +411,6 @@ class KK_WaypointAuthoring
 		else
 			facing.Normalize();
 
-		int linkedFrom = s_iLastWaypointId;
-
 		KK_AuthorEditHistory.Remember(s_sLockedPrefab, s_iLastWaypointId);
 
 		KK_AuthoredBuildingWaypoint waypoint =
@@ -411,8 +418,7 @@ class KK_WaypointAuthoring
 				s_LockedBuilding,
 				type,
 				player.GetOrigin(),
-				facing,
-				linkedFrom
+				facing
 			);
 
 		if (!waypoint)
@@ -429,6 +435,108 @@ class KK_WaypointAuthoring
 			waypoint.m_iId
 		));
 
+		RefreshDebugDraw();
+		return true;
+	}
+
+	static bool LinkWaypointInSight()
+	{
+		if (!RequireLockedBuilding())
+			return false;
+
+		int aimedId = WaypointInSight();
+		if (aimedId < 0)
+		{
+			Notify("Not looking at a waypoint");
+			return false;
+		}
+
+		KK_PrefabWaypointSet prefabSet = GetLockedSet();
+		if (!prefabSet)
+			return false;
+
+		KK_AuthoredBuildingWaypoint aimed =
+			KK_BuildingWaypointLibrary.FindWaypoint(prefabSet, aimedId);
+		if (!aimed)
+		{
+			Notify("Not looking at a waypoint");
+			return false;
+		}
+
+		if (s_iLinkFromId < 0)
+		{
+			s_iLinkFromId = aimedId;
+			Notify(string.Format(
+				"Link from %1 %2. Look at the other point",
+				TypeLabel(aimed.m_eType),
+				aimedId
+			));
+			RefreshDebugDraw();
+			return true;
+		}
+
+		if (s_iLinkFromId == aimedId)
+		{
+			s_iLinkFromId = -1;
+			Notify("Link cancelled");
+			RefreshDebugDraw();
+			return true;
+		}
+
+		KK_AuthoredBuildingWaypoint from =
+			KK_BuildingWaypointLibrary.FindWaypoint(prefabSet, s_iLinkFromId);
+		if (!from)
+		{
+			s_iLinkFromId = aimedId;
+			Notify(string.Format(
+				"Link from %1 %2. Look at the other point",
+				TypeLabel(aimed.m_eType),
+				aimedId
+			));
+			RefreshDebugDraw();
+			return true;
+		}
+
+		bool alreadyLinked = from.m_aLinks.Find(aimedId) >= 0;
+		KK_AuthorEditHistory.Remember(s_sLockedPrefab, s_iLastWaypointId);
+
+		bool changed;
+		if (alreadyLinked)
+			changed = KK_BuildingWaypointLibrary.UnlinkWaypoints(
+				prefabSet,
+				s_iLinkFromId,
+				aimedId
+			);
+		else
+			changed = KK_BuildingWaypointLibrary.LinkWaypoints(
+				prefabSet,
+				s_iLinkFromId,
+				aimedId
+			);
+
+		if (!changed)
+		{
+			KK_AuthorEditHistory.Discard();
+			Notify("Could not change the link");
+			return false;
+		}
+
+		KK_BuildingWaypointLibrary.SaveToDisk();
+
+		string verb = "Linked";
+		if (alreadyLinked)
+			verb = "Unlinked";
+
+		Notify(string.Format(
+			"%1 %2 %3 and %4 %5",
+			verb,
+			TypeLabel(from.m_eType),
+			from.m_iId,
+			TypeLabel(aimed.m_eType),
+			aimedId
+		));
+
+		s_iLinkFromId = -1;
 		RefreshDebugDraw();
 		return true;
 	}
@@ -913,6 +1021,28 @@ class KK_WaypointAuthoring
 		return HeightCommandLabel(HEIGHT_BELOW);
 	}
 
+	static string LinkLabel()
+	{
+		if (s_iLinkFromId < 0)
+			return "Link";
+
+		int aimedId = WaypointInSight();
+		if (aimedId == s_iLinkFromId)
+			return "Cancel link";
+
+		KK_PrefabWaypointSet prefabSet = GetLockedSet();
+		KK_AuthoredBuildingWaypoint from;
+		if (prefabSet)
+			from = KK_BuildingWaypointLibrary.FindWaypoint(prefabSet, s_iLinkFromId);
+		else
+			from = null;
+
+		if (from && aimedId >= 0 && from.m_aLinks.Find(aimedId) >= 0)
+			return "Unlink";
+
+		return "Complete link";
+	}
+
 	static bool BeginForbidAbove()
 	{
 		return BeginOrConfirmHeight(HEIGHT_ABOVE);
@@ -952,6 +1082,13 @@ class KK_WaypointAuthoring
 				s_LockedBuilding.CoordToParent(waypoint.m_vLocalPosition);
 			vector marker = world + Vector(0, 0.35, 0);
 			int color = ColorForType(waypoint.m_eType);
+
+			if (waypoint.m_iId == s_iLinkFromId)
+			{
+				s_aDebugShapes.Insert(
+					Shape.CreateSphere(0xFFFFFF88, shapeFlags, marker, 0.48)
+				);
+			}
 
 			s_aDebugShapes.Insert(
 				Shape.CreateSphere(color, shapeFlags, marker, 0.28)
@@ -1415,6 +1552,26 @@ class KK_WaypointAuthoring
 		);
 	}
 
+	protected static int WaypointInSight()
+	{
+		IEntity player = GetLocalPlayerEntity();
+		if (!player || !s_LockedBuilding)
+			return -1;
+
+		vector start;
+		vector direction;
+		if (!LookDirection(player, start, direction))
+			return -1;
+
+		return KK_BuildingWaypointLibrary.FindWaypointAlongRay(
+			s_LockedBuilding,
+			start,
+			direction,
+			40.0,
+			0.45
+		);
+	}
+
 	protected static IEntity s_LookIgnore;
 
 	protected static bool LookDirection(
@@ -1714,6 +1871,9 @@ class KK_WaypointAuthorCommand : SCR_BaseGroupCommand
 		if (m_eAction == KK_EWaypointAuthorAction.FORBID_BELOW)
 			return KK_WaypointAuthoring.ForbidBelowLabel();
 
+		if (m_eAction == KK_EWaypointAuthorAction.LINK)
+			return KK_WaypointAuthoring.LinkLabel();
+
 		return super.GetCommandDisplayName();
 	}
 
@@ -1797,6 +1957,9 @@ class KK_WaypointAuthorCommand : SCR_BaseGroupCommand
 
 			case KK_EWaypointAuthorAction.CLEAR_HEIGHTS:
 				return KK_WaypointAuthoring.ClearHeightLimits();
+
+			case KK_EWaypointAuthorAction.LINK:
+				return KK_WaypointAuthoring.LinkWaypointInSight();
 		}
 
 		return false;
