@@ -125,6 +125,9 @@ modded class SCR_BaseGameMode
 	[Attribute("75", UIWidgets.EditBox, "How often a clearing or garrison soldier inside a building checks for a shot (ms). 50 to 100.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_ShotInterval;
 
+	[Attribute("30", UIWidgets.EditBox, "Top off once the loaded magazine is under this percent, after the enemy has stayed out of sight. An empty gun still reloads immediately.", category: "Koopky CQB/Combat")]
+	protected float m_fKK_ReloadRemainder;
+
 	[Attribute("1", UIWidgets.EditBox, "Recognition speed while clearing or garrisoning (×). 1 is normal.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_PerceptionFactor;
 
@@ -290,6 +293,7 @@ modded class SCR_BaseGameMode
 			KK_ReadFloat(context, "ShotDelay", m_fKK_ShotDelay);
 			KK_ReadFloat(context, "ShotInterval", m_fKK_ShotInterval);
 			m_fKK_ShotInterval = KK_ClampShotInterval(m_fKK_ShotInterval);
+			KK_ReadFloat(context, "ReloadRemainder", m_fKK_ReloadRemainder);
 			KK_ReadFloat(context, "PerceptionFactor", m_fKK_PerceptionFactor);
 			KK_ReadBool(context, "OpenDoors", m_bKK_OpenDoors);
 			KK_ReadNavMode(context);
@@ -434,6 +438,7 @@ modded class SCR_BaseGameMode
 		context.WriteValue("RoomCombat", m_bKK_RoomCombat);
 		context.WriteValue("ShotDelay", m_fKK_ShotDelay);
 		context.WriteValue("ShotInterval", KK_GetShotInterval());
+		context.WriteValue("ReloadRemainder", m_fKK_ReloadRemainder);
 		context.WriteValue("PerceptionFactor", m_fKK_PerceptionFactor);
 		context.WriteValue("OpenDoors", m_bKK_OpenDoors);
 		int navMode = KK_GetNavMode();
@@ -634,6 +639,19 @@ modded class SCR_BaseGameMode
 		return KK_ClampShotInterval(m_fKK_ShotInterval);
 	}
 
+	// 0 to 1. 0.3 means the loaded magazine is under 30 percent.
+	float KK_GetReloadRemainder()
+	{
+		float percent = m_fKK_ReloadRemainder;
+		if (percent < 0)
+			return 0;
+
+		if (percent > 100)
+			return 1;
+
+		return percent * 0.01;
+	}
+
 	float KK_GetPerceptionFactor()
 	{
 		return Math.Max(m_fKK_PerceptionFactor, 0);
@@ -737,6 +755,16 @@ modded class SCR_BaseGameMode
 	void KK_SetRoomCombat(bool value) { m_bKK_RoomCombat = value; }
 	void KK_SetShotDelay(float value) { m_fKK_ShotDelay = Math.Max(value, 0); }
 	void KK_SetShotInterval(float value) { m_fKK_ShotInterval = KK_ClampShotInterval(value); }
+	void KK_SetReloadRemainder(float value)
+	{
+		if (value < 0)
+			value = 0;
+
+		if (value > 100)
+			value = 100;
+
+		m_fKK_ReloadRemainder = value;
+	}
 
 	protected float KK_ClampShotInterval(float value)
 	{

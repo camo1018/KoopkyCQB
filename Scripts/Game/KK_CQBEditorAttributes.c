@@ -71,6 +71,7 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 19: return mode.KK_GetPerceptionFactor();
 			case 29: return mode.KK_GetShotDelay();
 			case 30: return mode.KK_GetShotInterval();
+			case 31: return mode.KK_GetReloadRemainder() * 100;
 			case 27: return mode.KK_GetSampleAttempts();
 		}
 
@@ -109,6 +110,7 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 19: mode.KK_SetPerceptionFactor(value); break;
 			case 29: mode.KK_SetShotDelay(value); break;
 			case 30: mode.KK_SetShotInterval(value); break;
+			case 31: mode.KK_SetReloadRemainder(value); break;
 			case 27: mode.KK_SetSampleAttempts((int)Math.Round(value)); break;
 			default: mode.KK_SetHorizontalSpacing(value); break;
 		}
@@ -265,6 +267,8 @@ class KK_CQBAttrRoomCombat : KK_CQBBoolEditorAttribute {}
 class KK_CQBAttrShotDelay : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrShotInterval : KK_CQBFloatEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrReloadRemainder : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrPerceptionFactor : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]

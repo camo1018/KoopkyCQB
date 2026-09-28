@@ -245,8 +245,12 @@ class KK_GarrisonHold
 		new map<IEntity, float>();
 	protected static ref set<IEntity> s_ToppingOff = new set<IEntity>();
 	protected static ref set<IEntity> s_EmptyReload = new set<IEntity>();
+	protected static ref map<IEntity, float> s_SeenEnemyAt =
+		new map<IEntity, float>();
 	protected static const float RELOAD_RETRY_MS = 1500;
 	protected static const float TOPOFF_START_MS = 750;
+	// Sight has to stay broken this long before a partial magazine is swapped.
+	protected static const float EARLY_RELOAD_QUIET_MS = 8000;
 	protected static const string PRIMARY_SLOT = "primary";
 
 	static void SetPinned(IEntity soldier, bool pinned)
@@ -579,9 +583,9 @@ class KK_GarrisonHold
 		);
 	}
 
-	// Swap a partial magazine for a fuller one when he is not in a fight.
-	// An empty gun reloads anyway, including while the building shot is held.
-	// A sprint keeps moving. A visible enemy or incoming fire keeps a loaded gun up.
+	// Swap a partial magazine for a fuller one only after the enemy has stayed
+	// out of sight and the loaded mag is low. An empty gun reloads anyway,
+	// including while the building shot is held. A sprint keeps moving.
 	static void ConsiderTopOff(IEntity soldier)
 	{
 		IEntity body = CharacterBody(soldier);
@@ -589,10 +593,13 @@ class KK_GarrisonHold
 			return;
 
 		bool dry = GunIsDry(body);
+		NoteEnemySight(body);
 		if (IsIgnoringTargets(body))
 			return;
 
-		if (!dry && ReloadInterrupted(body))
+		// A partial magazine waits until he has been off the enemy for a
+		// while, and until the mag is actually low. An empty gun does not.
+		if (!dry && !EarlyReloadAllowed(body))
 			return;
 
 		CharacterControllerComponent controller = Controller(body);
@@ -620,22 +627,13 @@ class KK_GarrisonHold
 		if (HoldingThrowable(body))
 			return;
 
-		float now = 0;
-		BaseWorld world = GetGame().GetWorld();
-		if (world)
-			now = world.GetWorldTime();
+		float now = WorldTime();
 
 		if (
 			s_ReloadAt.Contains(body) &&
 			now - s_ReloadAt.Get(body) < RELOAD_RETRY_MS
 		)
 		{
-			return;
-		}
-
-		if (!dry && !UseRoomCombat() && HasVisibleTarget(body))
-		{
-			s_ReloadAt.Set(body, now);
 			return;
 		}
 
@@ -779,6 +777,81 @@ class KK_GarrisonHold
 
 		BaseTarget target = utility.m_CombatComponent.GetCurrentTarget();
 		return target && CanSeeTarget(body, target);
+	}
+
+	// A live shot or a target he can still see. Losing that starts the wait.
+	protected static bool SeesEnemy(IEntity body)
+	{
+		if (!body)
+			return false;
+
+		if (s_ShotLive.Contains(body))
+			return true;
+
+		return HasVisibleTarget(body);
+	}
+
+	protected static void NoteEnemySight(IEntity body)
+	{
+		if (!SeesEnemy(body))
+			return;
+
+		s_SeenEnemyAt.Set(body, WorldTime());
+	}
+
+	// He tops off only after the enemy has stayed out of sight, the mag is
+	// under the limit, and nobody is shooting him.
+	protected static bool EarlyReloadAllowed(IEntity body)
+	{
+		if (ReloadInterrupted(body))
+			return false;
+
+		if (!MagazineLow(body))
+			return false;
+
+		if (!s_SeenEnemyAt.Contains(body))
+			return true;
+
+		return WorldTime() - s_SeenEnemyAt.Get(body) >= EARLY_RELOAD_QUIET_MS;
+	}
+
+	protected static bool MagazineLow(IEntity body)
+	{
+		float remainder = ReloadRemainder();
+		if (remainder <= 0)
+			return false;
+
+		BaseMagazineComponent loaded = LoadedMagazine(body);
+		if (!loaded)
+			return true;
+
+		int maxAmmo = loaded.GetMaxAmmoCount();
+		if (maxAmmo <= 0)
+			return false;
+
+		int percent = (int)Math.Round(remainder * 100);
+		return loaded.GetAmmoCount() * 100 < maxAmmo * percent;
+	}
+
+	protected static float ReloadRemainder()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return 0.3;
+
+		return mode.KK_GetReloadRemainder();
+	}
+
+	protected static float WorldTime()
+	{
+		if (!GetGame())
+			return 0;
+
+		BaseWorld world = GetGame().GetWorld();
+		if (!world)
+			return 0;
+
+		return world.GetWorldTime();
 	}
 
 	protected static IEntity FullerMagazine(IEntity body)
@@ -1071,6 +1144,7 @@ class KK_GarrisonHold
 			s_ReloadAt.Remove(body);
 			s_ToppingOff.RemoveItem(body);
 			s_EmptyReload.RemoveItem(body);
+			s_SeenEnemyAt.Remove(body);
 			ClearShot(body);
 			return;
 		}
