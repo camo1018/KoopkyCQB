@@ -22,6 +22,7 @@ class KK_PassageOrder
 	bool m_bHoldTimers;
 	bool m_bIssueNow;
 	bool m_bWalk;
+	bool m_bDoor;
 }
 
 class KK_AsideChoice
@@ -687,7 +688,7 @@ class KK_Passage
 				if (atSlot)
 					dest = SlotPosition(opening, pathfinding, index + 1);
 
-				PutOrder(orders, soldier.m_Agent, dest, true, false);
+				PutOrder(orders, soldier.m_Agent, dest, true, false, true, false, true);
 				continue;
 			}
 
@@ -696,6 +697,9 @@ class KK_Passage
 				soldier.m_Agent,
 				HoldPoint(soldier.m_Agent, feet[index]),
 				true,
+				true,
+				true,
+				false,
 				true
 			);
 		}
@@ -2625,7 +2629,8 @@ class KK_Passage
 		bool overrideMove,
 		bool holdTimers,
 		bool walk = true,
-		bool force = false)
+		bool force = false,
+		bool door = false)
 	{
 		KK_PassageAgentState state = AgentState(agent);
 		bool changed = !state.m_bHaveIssued ||
@@ -2638,6 +2643,7 @@ class KK_Passage
 		order.m_bOverride = overrideMove;
 		order.m_bHoldTimers = holdTimers;
 		order.m_bWalk = walk;
+		order.m_bDoor = door;
 		order.m_bIssueNow = changed || force;
 		orders.Set(agent, order);
 

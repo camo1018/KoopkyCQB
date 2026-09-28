@@ -69,6 +69,8 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 15: return mode.KK_GetGarrisonStuckTimeout();
 			case 16: return mode.KK_GetGarrisonMaximumRetries();
 			case 19: return mode.KK_GetPerceptionFactor();
+			case 29: return mode.KK_GetShotDelay();
+			case 30: return mode.KK_GetShotInterval();
 			case 27: return mode.KK_GetSampleAttempts();
 		}
 
@@ -105,6 +107,8 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 15: mode.KK_SetGarrisonStuckTimeout(value); break;
 			case 16: mode.KK_SetGarrisonMaximumRetries((int)Math.Round(value)); break;
 			case 19: mode.KK_SetPerceptionFactor(value); break;
+			case 29: mode.KK_SetShotDelay(value); break;
+			case 30: mode.KK_SetShotInterval(value); break;
 			case 27: mode.KK_SetSampleAttempts((int)Math.Round(value)); break;
 			default: mode.KK_SetHorizontalSpacing(value); break;
 		}
@@ -163,6 +167,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 11: return mode.KK_GetIgnoreSquadCollision();
 			case 12: return mode.KK_GetWaypointAuthoring();
 			case 13: return mode.KK_GetRotateDuringCombat();
+			case 14: return mode.KK_GetRoomCombat();
 		}
 
 		return mode.KK_GetGarrisonAfterClear();
@@ -184,6 +189,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 11: mode.KK_SetIgnoreSquadCollision(value); break;
 			case 12: mode.KK_SetWaypointAuthoring(value); break;
 			case 13: mode.KK_SetRotateDuringCombat(value); break;
+			case 14: mode.KK_SetRoomCombat(value); break;
 			default: mode.KK_SetGarrisonAfterClear(value); break;
 		}
 	}
@@ -253,6 +259,12 @@ class KK_CQBAttrGarrisonFailCluster : KK_CQBBoolEditorAttribute {}
 class KK_CQBAttrClassifyOpenings : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrSharpCombat : KK_CQBBoolEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrRoomCombat : KK_CQBBoolEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrShotDelay : KK_CQBFloatEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrShotInterval : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrPerceptionFactor : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]

@@ -77,6 +77,36 @@ modded class SCR_AICombatComponent
 			outRetreatTargetChanged,
 			outCompartmentChanged
 		);
+
+		if (!KK_GarrisonHold.UseRoomCombat() || !KK_GarrisonHold.HasBuilding(GetOwner()))
+			return;
+
+		PerceptionComponent perception = PerceptionComponent.Cast(
+			GetOwner().FindComponent(PerceptionComponent)
+		);
+		KK_GarrisonHold.RefreshShot(GetOwner(), perception, m_SelectedTarget);
+
+		BaseTarget preferred = KK_GarrisonHold.ShotTarget(GetOwner());
+		if (!preferred || preferred == m_SelectedTarget)
+			return;
+
+		if (!KK_GarrisonHold.ShotStillVisible(GetOwner()))
+			return;
+
+		// The selector stays on one enemy. In the building, the nearest one
+		// he can see replaces that fixation before the attack behavior runs.
+		// The change reaction is not fired. It would run on every evaluation
+		// while the selector keeps picking someone else, and that hitch stops
+		// the move.
+		m_SelectedTarget = preferred;
+		m_SelectedTargetVisible = true;
+		IEntity preferredEntity = preferred.GetTargetEntity();
+		if (preferredEntity)
+			m_SelectedTargetDestinationPos = preferredEntity.GetOrigin();
+		else
+			m_SelectedTargetDestinationPos = preferred.GetLastSeenPosition();
+		outCurrentTarget = preferred;
+		outSelectedTargetChanged = false;
 	}
 }
 
@@ -88,11 +118,40 @@ class KK_GarrisonHold
 	protected static ref set<IEntity> s_DoorFiring = new set<IEntity>();
 	protected static ref set<IEntity> s_MoveFire = new set<IEntity>();
 	protected static ref set<IEntity> s_MoveWeaponUp = new set<IEntity>();
+	protected static ref set<IEntity> s_MoveFiring = new set<IEntity>();
 	protected static ref set<IEntity> s_MoveWeaponKnown = new set<IEntity>();
 	protected static ref TraceParam s_SightTrace;
 	protected static IEntity s_SightViewer;
 	protected static ref map<IEntity, vector> s_ApproachGoals =
 		new map<IEntity, vector>();
+	protected static ref map<IEntity, IEntity> s_Buildings =
+		new map<IEntity, IEntity>();
+	protected static ref map<IEntity, float> s_ShotAt =
+		new map<IEntity, float>();
+	protected static ref map<IEntity, IEntity> s_ShotLook =
+		new map<IEntity, IEntity>();
+	protected static ref map<IEntity, ref BaseTarget> s_ShotBase =
+		new map<IEntity, ref BaseTarget>();
+	protected static ref set<IEntity> s_ShotLive = new set<IEntity>();
+	protected static ref set<IEntity> s_RoomFire = new set<IEntity>();
+	protected static ref array<BaseTarget> s_Perceived = new array<BaseTarget>();
+	protected static ref array<IEntity> s_Candidates = new array<IEntity>();
+	protected static ref array<float> s_CandidateDist = new array<float>();
+	protected static ref map<IEntity, ref BaseTarget> s_CandidateKnown =
+		new map<IEntity, ref BaseTarget>();
+	protected static IEntity s_ScanBody;
+	protected static IEntity s_ScanBuilding;
+	protected static ref set<IEntity> s_ScanSeen = new set<IEntity>();
+	// Milliseconds the next shot check was scheduled with.
+	protected static int s_iShotTickMs;
+	protected static bool s_bShotTicking;
+	protected static const float ROOM_SCAN_RADIUS = 35;
+	protected static const int SHOT_CANDIDATES = 8;
+	protected static const float LEAN_OFFSET = 0.4;
+	protected static ref map<IEntity, float> s_ShotLean = new map<IEntity, float>();
+	protected static ref map<IEntity, IEntity> s_AimTarget = new map<IEntity, IEntity>();
+	protected static ref map<IEntity, float> s_AimSince = new map<IEntity, float>();
+	protected static ref set<IEntity> s_LeanHeld = new set<IEntity>();
 
 	static void SetPinned(IEntity soldier, bool pinned)
 	{
@@ -201,6 +260,7 @@ class KK_GarrisonHold
 		{
 			SetFireWanted(body, false);
 			s_MoveWeaponKnown.RemoveItem(body);
+			s_MoveFiring.RemoveItem(body);
 			if (s_MoveWeaponUp.Contains(body))
 			{
 				s_MoveWeaponUp.RemoveItem(body);
@@ -220,20 +280,21 @@ class KK_GarrisonHold
 		if (!utility)
 			return;
 
-		if (
-			!IsMoveFire(utility.m_OwnerEntity) &&
-			!IsMoveFire(utility.GetOwner())
-		)
-		{
+		bool firing =
+			IsMoveFire(utility.m_OwnerEntity) ||
+			IsMoveFire(utility.GetOwner()) ||
+			IsRoomFire(utility.m_OwnerEntity) ||
+			IsRoomFire(utility.GetOwner());
+
+		if (!firing)
 			return;
-		}
 
 		if (utility.m_CombatMoveState && utility.m_CombatMoveState.IsExecutingRequest())
 			utility.m_CombatMoveState.CancelRequest();
 
-		BaseTarget target;
+		BaseTarget selected = null;
 		if (utility.m_CombatComponent)
-			target = utility.m_CombatComponent.GetCurrentTarget();
+			selected = utility.m_CombatComponent.GetCurrentTarget();
 
 		IEntity body = utility.m_OwnerEntity;
 		if (!body)
@@ -243,15 +304,25 @@ class KK_GarrisonHold
 				body = agent.GetControlledEntity();
 		}
 
-		// A selected target is not a sightline. Raising for a soldier he
-		// cannot see, then lowering when that selection drops, pumps the gun.
-		bool visible = target && CanSeeTarget(body, target);
-		bool wasUp = body && s_MoveWeaponUp.Contains(body);
-		CommandWeapon(body, visible);
+		RefreshShot(body, utility.m_PerceptionComponent, selected);
+
+		firing =
+			IsMoveFire(body) ||
+			IsRoomFire(body);
+		if (!firing)
+			return;
+
+		// Threat keeps the gun up. He fires only when a sightline reaches
+		// someone. The picked enemy is checked again, so a wall that he
+		// walks behind still blocks the shot.
+		bool visible = ShotStillVisible(body);
+		bool raise = visible || FeelsThreatened(utility);
+		bool wasFiring = body && s_MoveFiring.Contains(body);
+		CommandWeapon(body, raise, visible);
 
 		if (!visible)
 		{
-			if (wasUp && utility.m_LookAction)
+			if (wasFiring && utility.m_LookAction)
 				utility.m_LookAction.Cancel();
 
 			return;
@@ -260,38 +331,707 @@ class KK_GarrisonHold
 		if (!utility.m_LookAction)
 			return;
 
-		IEntity targetEntity = target.GetTargetEntity();
-		if (targetEntity)
-			utility.m_LookAction.LookAt(targetEntity, 100, 3);
-		else
-			utility.m_LookAction.LookAt(target.GetLastSeenPosition(), 100, 3);
+		IEntity lookAt = null;
+		if (body && s_ShotLook.Contains(body))
+			lookAt = s_ShotLook.Get(body);
+
+		if (lookAt)
+		{
+			utility.m_LookAction.LookAt(lookAt, 100, 3);
+			return;
+		}
+
+		BaseTarget shot = ShotTarget(body);
+		if (shot)
+			utility.m_LookAction.LookAt(shot.GetLastSeenPosition(), 100, 3);
 	}
 
-	// Only command the weapon when the sightline changes. Repeating the
-	// same raise or lower restarts the animation.
-	protected static void CommandWeapon(IEntity body, bool raised)
+	// Only command the weapon when the stance changes. Repeating the same
+	// raise or lower restarts the animation.
+	protected static void CommandWeapon(IEntity body, bool raised, bool fire)
 	{
 		if (!body)
 			return;
 
 		bool known = s_MoveWeaponKnown.Contains(body);
-		bool was = s_MoveWeaponUp.Contains(body);
-		if (known && was == raised)
-			return;
+		bool wasRaised = s_MoveWeaponUp.Contains(body);
+		if (!known || wasRaised != raised)
+		{
+			s_MoveWeaponKnown.Insert(body);
+			if (raised)
+				s_MoveWeaponUp.Insert(body);
+			else
+				s_MoveWeaponUp.RemoveItem(body);
 
-		s_MoveWeaponKnown.Insert(body);
-		if (raised)
-			s_MoveWeaponUp.Insert(body);
+			SetWeaponRaised(body, raised);
+		}
+
+		bool wasFiring = s_MoveFiring.Contains(body);
+		if (fire)
+			s_MoveFiring.Insert(body);
 		else
-			s_MoveWeaponUp.RemoveItem(body);
+			s_MoveFiring.RemoveItem(body);
 
-		SetWeaponRaised(body, raised);
-		SetFireWanted(body, raised);
+		// The raise is sent once. The trigger is sent every update, or a
+		// later node clears it and the shot never starts.
+		if (fire || wasFiring)
+			SetFireWanted(body, fire);
 	}
 
-	protected static bool CanSeeTarget(IEntity body, BaseTarget target)
+	protected static bool FeelsThreatened(SCR_AIUtilityComponent utility)
 	{
-		if (!body || !target)
+		if (!utility || !utility.m_ThreatSystem)
+			return false;
+
+		EAIThreatState state = utility.m_ThreatSystem.GetState();
+		return state == EAIThreatState.ALERTED ||
+			state == EAIThreatState.THREATENED;
+	}
+
+	static bool HasBuilding(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		return body && s_Buildings.Contains(body);
+	}
+
+	static bool UseRoomCombat()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return true;
+
+		return mode.KK_GetRoomCombat();
+	}
+
+	static float ShotDelaySeconds()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return 0.15;
+
+		return mode.KK_GetShotDelay();
+	}
+
+	static int ShotIntervalMs()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return 75;
+
+		return (int)Math.Round(mode.KK_GetShotInterval());
+	}
+
+	// Inside the order's building, this soldier's gun is ours. The attack
+	// behavior can still stop him, but it does not decide the shot.
+	static bool OwnsShot(IEntity soldier)
+	{
+		if (!UseRoomCombat())
+			return false;
+
+		IEntity body = CharacterBody(soldier);
+		if (!body || !s_Buildings.Contains(body))
+			return false;
+
+		return PositionInside(s_Buildings.Get(body), body.GetOrigin());
+	}
+
+	static void ApplyRoomShot(SCR_AIUtilityComponent utility)
+	{
+		if (!utility)
+			return;
+
+		IEntity body = utility.m_OwnerEntity;
+		if (!body)
+		{
+			AIAgent agent = AIAgent.Cast(utility.GetOwner());
+			if (agent)
+				body = agent.GetControlledEntity();
+		}
+
+		if (!OwnsShot(body))
+		{
+			ReleaseLean(body);
+			return;
+		}
+
+		BaseTarget selected = null;
+		if (utility.m_CombatComponent)
+			selected = utility.m_CombatComponent.GetCurrentTarget();
+
+		RefreshShot(body, utility.m_PerceptionComponent, selected);
+
+		if (!s_ShotLive.Contains(body))
+		{
+			ClearAim(body);
+			SetLean(body, 0);
+			CommandWeapon(body, FeelsThreatened(utility), false);
+			if (utility.m_LookAction)
+				utility.m_LookAction.Cancel();
+			return;
+		}
+
+		IEntity enemy = null;
+		if (s_ShotLook.Contains(body))
+			enemy = s_ShotLook.Get(body);
+
+		float lean = 0;
+		if (s_ShotLean.Contains(body))
+			lean = s_ShotLean.Get(body);
+
+		bool canShoot = ShotStillVisible(body);
+		if (!canShoot && lean != 0)
+			canShoot = SideStillClear(body, enemy, lean);
+
+		if (canShoot)
+			SetLean(body, lean);
+		else
+			SetLean(body, 0);
+
+		bool fire = AimReady(body, enemy, canShoot);
+		CommandWeapon(body, canShoot || FeelsThreatened(utility), fire);
+		if (!fire)
+			SetFireWanted(body, false);
+
+		if (!canShoot || !utility.m_LookAction)
+			return;
+
+		if (enemy)
+			utility.m_LookAction.LookAt(enemy, 100, 3);
+		else
+		{
+			BaseTarget shot = ShotTarget(body);
+			if (shot)
+				utility.m_LookAction.LookAt(shot.GetLastSeenPosition(), 100, 3);
+		}
+	}
+
+	static void SetGarrisonBuilding(IEntity soldier, IEntity building)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		if (!building)
+		{
+			s_Buildings.Remove(body);
+			ClearShot(body);
+			return;
+		}
+
+		s_Buildings.Set(body, building);
+		EnsureShotTick();
+	}
+
+	// Soldiers on a clear or garrison stay in the building map, including
+	// while they are still outside. The tick drops itself once that map
+	// is empty. Inside, each pass raises, leans, and fires.
+	protected static void EnsureShotTick()
+	{
+		if (s_bShotTicking || s_Buildings.Count() == 0 || !GetGame())
+			return;
+
+		s_bShotTicking = true;
+		s_iShotTickMs = ShotIntervalMs();
+		GetGame().GetCallqueue().CallLater(ShotTick, s_iShotTickMs, false);
+	}
+
+	static void ShotTick()
+	{
+		if (!GetGame() || s_Buildings.Count() == 0 || !UseRoomCombat())
+		{
+			s_bShotTicking = false;
+			return;
+		}
+
+		array<IEntity> bodies = {};
+		for (int i = 0; i < s_Buildings.Count(); i++)
+			bodies.Insert(s_Buildings.GetKey(i));
+
+		foreach (IEntity body : bodies)
+		{
+			if (!body)
+				continue;
+
+			SCR_AIUtilityComponent utility = UtilityOf(body);
+			if (!utility)
+				continue;
+
+			ApplyRoomShot(utility);
+		}
+
+		if (!GetGame() || s_Buildings.Count() == 0 || !UseRoomCombat())
+		{
+			s_bShotTicking = false;
+			return;
+		}
+
+		s_iShotTickMs = ShotIntervalMs();
+		GetGame().GetCallqueue().CallLater(ShotTick, s_iShotTickMs, false);
+	}
+
+	protected static SCR_AIUtilityComponent UtilityOf(IEntity body)
+	{
+		if (!body)
+			return null;
+
+		AIControlComponent control = AIControlComponent.Cast(
+			body.FindComponent(AIControlComponent)
+		);
+
+		if (!control)
+			return null;
+
+		SCR_ChimeraAIAgent agent = SCR_ChimeraAIAgent.Cast(control.GetAIAgent());
+		if (!agent)
+			return null;
+
+		return agent.m_UtilityComponent;
+	}
+
+	static bool IsRoomFire(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		return body && s_RoomFire.Contains(body);
+	}
+
+	static BaseTarget ShotTarget(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !s_ShotBase.Contains(body))
+			return null;
+
+		return s_ShotBase.Get(body);
+	}
+
+	static bool ShotStillVisible(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !s_ShotLive.Contains(body))
+			return false;
+
+		if (s_ShotLook.Contains(body))
+			return CanSeeEntity(body, s_ShotLook.Get(body));
+
+		BaseTarget shot = ShotTarget(body);
+		return shot && CanSeeTarget(body, shot);
+	}
+
+	// True while the room gun has an enemy it is going to shoot. The approach
+	// stops for that shot instead of carrying him past it.
+	static bool WantsSteadyShot(IEntity soldier)
+	{
+		if (!OwnsShot(soldier))
+			return false;
+
+		IEntity body = CharacterBody(soldier);
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (utility)
+			ApplyRoomShot(utility);
+
+		return body && s_ShotLive.Contains(body);
+	}
+
+	// The selected target is one enemy. Inside, check every perceived enemy
+	// and anyone hostile in the room, then keep the nearest one a ray can reach.
+	static void RefreshShot(
+		IEntity soldier,
+		PerceptionComponent perception,
+		BaseTarget selected)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		float now = 0;
+		BaseWorld world = GetGame().GetWorld();
+		if (world)
+			now = world.GetWorldTime();
+
+		if (s_ShotAt.Contains(body) && now - s_ShotAt.Get(body) < ShotIntervalMs())
+		{
+			UpdateRoomFire(body);
+			return;
+		}
+
+		s_ShotAt.Set(body, now);
+		s_ShotLook.Remove(body);
+		s_ShotBase.Remove(body);
+		s_ShotLean.Remove(body);
+		s_ShotLive.RemoveItem(body);
+
+		if (IsIgnoringTargets(body))
+		{
+			UpdateRoomFire(body);
+			return;
+		}
+
+		IEntity building = null;
+		if (s_Buildings.Contains(body))
+			building = s_Buildings.Get(body);
+
+		if (!building || !PositionInside(building, body.GetOrigin()))
+		{
+			ConsiderSelected(body, selected);
+			UpdateRoomFire(body);
+			return;
+		}
+
+		if (!perception)
+		{
+			perception = PerceptionComponent.Cast(
+				body.FindComponent(PerceptionComponent)
+			);
+		}
+
+		s_Candidates.Clear();
+		s_CandidateDist.Clear();
+		s_CandidateKnown.Clear();
+		ConsiderIndoor(perception, body, building, ETargetCategory.ENEMY, false);
+		ConsiderIndoor(perception, body, building, ETargetCategory.DETECTED, true);
+		ConsiderIndoor(perception, body, building, ETargetCategory.UNKNOWN, true);
+		CollectRoom(body, building);
+
+		for (int i = 0; i < s_Candidates.Count(); i++)
+		{
+			IEntity enemy = s_Candidates[i];
+			if (!enemy)
+				continue;
+
+			float lean;
+			if (!CanEngage(body, enemy, lean))
+				continue;
+
+			s_ShotLive.Insert(body);
+			s_ShotLook.Set(body, enemy);
+			s_ShotLean.Set(body, lean);
+
+			BaseTarget known = null;
+			if (s_CandidateKnown.Contains(enemy))
+				known = s_CandidateKnown.Get(enemy);
+
+			if (!known && perception)
+				known = perception.FindTargetPerceptionObject(enemy);
+
+			if (known)
+				s_ShotBase.Set(body, known);
+
+			UpdateRoomFire(body);
+			return;
+		}
+
+		ConsiderSelected(body, selected);
+		UpdateRoomFire(body);
+	}
+
+	protected static void ConsiderSelected(IEntity body, BaseTarget selected)
+	{
+		if (!selected || !CanSeeTarget(body, selected))
+			return;
+
+		s_ShotLive.Insert(body);
+		s_ShotBase.Set(body, selected);
+		IEntity enemy = selected.GetTargetEntity();
+		if (enemy)
+		{
+			s_ShotLook.Set(body, enemy);
+			float lean;
+			CanEngage(body, enemy, lean);
+			s_ShotLean.Set(body, lean);
+		}
+		else
+			s_ShotLean.Set(body, 0);
+	}
+
+	protected static void UpdateRoomFire(IEntity body)
+	{
+		// At the post the attack behavior shoots a perception target. Someone
+		// in the room it has not registered yet still has to be shot, and the
+		// old selected target must not pull that shot back.
+		bool want =
+			s_ShotLive.Contains(body) &&
+			!s_ShotBase.Contains(body) &&
+			!IsMoveFire(body) &&
+			!IsIgnoringTargets(body);
+
+		bool was = s_RoomFire.Contains(body);
+		if (want)
+			s_RoomFire.Insert(body);
+		else
+			s_RoomFire.RemoveItem(body);
+
+		if (was && !want && !IsMoveFire(body))
+		{
+			SetFireWanted(body, false);
+			s_MoveFiring.RemoveItem(body);
+		}
+	}
+
+	protected static void ClearShot(IEntity body)
+	{
+		if (!body)
+			return;
+
+		bool wasRoom = s_RoomFire.Contains(body);
+		s_ShotAt.Remove(body);
+		s_ShotLook.Remove(body);
+		s_ShotBase.Remove(body);
+		s_ShotLean.Remove(body);
+		s_ShotLive.RemoveItem(body);
+		s_RoomFire.RemoveItem(body);
+		ClearAim(body);
+		ReleaseLean(body);
+
+		if (wasRoom && !IsMoveFire(body))
+		{
+			SetFireWanted(body, false);
+			s_MoveFiring.RemoveItem(body);
+		}
+	}
+
+	protected static void ConsiderIndoor(
+		PerceptionComponent perception,
+		IEntity body,
+		IEntity building,
+		ETargetCategory category,
+		bool requireHostile)
+	{
+		if (!perception)
+			return;
+
+		s_Perceived.Clear();
+		perception.GetTargetsList(s_Perceived, category);
+
+		foreach (BaseTarget candidate : s_Perceived)
+		{
+			if (!candidate)
+				continue;
+
+			ChimeraCharacter character = CharacterOf(candidate.GetTargetEntity());
+			if (!character || character == body)
+				continue;
+
+			if (!IsLiving(character))
+				continue;
+
+			if (requireHostile && !IsHostile(body, character))
+				continue;
+
+			if (!PositionInside(building, character.GetOrigin()))
+				continue;
+
+			AddCandidate(
+				character,
+				vector.Distance(body.GetOrigin(), character.GetOrigin()),
+				candidate
+			);
+		}
+	}
+
+	protected static void CollectRoom(IEntity body, IEntity building)
+	{
+		BaseWorld world = GetGame().GetWorld();
+		if (!world)
+			return;
+
+		s_ScanBody = body;
+		s_ScanBuilding = building;
+		s_ScanSeen.Clear();
+
+		world.QueryEntitiesBySphere(
+			body.GetOrigin(),
+			ROOM_SCAN_RADIUS,
+			OnRoomEnemy,
+			null,
+			EQueryEntitiesFlags.DYNAMIC | EQueryEntitiesFlags.WITH_OBJECT
+		);
+
+		s_ScanBody = null;
+		s_ScanBuilding = null;
+		s_ScanSeen.Clear();
+	}
+
+	protected static bool OnRoomEnemy(IEntity entity)
+	{
+		ChimeraCharacter character = CharacterOf(entity);
+		if (!character || character == s_ScanBody)
+			return true;
+
+		if (s_ScanSeen.Contains(character))
+			return true;
+
+		s_ScanSeen.Insert(character);
+
+		if (!IsLiving(character) || !IsHostile(s_ScanBody, character))
+			return true;
+
+		if (!PositionInside(s_ScanBuilding, character.GetOrigin()))
+			return true;
+
+		AddCandidate(
+			character,
+			vector.Distance(s_ScanBody.GetOrigin(), character.GetOrigin()),
+			null
+		);
+		return true;
+	}
+
+	// Nearest first, and only a few of them. The sight rays then stop at the
+	// first one that is actually clear.
+	protected static void AddCandidate(IEntity enemy, float distance, BaseTarget target)
+	{
+		if (!enemy)
+			return;
+
+		int existing = s_Candidates.Find(enemy);
+		if (existing >= 0)
+		{
+			if (target && !s_CandidateKnown.Contains(enemy))
+				s_CandidateKnown.Set(enemy, target);
+
+			return;
+		}
+
+		int index = s_Candidates.Count();
+		for (int i = 0; i < s_Candidates.Count(); i++)
+		{
+			if (distance < s_CandidateDist[i])
+			{
+				index = i;
+				break;
+			}
+		}
+
+		if (index >= SHOT_CANDIDATES)
+			return;
+
+		s_Candidates.InsertAt(enemy, index);
+		s_CandidateDist.InsertAt(distance, index);
+		if (target)
+			s_CandidateKnown.Set(enemy, target);
+
+		while (s_Candidates.Count() > SHOT_CANDIDATES)
+		{
+			int last = s_Candidates.Count() - 1;
+			IEntity dropped = s_Candidates[last];
+			s_Candidates.Remove(last);
+			s_CandidateDist.Remove(last);
+			s_CandidateKnown.Remove(dropped);
+		}
+	}
+
+	protected static ChimeraCharacter CharacterOf(IEntity entity)
+	{
+		IEntity current = entity;
+		int depth;
+		while (current && depth < 6)
+		{
+			ChimeraCharacter character = ChimeraCharacter.Cast(current);
+			if (character)
+				return character;
+
+			current = current.GetParent();
+			depth++;
+		}
+
+		return null;
+	}
+
+	protected static bool IsLiving(IEntity character)
+	{
+		CharacterControllerComponent controller = Controller(character);
+		if (!controller)
+			return false;
+
+		return controller.GetLifeState() != ECharacterLifeState.DEAD;
+	}
+
+	protected static bool IsHostile(IEntity self, IEntity other)
+	{
+		if (!self || !other || self == other)
+			return false;
+
+		SCR_Faction mine = SCR_Faction.Cast(FactionOf(self));
+		SCR_Faction theirs = SCR_Faction.Cast(FactionOf(other));
+		if (!mine || !theirs)
+			return false;
+
+		return mine.IsFactionEnemy(theirs);
+	}
+
+	protected static Faction FactionOf(IEntity entity)
+	{
+		FactionAffiliationComponent affiliation = FactionAffiliationComponent.Cast(
+			entity.FindComponent(FactionAffiliationComponent)
+		);
+		if (!affiliation)
+			return null;
+
+		return affiliation.GetAffiliatedFaction();
+	}
+
+	protected static bool CanEngage(IEntity body, IEntity enemy, out float lean)
+	{
+		lean = 0;
+		if (!body || !enemy)
+			return false;
+
+		bool left;
+		bool right;
+		SidesClear(body, enemy, left, right);
+		if (left && !right)
+			lean = -1;
+		else if (right && !left)
+			lean = 1;
+
+		if (CanSeeEntity(body, enemy))
+			return true;
+
+		return left || right;
+	}
+
+	// Rays start a shoulder-width to either side. He leans toward the only
+	// side that can see the enemy.
+	protected static void SidesClear(
+		IEntity body,
+		IEntity enemy,
+		out bool left,
+		out bool right)
+	{
+		left = false;
+		right = false;
+
+		BaseWorld world = GetGame().GetWorld();
+		if (!world)
+			world = body.GetWorld();
+
+		if (!world)
+			return;
+
+		vector transform[4];
+		body.GetWorldTransform(transform);
+		vector side = transform[0] * LEAN_OFFSET;
+		vector eye = body.GetOrigin() + Vector(0, 1.6, 0);
+		vector feet = enemy.GetOrigin();
+
+		left = SideRay(world, body, eye - side, feet);
+		right = SideRay(world, body, eye + side, feet);
+	}
+
+	protected static bool SideRay(
+		BaseWorld world,
+		IEntity body,
+		vector eye,
+		vector feet)
+	{
+		if (SightClear(world, body, eye, feet + Vector(0, 1.2, 0)))
+			return true;
+
+		return SightClear(world, body, eye, feet + Vector(0, 1.7, 0));
+	}
+
+	protected static bool SideStillClear(IEntity body, IEntity enemy, float lean)
+	{
+		if (!body || !enemy || lean == 0)
 			return false;
 
 		BaseWorld world = GetGame().GetWorld();
@@ -301,24 +1041,128 @@ class KK_GarrisonHold
 		if (!world)
 			return false;
 
+		vector transform[4];
+		body.GetWorldTransform(transform);
+		vector eye = body.GetOrigin() + Vector(0, 1.6, 0);
+		vector side = transform[0] * LEAN_OFFSET;
+		if (lean < 0)
+			eye = eye - side;
+		else
+			eye = eye + side;
+
+		return SideRay(world, body, eye, enemy.GetOrigin());
+	}
+
+	protected static bool AimReady(IEntity body, IEntity enemy, bool canShoot)
+	{
+		if (!canShoot || !enemy)
+			return false;
+
+		float now = 0;
+		BaseWorld world = GetGame().GetWorld();
+		if (world)
+			now = world.GetWorldTime();
+
+		if (!s_AimTarget.Contains(body) || s_AimTarget.Get(body) != enemy)
+		{
+			s_AimTarget.Set(body, enemy);
+			s_AimSince.Set(body, now);
+		}
+
+		return now - s_AimSince.Get(body) >= ShotDelaySeconds() * 1000;
+	}
+
+	protected static void ClearAim(IEntity body)
+	{
+		if (!body)
+			return;
+
+		s_AimTarget.Remove(body);
+		s_AimSince.Remove(body);
+	}
+
+	protected static void SetLean(IEntity body, float lean)
+	{
+		CharacterControllerComponent controller = Controller(body);
+		if (!controller)
+			return;
+
+		s_LeanHeld.Insert(body);
+		controller.SetWantedLeaning(lean);
+	}
+
+	protected static void ReleaseLean(IEntity body)
+	{
+		if (!body || !s_LeanHeld.Contains(body))
+			return;
+
+		s_LeanHeld.RemoveItem(body);
+		CharacterControllerComponent controller = Controller(body);
+		if (controller)
+			controller.SetWantedLeaning(0);
+	}
+
+	static bool SeesTarget(IEntity soldier, BaseTarget target)
+	{
+		return CanSeeTarget(CharacterBody(soldier), target);
+	}
+
+	protected static bool CanSeeTarget(IEntity body, BaseTarget target)
+	{
+		if (!body || !target)
+			return false;
+
 		IEntity enemy = target.GetTargetEntity();
-		vector aim = target.GetLastSeenPosition() + Vector(0, 1.3, 0);
 		if (enemy)
-			aim = enemy.GetOrigin() + Vector(0, 1.3, 0);
+			return CanSeeEntity(body, enemy);
+
+		return CanSeePoint(body, target.GetLastSeenPosition());
+	}
+
+	protected static bool CanSeeEntity(IEntity body, IEntity enemy)
+	{
+		if (!enemy)
+			return false;
+
+		return CanSeePoint(body, enemy.GetOrigin());
+	}
+
+	protected static bool CanSeePoint(IEntity body, vector feet)
+	{
+		if (!body)
+			return false;
+
+		BaseWorld world = GetGame().GetWorld();
+		if (!world)
+			world = body.GetWorld();
+
+		if (!world)
+			return false;
 
 		vector eye = body.GetOrigin() + Vector(0, 1.6, 0);
+		if (vector.Distance(eye, feet) < 0.4)
+			return true;
+
+		// Chest, then head. A frame can clip one of them.
+		if (SightClear(world, body, eye, feet + Vector(0, 1.2, 0)))
+			return true;
+
+		return SightClear(world, body, eye, feet + Vector(0, 1.7, 0));
+	}
+
+	protected static bool SightClear(
+		BaseWorld world,
+		IEntity body,
+		vector eye,
+		vector aim)
+	{
 		vector toAim = aim - eye;
 		float distance = toAim.Length();
-		if (distance < 0.75)
+		if (distance < 0.05)
 			return true;
 
 		toAim = toAim * (1 / distance);
-
-		// The ray starts outside his own body. Characters are ignored, so
-		// only the building can block it. Stopping on a soldier made every
-		// shot look blocked.
-		vector start = eye + (toAim * 0.45);
-		vector end = aim - (toAim * 0.35);
+		vector start = eye + (toAim * 0.4);
 
 		if (!s_SightTrace)
 			s_SightTrace = new TraceParam();
@@ -328,12 +1172,14 @@ class KK_GarrisonHold
 		s_SightTrace.Exclude = body;
 		s_SightTrace.TraceEnt = null;
 		s_SightTrace.Start = start;
-		s_SightTrace.End = end;
+		s_SightTrace.End = aim;
 
 		float fraction = world.TraceMove(s_SightTrace, FilterMoveSight);
 		s_SightViewer = null;
 
-		return fraction >= 0.98;
+		// A wall stops the ray well short. A graze on the frame near the
+		// target still counts as a clear shot.
+		return fraction >= 0.9;
 	}
 
 	protected static bool FilterMoveSight(
@@ -554,7 +1400,7 @@ class KK_GarrisonHold
 		request.m_eMovementType = EMovementType.RUN;
 		request.m_bAimAtTarget = true;
 		request.m_bAimAtTargetEnd = true;
-		request.m_fMoveDuration_s = 6;
+		request.m_fMoveDuration_s = 3;
 		request.m_vAvoidStraightPathDir = vector.Zero;
 
 		state.ApplyNewRequest(request);
@@ -611,35 +1457,32 @@ modded class SCR_AIAttackBehavior
 			agentEntity = m_Utility.GetOwner();
 		}
 
-		// The route outranks aiming until he is on the post. Inside, he still
-		// shoots, but that shot is not allowed to replace the move.
-		if (
-			KK_GarrisonHold.IsIgnoringTargets(character) ||
-			KK_GarrisonHold.IsIgnoringTargets(agentEntity) ||
-			KK_GarrisonHold.IsMoveFire(character) ||
-			KK_GarrisonHold.IsMoveFire(agentEntity)
-		)
-		{
-			return 0;
-		}
-
-		if (
+		// A held post, a doorway, or a burst on the way in stands and shoots.
+		// A bound keeps the attack, and combat movement is forced on so the
+		// run toward the next step actually starts.
+		bool pinned =
 			KK_GarrisonHold.IsPinned(character) ||
-			KK_GarrisonHold.IsDoorFiring(character)
-		)
+			KK_GarrisonHold.IsPinned(agentEntity);
+		bool doorFiring =
+			KK_GarrisonHold.IsDoorFiring(character) ||
+			KK_GarrisonHold.IsDoorFiring(agentEntity);
+
+		vector approachGoal;
+		bool steering =
+			KK_GarrisonHold.GetApproachGoal(character, approachGoal) ||
+			KK_GarrisonHold.GetApproachGoal(agentEntity, approachGoal);
+
+		if (pinned || doorFiring)
 		{
 			m_bUseCombatMove = false;
 			if (KK_GarrisonHold.IsPinned(character))
 				KK_GarrisonHold.SetPinned(character, true);
-		}
-		else if (
-			KK_GarrisonHold.IsPinned(agentEntity) ||
-			KK_GarrisonHold.IsDoorFiring(agentEntity)
-		)
-		{
-			m_bUseCombatMove = false;
 			if (KK_GarrisonHold.IsPinned(agentEntity))
 				KK_GarrisonHold.SetPinned(agentEntity, true);
+		}
+		else if (steering)
+		{
+			m_bUseCombatMove = true;
 		}
 
 		return score;
@@ -647,6 +1490,12 @@ modded class SCR_AIAttackBehavior
 
 	override void InitWaitTime(SCR_AIUtilityComponent utility)
 	{
+		if (utility && KK_GarrisonHold.OwnsShot(utility.m_OwnerEntity))
+		{
+			m_fWaitTime.m_Value = KK_GarrisonHold.ShotDelaySeconds();
+			return;
+		}
+
 		if (
 			utility &&
 			KK_PerceptionBoost.IsActiveSoldier(utility.m_OwnerEntity) &&
@@ -840,9 +1689,13 @@ modded class SCR_AIUtilityComponent
 
 		if (ignore)
 			KK_GarrisonHold.EnforceSprintIgnore(this);
+		else if (KK_GarrisonHold.OwnsShot(m_OwnerEntity) || KK_GarrisonHold.OwnsShot(GetOwner()))
+			KK_GarrisonHold.ApplyRoomShot(this);
 		else if (
 			KK_GarrisonHold.IsMoveFire(m_OwnerEntity) ||
-			KK_GarrisonHold.IsMoveFire(GetOwner())
+			KK_GarrisonHold.IsMoveFire(GetOwner()) ||
+			KK_GarrisonHold.IsRoomFire(m_OwnerEntity) ||
+			KK_GarrisonHold.IsRoomFire(GetOwner())
 		)
 			KK_GarrisonHold.ApplyMoveFire(this);
 
@@ -874,7 +1727,21 @@ modded class SCR_AISetWeaponRaised
 			return ENodeResult.SUCCESS;
 		}
 
-		if (KK_GarrisonHold.IsMoveFire(body) || KK_GarrisonHold.IsMoveFire(owner))
+		if (KK_GarrisonHold.OwnsShot(body) || KK_GarrisonHold.OwnsShot(owner))
+		{
+			SCR_ChimeraAIAgent roomSoldier = SCR_ChimeraAIAgent.Cast(owner);
+			if (roomSoldier)
+				KK_GarrisonHold.ApplyRoomShot(roomSoldier.m_UtilityComponent);
+
+			return ENodeResult.SUCCESS;
+		}
+
+		if (
+			KK_GarrisonHold.IsMoveFire(body) ||
+			KK_GarrisonHold.IsMoveFire(owner) ||
+			KK_GarrisonHold.IsRoomFire(body) ||
+			KK_GarrisonHold.IsRoomFire(owner)
+		)
 		{
 			SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(owner);
 			if (soldier)

@@ -25,11 +25,11 @@ A finished clear garrisons that building when nothing else is queued and **Garri
 
 ## Garrison
 
-Puts the squad on posts inside the building. They sprint to the building and ignore enemies until they are inside, so they do not stop to aim on the way. A closed door on the way in does not hold them. After they step out of a door's swing, they move in. Inside, they run to the post and can shoot on the way, but they do not stop to shoot. At the post, they fight from there.
+Puts the squad on posts inside the building. They sprint toward the building and run once they are inside. Outside, a soldier who can see an enemy stops and shoots, then runs to the next step, and repeats. If he cannot see anyone, he keeps running. Inside, with **Fight the nearest enemy in the building** on, a shot stops him until that enemy is gone. The next run still fires on the move, and when that run ends a remaining enemy stops him again. A closed door holds him, and he can shoot while he waits. At the post, he holds and fights from there.
 
 A post only counts if the soldier is on that floor. A sampled interior post allows a wider drift (the garrison hold radius, 5 m). A placed window, door, or post uses the tighter placed-waypoint hold radius (1 m).
 
-A soldier who leaves his post is pulled back on an interval. He rotates to another spot after a random wait between the minimum and maximum (20–60 s). **Rotate during combat** lets that wait count down while he is alerted or threatened, and he walks to the next post instead of chasing. He can shoot on the way to the next post, but he does not stop to shoot.
+A soldier who leaves his post is pulled back on an interval. He rotates to another spot after a random wait between the minimum and maximum (20–60 s). **Rotate during combat** lets that wait count down while he is alerted or threatened, and he walks to the next post instead of chasing. On the way he stops to shoot, then runs to the next step, the same as the approach.
 
 **Hold doors and windows** marks openings and sends soldiers there first. Off, garrison uses the normal interior posts.
 
@@ -48,6 +48,8 @@ A soldier who leaves his post is pulled back on an interval. He rotates to anoth
 ## Combat
 
 While a soldier is clearing or garrisoning, **Recognition speed** replaces his normal speed, then returns when the order ends. 1 is normal. **Stay sharp under fire** keeps suppression from slowing recognition, and the first shot does not wait.
+
+**Fight the nearest enemy in the building** is on. Inside the building, a clearing or garrison soldier fires himself at the nearest enemy he can see, instead of waiting on the normal attack. **Shot check** is how often he looks, in milliseconds, from 50 to 100. It defaults to 75. **Shot delay** is how long that clear sight has to last before the round, in seconds. 0 fires on the next check. If only a step to his left or right can see the enemy, he leans that way and shoots from the peek.
 
 ## Interior
 

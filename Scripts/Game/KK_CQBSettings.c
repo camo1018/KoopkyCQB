@@ -116,6 +116,15 @@ modded class SCR_BaseGameMode
 	[Attribute("1", UIWidgets.CheckBox, "While clearing or garrisoning, suppression does not slow recognition and the first shot does not wait", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_SharpCombat;
 
+	[Attribute("1", UIWidgets.CheckBox, "While clearing or garrisoning, shoot the nearest visible enemy in the building instead of staying on one target", category: "Koopky CQB/Combat")]
+	protected bool m_bKK_RoomCombat;
+
+	[Attribute("0.15", UIWidgets.EditBox, "Seconds from a clear sight to the shot, while clearing or garrisoning inside a building. 0 fires immediately.", category: "Koopky CQB/Combat")]
+	protected float m_fKK_ShotDelay;
+
+	[Attribute("75", UIWidgets.EditBox, "How often a clearing or garrison soldier inside a building checks for a shot (ms). 50 to 100.", category: "Koopky CQB/Combat")]
+	protected float m_fKK_ShotInterval;
+
 	[Attribute("1", UIWidgets.EditBox, "Recognition speed while clearing or garrisoning (×). 1 is normal.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_PerceptionFactor;
 
@@ -277,6 +286,10 @@ modded class SCR_BaseGameMode
 		if (context.StartObject("Combat"))
 		{
 			KK_ReadBool(context, "SharpCombat", m_bKK_SharpCombat);
+			KK_ReadBool(context, "RoomCombat", m_bKK_RoomCombat);
+			KK_ReadFloat(context, "ShotDelay", m_fKK_ShotDelay);
+			KK_ReadFloat(context, "ShotInterval", m_fKK_ShotInterval);
+			m_fKK_ShotInterval = KK_ClampShotInterval(m_fKK_ShotInterval);
 			KK_ReadFloat(context, "PerceptionFactor", m_fKK_PerceptionFactor);
 			KK_ReadBool(context, "OpenDoors", m_bKK_OpenDoors);
 			KK_ReadNavMode(context);
@@ -418,6 +431,9 @@ modded class SCR_BaseGameMode
 
 		context.StartObject("Combat");
 		context.WriteValue("SharpCombat", m_bKK_SharpCombat);
+		context.WriteValue("RoomCombat", m_bKK_RoomCombat);
+		context.WriteValue("ShotDelay", m_fKK_ShotDelay);
+		context.WriteValue("ShotInterval", KK_GetShotInterval());
 		context.WriteValue("PerceptionFactor", m_fKK_PerceptionFactor);
 		context.WriteValue("OpenDoors", m_bKK_OpenDoors);
 		int navMode = KK_GetNavMode();
@@ -603,6 +619,21 @@ modded class SCR_BaseGameMode
 		return m_bKK_SharpCombat;
 	}
 
+	bool KK_GetRoomCombat()
+	{
+		return m_bKK_RoomCombat;
+	}
+
+	float KK_GetShotDelay()
+	{
+		return Math.Max(m_fKK_ShotDelay, 0);
+	}
+
+	float KK_GetShotInterval()
+	{
+		return KK_ClampShotInterval(m_fKK_ShotInterval);
+	}
+
 	float KK_GetPerceptionFactor()
 	{
 		return Math.Max(m_fKK_PerceptionFactor, 0);
@@ -703,6 +734,20 @@ modded class SCR_BaseGameMode
 	void KK_SetGarrisonFailCluster(bool value) { m_bKK_GarrisonFailCluster = value; }
 	void KK_SetClassifyOpenings(bool value) { m_bKK_ClassifyOpenings = value; }
 	void KK_SetSharpCombat(bool value) { m_bKK_SharpCombat = value; }
+	void KK_SetRoomCombat(bool value) { m_bKK_RoomCombat = value; }
+	void KK_SetShotDelay(float value) { m_fKK_ShotDelay = Math.Max(value, 0); }
+	void KK_SetShotInterval(float value) { m_fKK_ShotInterval = KK_ClampShotInterval(value); }
+
+	protected float KK_ClampShotInterval(float value)
+	{
+		if (value < 50)
+			return 50;
+
+		if (value > 100)
+			return 100;
+
+		return value;
+	}
 	void KK_SetPerceptionFactor(float value) { m_fKK_PerceptionFactor = value; }
 	void KK_SetOpenDoors(bool value) { m_bKK_OpenDoors = value; }
 	void KK_SetNavMode(int value) { m_eKK_NavMode = KK_ClampNavMode(value); }

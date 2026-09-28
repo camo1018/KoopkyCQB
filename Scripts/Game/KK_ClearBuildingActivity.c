@@ -328,6 +328,14 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					assignment.m_Agent,
 					m_mPerceptionFactors
 				);
+
+				if (m_Building)
+				{
+					KK_GarrisonHold.SetGarrisonBuilding(
+						assignment.m_Agent.GetControlledEntity(),
+						m_Building
+					);
+				}
 			}
 
 			if (
@@ -2136,6 +2144,10 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		{
 			assignment.m_bFacingApplied = false;
 
+			KK_GarrisonHold.SetGarrisonBuilding(
+				assignment.m_Agent.GetControlledEntity(),
+				null
+			);
 			KK_PerceptionBoost.Restore(
 				assignment.m_Agent,
 				m_mPerceptionFactors
@@ -2159,6 +2171,10 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		{
 			assignment.m_bFacingApplied = false;
 
+			KK_GarrisonHold.SetGarrisonBuilding(
+				assignment.m_Agent.GetControlledEntity(),
+				null
+			);
 			KK_PerceptionBoost.Restore(
 				assignment.m_Agent,
 				m_mPerceptionFactors
@@ -2378,6 +2394,10 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 			if (assignment.m_Agent)
 			{
+				KK_GarrisonHold.SetGarrisonBuilding(
+					assignment.m_Agent.GetControlledEntity(),
+					null
+				);
 				KK_PerceptionBoost.Restore(
 					assignment.m_Agent,
 					m_mPerceptionFactors
@@ -2396,6 +2416,20 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		);
 	}
 
+	protected void ReleaseOrderBuildings()
+	{
+		foreach (KK_InteriorAgentAssignment assignment : m_aAssignments)
+		{
+			if (!assignment || !assignment.m_Agent)
+				continue;
+
+			KK_GarrisonHold.SetGarrisonBuilding(
+				assignment.m_Agent.GetControlledEntity(),
+				null
+			);
+		}
+	}
+
 	void CancelClear()
 	{
 		if (m_bCancelled || m_bFinished)
@@ -2404,6 +2438,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		m_bCancelled = true;
 
 		SendCancelMessagesToAllAgents();
+		ReleaseOrderBuildings();
 		KK_PerceptionBoost.RestoreAll(m_mPerceptionFactors);
 		m_aAssignments.Clear();
 		LowerWeapons();
@@ -2428,6 +2463,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		m_bFinished = true;
 
 		SendCancelMessagesToAllAgents();
+		ReleaseOrderBuildings();
 		KK_PerceptionBoost.RestoreAll(m_mPerceptionFactors);
 		m_aAssignments.Clear();
 		LowerWeapons();
@@ -2546,6 +2582,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		m_bFinished = true;
 		
 		SendCancelMessagesToAllAgents();
+		ReleaseOrderBuildings();
 		KK_PerceptionBoost.RestoreAll(m_mPerceptionFactors);
 		m_aAssignments.Clear();
 		LowerWeapons();

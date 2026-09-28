@@ -18,6 +18,11 @@ class KK_GarrisonAgentAssignment
 	bool m_bCanFight;
 	bool m_bPassageStep;
 	bool m_bInteriorHold;
+	bool m_bBounding;
+	bool m_bHeldDoor;
+	float m_fFireUntil;
+	float m_fBoundUntil;
+	float m_fSteadyUntil;
 	EMovementType m_eApproachSpeed;
 	ref array<vector> m_aRouteGoals = {};
 	int m_iRouteIndex;
@@ -72,6 +77,9 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 	protected static const float STILL_DISTANCE = 0.1;
 	// Interior floors are separated by at least 2 m, so 1 m keeps a hold on its own storey.
 	protected static const float SAME_FLOOR_HEIGHT = 1.0;
+	// Long enough to fire, short enough that the fight still closes on the building.
+	protected static const float FIGHT_WINDOW_MS = 4000.0;
+	protected static const float FIGHT_BOUND_MS = 3000.0;
 
 	void KK_GarrisonBuildingActivity(
 		SCR_AIGroupUtilityComponent utility,
@@ -360,7 +368,14 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			);
 
 			bool advancedRoute = false;
-			if (!onFinalGoal)
+			// A fire window, a steady shot, or a door hold is him standing,
+			// not arriving. Advancing here would walk the route ahead of him.
+			if (
+				!onFinalGoal &&
+				assignment.m_fFireUntil <= currentTime &&
+				assignment.m_fSteadyUntil <= currentTime &&
+				!assignment.m_bHeldDoor
+			)
 			{
 				if (
 					vector.Distance(unitPosition, moveGoal) <=
@@ -401,10 +416,8 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 			bool attacking = IsEngagingEnemy(assignment.m_Agent);
 
-			// Outside, enemies are ignored so the sprint is not broken by a look.
-			// Inside, the route stays above combat. He can shoot on the way,
-			// including while he steps clear of a door, but he does not stop
-			// for the shot. Once the step is done he moves in to the post.
+			// The move stays under the attack. In contact he shoots, then runs
+			// one leg of the route, and repeats until he is on the post.
 			bool settledAtPost = atHold && !passageOverride;
 			bool passageHold = false;
 			bool waitingOnDoor = false;
@@ -412,7 +425,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			if (!insideBuilding)
 			{
 				IEntity doorEntity = assignment.m_DoorEntity;
-				KK_DoorAssist.Handle(
+				waitingOnDoor = KK_DoorAssist.Handle(
 					assignment.m_Agent,
 					AssignmentMoveGoal(assignment),
 					doorEntity
@@ -434,27 +447,6 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				assignment.m_DoorEntity = doorEntity;
 			}
 
-			bool releaseEntry =
-				assignment.m_bEntryPriority &&
-				insideBuilding &&
-				!settledAtPost &&
-				!passageOverride;
-			bool commitEntry =
-				!insideBuilding &&
-				!assignment.m_bEntryPriority &&
-				!settledAtPost &&
-				!attacking;
-
-			if (releaseEntry || commitEntry)
-			{
-				assignment.m_fLastOrderAt = currentTime;
-
-				if (havePassage && !passageOverride)
-					IssuePassageMove(assignment, passageOrder);
-				else if (!passageOverride)
-					IssueMoveOrder(assignment, assignment.m_bRotating);
-			}
-
 			if (assignment.m_bCombatYield && !passageOverride)
 			{
 				assignment.m_bCombatYield = false;
@@ -472,31 +464,18 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 			assignment.m_bPassageStep = passageOverride;
 
-			bool moveFire = insideBuilding && !settledAtPost;
-			KK_GarrisonHold.SetMoveFire(controlledEntity, moveFire);
-			KK_GarrisonHold.SetDoorFiring(controlledEntity, settledAtPost);
+			KK_GarrisonHold.SetGarrisonBuilding(controlledEntity, m_Building);
+			KK_GarrisonHold.SetIgnoringTargets(controlledEntity, false);
+			KK_GarrisonHold.SetMoveFire(controlledEntity, false);
+			KK_GarrisonHold.SetDoorFiring(controlledEntity, false);
 			KK_GarrisonHold.ClearApproachGoal(controlledEntity);
-
-			if (!insideBuilding)
-				KK_GarrisonHold.SuppressTargeting(assignment.m_Agent);
-			else
-			{
-				KK_GarrisonHold.SetIgnoringTargets(controlledEntity, false);
-				if (moveFire)
-				{
-					SCR_ChimeraAIAgent moveSoldier =
-						SCR_ChimeraAIAgent.Cast(assignment.m_Agent);
-					if (moveSoldier)
-						KK_GarrisonHold.ApplyMoveFire(moveSoldier.m_UtilityComponent);
-				}
-			}
 
 			if (!settledAtPost)
 			{
 				KK_GarrisonHold.SetPinned(controlledEntity, false);
 				KK_GarrisonHold.SetTraveling(controlledEntity, false);
 
-				if (!passageOverride)
+				if (!passageOverride && !attacking)
 				{
 					KK_AgentMove.SetWantedSpeed(
 						assignment.m_Agent,
@@ -521,8 +500,6 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 					assignment.m_fRotateAt = NextRotateTime(currentTime);
 					assignment.m_bFacingApplied = false;
 
-					// The travel order outranks combat. Drop it so the post can shoot.
-					CancelAgentOrder(assignment.m_Agent);
 					assignment.m_bEntryPriority = false;
 
 					if (!attacking)
@@ -535,19 +512,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				}
 
 				if (attacking)
-				{
 					assignment.m_bFacingApplied = false;
-					assignment.m_bCombatMove = true;
-				}
-				else
-				{
-					if (assignment.m_bCombatMove)
-					{
-						CancelAgentOrder(assignment.m_Agent);
-						assignment.m_bCombatMove = false;
-						assignment.m_bFacingApplied = false;
-					}
-				}
 
 				if (
 					!attacking &&
@@ -582,6 +547,11 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				}
 
 				KK_GarrisonHold.SetPinned(controlledEntity, true);
+				assignment.m_bBounding = false;
+				assignment.m_bHeldDoor = false;
+				assignment.m_fFireUntil = 0;
+				assignment.m_fBoundUntil = 0;
+				assignment.m_fSteadyUntil = 0;
 				assignment.m_fStartedAt = currentTime;
 				assignment.m_fStillSince = currentTime;
 				assignment.m_vStillPosition = unitPosition;
@@ -621,14 +591,24 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 					assignment.m_bHolding = false;
 				}
 			}
-			if (waitingOnDoor)
+			UpdateApproachFight(
+				assignment,
+				controlledEntity,
+				currentTime,
+				attacking,
+				waitingOnDoor,
+				passageOverride || passageHold,
+				advancedRoute
+			);
+
+			if (waitingOnDoor && !attacking)
 			{
 				KK_AgentMove.SetWantedSpeed(
 					assignment.m_Agent,
 					EMovementType.WALK
 				);
 			}
-			else if (!havePassage)
+			else if (!havePassage && !attacking)
 			{
 				EMovementType approachSpeed = GetApproachSpeed(unitPosition);
 				if (approachSpeed != assignment.m_eApproachSpeed)
@@ -649,19 +629,28 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				}
 			}
 
-			if (
-				waitingOnDoor ||
-				passageHold
-			)
+			bool fightStepping =
+				assignment.m_bBounding ||
+				assignment.m_bHeldDoor ||
+				assignment.m_fFireUntil > currentTime ||
+				assignment.m_fSteadyUntil > currentTime;
+
+			// A visible enemy, a steady room shot, or a closed door pauses
+			// the stuck clock. The travel timeout keeps running through a
+			// gunfight outside, including one in the doorway. A room shot,
+			// a shut door with nobody to shoot, or a passage hold pauses both.
+			bool steadyShot = assignment.m_fSteadyUntil > currentTime;
+			if (passageHold || steadyShot || (waitingOnDoor && !attacking))
 			{
 				assignment.m_fStillSince = currentTime;
 				assignment.m_fStartedAt += timerDelta;
 			}
-			else if (!insideBuilding)
+			else if (
+				waitingOnDoor ||
+				(attacking && HasVisibleTarget(assignment.m_Agent))
+			)
 			{
-				// Threat is held at zero outside, so a nearby enemy does not
-				// count as a fight. The stall still must not fail the post.
-				assignment.m_fStartedAt += timerDelta;
+				assignment.m_fStillSince = currentTime;
 			}
 
 			if (
@@ -676,36 +665,21 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			}
 			else if (
 				!passageHold &&
+				!fightStepping &&
 				currentTime - assignment.m_fStillSince >=
 				m_GarrisonWaypoint.GetStuckTimeout() * 1000.0
 			)
 			{
-				if (!insideBuilding)
-				{
-					PrintFormat(
-						"KK: Garrison unit stood still outside, sending him to %1",
-						assignment.m_Target.m_vPosition
-					);
+				PrintFormat(
+					"KK: Garrison unit stood still, sending him to %1",
+					assignment.m_Target.m_vPosition
+				);
 
-					assignment.m_fStillSince = currentTime;
-					assignment.m_fStartedAt = currentTime;
-					assignment.m_fLastOrderAt = currentTime;
-					assignment.m_bCombatYield = false;
-					IssueMoveOrder(assignment, true);
-				}
-				else
-				{
-					PrintFormat(
-						"KK: Garrison unit stood still inside, sending him to %1",
-						assignment.m_Target.m_vPosition
-					);
-
-					assignment.m_fStillSince = currentTime;
-					assignment.m_fStartedAt = currentTime;
-					assignment.m_fLastOrderAt = currentTime;
-					assignment.m_bCombatYield = false;
-					IssueMoveOrder(assignment, true);
-				}
+				assignment.m_fStillSince = currentTime;
+				assignment.m_fStartedAt = currentTime;
+				assignment.m_fLastOrderAt = currentTime;
+				assignment.m_bCombatYield = false;
+				IssueMoveOrder(assignment, true);
 			}
 
 			if (
@@ -714,35 +688,20 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				timeoutMs
 			)
 			{
-				if (!insideBuilding)
-				{
-					PrintFormat(
-						"KK: Garrison approach restarted toward %1",
-						assignment.m_Target.m_vPosition
-					);
+				PrintFormat(
+					"KK: Garrison hold timed out at %1",
+					assignment.m_Target.m_vPosition
+				);
 
-					assignment.m_fStillSince = currentTime;
-					assignment.m_fStartedAt = currentTime;
-					assignment.m_fLastOrderAt = currentTime;
-					assignment.m_bCombatYield = false;
-					IssueMoveOrder(assignment, true);
-				}
-				else
-				{
-					PrintFormat(
-						"KK: Garrison hold timed out at %1",
-						assignment.m_Target.m_vPosition
-					);
-
-					ReleaseAssignment(i, true);
-					i--;
-					continue;
-				}
+				ReleaseAssignment(i, true);
+				i--;
+				continue;
 			}
 
 			if (
 				!havePassage &&
 				!waitingOnDoor &&
+				!attacking &&
 				currentTime - assignment.m_fLastOrderAt >=
 				intervalMs
 			)
@@ -1349,6 +1308,205 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		return false;
 	}
 
+	// Contact keeps the attack in charge of the shot. Between bursts he runs
+	// toward the next route step instead of planting outside the building.
+	protected void UpdateApproachFight(
+		notnull KK_GarrisonAgentAssignment assignment,
+		notnull IEntity controlledEntity,
+		float currentTime,
+		bool attacking,
+		bool waitingOnDoor,
+		bool passageBusy,
+		bool advancedRoute)
+	{
+		// A bound keeps moving. The room gun and the attack still fire,
+		// so he shoots on the way instead of planting for every target.
+		bool boundRunning =
+			assignment.m_bBounding &&
+			!advancedRoute &&
+			currentTime < assignment.m_fBoundUntil;
+
+		if (boundRunning && !waitingOnDoor && !passageBusy)
+		{
+			assignment.m_fSteadyUntil = 0;
+			KK_GarrisonHold.SetDoorFiring(controlledEntity, false);
+			KK_GarrisonHold.SetPinned(controlledEntity, false);
+			KK_GarrisonHold.SetApproachGoal(
+				controlledEntity,
+				AssignmentMoveGoal(assignment)
+			);
+			KK_AgentMove.SetWantedSpeed(
+				assignment.m_Agent,
+				EMovementType.RUN
+			);
+			return;
+		}
+
+		if (
+			HoldSteadyShot(
+				assignment,
+				controlledEntity,
+				currentTime,
+				waitingOnDoor
+			)
+		)
+		{
+			return;
+		}
+
+		if (!attacking)
+		{
+			assignment.m_bBounding = false;
+			assignment.m_bHeldDoor = false;
+			assignment.m_fFireUntil = 0;
+			assignment.m_fBoundUntil = 0;
+			assignment.m_fSteadyUntil = 0;
+			KK_GarrisonHold.ClearApproachGoal(controlledEntity);
+			KK_GarrisonHold.SetDoorFiring(controlledEntity, false);
+			return;
+		}
+
+		if (passageBusy)
+		{
+			KK_GarrisonHold.ClearApproachGoal(controlledEntity);
+			KK_GarrisonHold.SetDoorFiring(controlledEntity, false);
+			return;
+		}
+
+		if (waitingOnDoor)
+		{
+			assignment.m_bHeldDoor = true;
+			KK_GarrisonHold.ClearApproachGoal(controlledEntity);
+			KK_GarrisonHold.SetDoorFiring(controlledEntity, true);
+			KK_GarrisonHold.SetPinned(controlledEntity, true);
+			return;
+		}
+
+		KK_GarrisonHold.SetDoorFiring(controlledEntity, false);
+
+		// The wait was the burst. The next move is through the doorway.
+		if (assignment.m_bHeldDoor)
+		{
+			BeginFightBound(assignment, controlledEntity, currentTime);
+			return;
+		}
+
+		bool roomShot = KK_GarrisonHold.OwnsShot(controlledEntity);
+
+		if (!assignment.m_bBounding)
+		{
+			bool seeEnemy = HasVisibleTarget(assignment.m_Agent);
+			if (!roomShot && seeEnemy && assignment.m_fFireUntil <= 0)
+				assignment.m_fFireUntil = currentTime + FIGHT_WINDOW_MS;
+
+			if (currentTime < assignment.m_fFireUntil)
+			{
+				KK_GarrisonHold.ClearApproachGoal(controlledEntity);
+				KK_GarrisonHold.SetPinned(controlledEntity, true);
+				return;
+			}
+
+			BeginFightBound(assignment, controlledEntity, currentTime);
+			return;
+		}
+
+		if (advancedRoute || currentTime >= assignment.m_fBoundUntil)
+		{
+			assignment.m_bBounding = false;
+
+			if (!roomShot && HasVisibleTarget(assignment.m_Agent))
+			{
+				assignment.m_fFireUntil = currentTime + FIGHT_WINDOW_MS;
+				KK_GarrisonHold.ClearApproachGoal(controlledEntity);
+				KK_GarrisonHold.SetPinned(controlledEntity, true);
+				return;
+			}
+
+			BeginFightBound(assignment, controlledEntity, currentTime);
+			return;
+		}
+
+		KK_GarrisonHold.SetPinned(controlledEntity, false);
+		KK_GarrisonHold.SetApproachGoal(
+			controlledEntity,
+			AssignmentMoveGoal(assignment)
+		);
+		KK_AgentMove.SetWantedSpeed(
+			assignment.m_Agent,
+			EMovementType.RUN
+		);
+	}
+
+	// The room gun found someone. Plant until that shot is finished, including
+	// a short tail so the aim delay can still break the shot.
+	protected bool HoldSteadyShot(
+		notnull KK_GarrisonAgentAssignment assignment,
+		notnull IEntity controlledEntity,
+		float currentTime,
+		bool waitingOnDoor)
+	{
+		bool want = KK_GarrisonHold.WantsSteadyShot(controlledEntity);
+		if (want)
+		{
+			float until = currentTime +
+				KK_GarrisonHold.ShotDelaySeconds() * 1000.0 +
+				250.0;
+			if (until > assignment.m_fSteadyUntil)
+				assignment.m_fSteadyUntil = until;
+		}
+
+		if (!want && currentTime >= assignment.m_fSteadyUntil)
+			return false;
+
+		assignment.m_bBounding = false;
+		assignment.m_fFireUntil = 0;
+		assignment.m_fBoundUntil = 0;
+		KK_GarrisonHold.ClearApproachGoal(controlledEntity);
+		KK_GarrisonHold.SetPinned(controlledEntity, true);
+		KK_GarrisonHold.SetDoorFiring(controlledEntity, waitingOnDoor);
+		return true;
+	}
+
+	protected void BeginFightBound(
+		notnull KK_GarrisonAgentAssignment assignment,
+		notnull IEntity controlledEntity,
+		float currentTime)
+	{
+		assignment.m_bBounding = true;
+		assignment.m_bHeldDoor = false;
+		assignment.m_fFireUntil = 0;
+		assignment.m_fBoundUntil = currentTime + FIGHT_BOUND_MS;
+		assignment.m_fLastOrderAt = currentTime;
+		KK_GarrisonHold.SetPinned(controlledEntity, false);
+		KK_GarrisonHold.SetApproachGoal(
+			controlledEntity,
+			AssignmentMoveGoal(assignment)
+		);
+		IssueMoveOrder(assignment, true, assignment.m_bCanFight);
+	}
+
+	protected bool HasVisibleTarget(notnull AIAgent agent)
+	{
+		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
+		if (!soldier || !soldier.m_UtilityComponent)
+			return false;
+
+		SCR_AICombatComponent combat =
+			soldier.m_UtilityComponent.m_CombatComponent;
+
+		if (!combat)
+			return false;
+
+		BaseTarget target = combat.GetCurrentTarget();
+		if (!target)
+			return false;
+
+		return KK_GarrisonHold.SeesTarget(
+			agent.GetControlledEntity(),
+			target
+		);
+	}
+
 	protected bool IsEngagingEnemy(notnull AIAgent agent)
 	{
 		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
@@ -1405,9 +1563,6 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			vector origin =
 				assignment.m_Agent.GetControlledEntity().GetOrigin();
 
-			// The way into the building does not use the door hold.
-			if (!IsInsideBuilding(origin))
-				continue;
 			bool settled = IsAtHold(
 				origin,
 				assignment.m_Target.m_vPosition,
@@ -1482,7 +1637,13 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			assignment.m_Agent.GetControlledEntity();
 
 		if (controlledEntity)
-			speed = GetApproachSpeed(controlledEntity.GetOrigin());
+		{
+			// A sprint order drops the weapon and then blocks the shot.
+			if (IsEngagingEnemy(assignment.m_Agent))
+				speed = EMovementType.RUN;
+			else
+				speed = GetApproachSpeed(controlledEntity.GetOrigin());
+		}
 
 		assignment.m_eApproachSpeed = speed;
 
@@ -1507,8 +1668,8 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		);
 	}
 
-	// The route stays above attack, avoid, and retreat until he is on the
-	// post. Dropping it so he can shoot is what plants him short of the door.
+	// Same score as a clear move. Attack-selected is higher, so a fight
+	// takes over and the sprint to the building does not.
 	protected float PriorityForSoldier(
 		notnull AIAgent agent,
 		bool forceTravel,
@@ -1518,16 +1679,10 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 	{
 		entering = false;
 
-		// Extra arguments stay so existing calls compile. They do not lower
-		// the route. A lower move is what lets him stop and shoot.
 		if (holdForDoor)
 			return 0;
 
-		IEntity body = agent.GetControlledEntity();
-		if (body && !IsInsideBuilding(body.GetOrigin()))
-			entering = true;
-
-		return KK_AgentMove.EnterBuildingPriorityLevel();
+		return KK_AgentMove.PRIORITY_LEVEL;
 	}
 
 	protected void ApplyMovePriority(
@@ -1646,6 +1801,10 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				assignment.m_Agent.GetControlledEntity(),
 				false
 			);
+			KK_GarrisonHold.SetGarrisonBuilding(
+				assignment.m_Agent.GetControlledEntity(),
+				null
+			);
 		}
 	}
 
@@ -1686,6 +1845,10 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			KK_GarrisonHold.SetMoveFire(
 				assignment.m_Agent.GetControlledEntity(),
 				false
+			);
+			KK_GarrisonHold.SetGarrisonBuilding(
+				assignment.m_Agent.GetControlledEntity(),
+				null
 			);
 			assignment.m_bFacingApplied = false;
 
