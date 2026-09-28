@@ -147,7 +147,7 @@ class KK_GarrisonHold
 	protected static bool s_bShotTicking;
 	protected static const float ROOM_SCAN_RADIUS = 35;
 	protected static const int SHOT_CANDIDATES = 8;
-	protected static const float LEAN_OFFSET = 0.4;
+	protected static const float LEAN_OFFSET = 1.0;
 	protected static ref map<IEntity, float> s_ShotLean = new map<IEntity, float>();
 	protected static ref map<IEntity, IEntity> s_AimTarget = new map<IEntity, IEntity>();
 	protected static ref map<IEntity, float> s_AimSince = new map<IEntity, float>();
@@ -989,8 +989,8 @@ class KK_GarrisonHold
 		return left || right;
 	}
 
-	// Rays start a shoulder-width to either side. He leans toward the only
-	// side that can see the enemy.
+	// Rays start a meter to either side. He leans toward the only side
+	// that can see the enemy.
 	protected static void SidesClear(
 		IEntity body,
 		IEntity enemy,
