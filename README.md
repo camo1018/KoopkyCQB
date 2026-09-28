@@ -25,11 +25,11 @@ A finished clear garrisons that building when nothing else is queued and **Garri
 
 ## Garrison
 
-Puts the squad on posts inside the building. They sprint to the building and ignore enemies until they are near the post, so they do not stop to aim on the way. A closed door on the way in does not hold them. Stepping out of a door's swing still lets them aim and shoot. If an enemy is already in the building, they stop and shoot. Near the post, they fight from there.
+Puts the squad on posts inside the building. They sprint to the building and ignore enemies until they are inside, so they do not stop to aim on the way. A closed door on the way in does not hold them. After they step out of a door's swing, they move in. Inside, they run to the post and can shoot on the way, but they do not stop to shoot. At the post, they fight from there.
 
 A post only counts if the soldier is on that floor. A sampled interior post allows a wider drift (the garrison hold radius, 5 m). A placed window, door, or post uses the tighter placed-waypoint hold radius (1 m).
 
-A soldier who leaves his post is pulled back on an interval. He rotates to another spot after a random wait between the minimum and maximum (20–60 s). **Rotate during combat** lets that wait count down while he is alerted or threatened, and he walks to the next post instead of chasing. He does not stop to shoot on the way unless a threat is already inside the building, or he is near the next post.
+A soldier who leaves his post is pulled back on an interval. He rotates to another spot after a random wait between the minimum and maximum (20–60 s). **Rotate during combat** lets that wait count down while he is alerted or threatened, and he walks to the next post instead of chasing. He can shoot on the way to the next post, but he does not stop to shoot.
 
 **Hold doors and windows** marks openings and sends soldiers there first. Off, garrison uses the normal interior posts.
 

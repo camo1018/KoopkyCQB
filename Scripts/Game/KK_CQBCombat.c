@@ -59,7 +59,6 @@ modded class SCR_AICombatComponent
 	{
 		if (KK_GarrisonHold.IsIgnoringTargets(GetOwner()))
 		{
-			KK_GarrisonHold.NoteTarget(GetOwner(), GetCurrentTarget());
 			KK_ClearTarget();
 			outWeaponEvent = false;
 			outSelectedTargetChanged = false;
@@ -87,9 +86,11 @@ class KK_GarrisonHold
 	protected static ref set<IEntity> s_Traveling = new set<IEntity>();
 	protected static ref set<IEntity> s_IgnoringTargets = new set<IEntity>();
 	protected static ref set<IEntity> s_DoorFiring = new set<IEntity>();
-	protected static ref set<IEntity> s_InteriorContact = new set<IEntity>();
-	protected static ref map<IEntity, IEntity> s_RushBuilding =
-		new map<IEntity, IEntity>();
+	protected static ref set<IEntity> s_MoveFire = new set<IEntity>();
+	protected static ref set<IEntity> s_MoveWeaponUp = new set<IEntity>();
+	protected static ref set<IEntity> s_MoveWeaponKnown = new set<IEntity>();
+	protected static ref TraceParam s_SightTrace;
+	protected static IEntity s_SightViewer;
 	protected static ref map<IEntity, vector> s_ApproachGoals =
 		new map<IEntity, vector>();
 
@@ -182,50 +183,206 @@ class KK_GarrisonHold
 		return body && s_DoorFiring.Contains(body);
 	}
 
-	// The sprint ignore clears the selected target. Remember an enemy who
-	// was already inside so the rush can still stop for him.
-	static void SetRushBuilding(IEntity soldier, IEntity building)
+	// Inside, he shoots without giving the attack the behavior. The route
+	// stays selected, so a shot cannot plant him short of the post.
+	static void SetMoveFire(IEntity soldier, bool enabled)
 	{
 		IEntity body = CharacterBody(soldier);
 		if (!body)
 			return;
 
-		if (building)
-			s_RushBuilding.Set(body, building);
+		bool was = s_MoveFire.Contains(body);
+		if (enabled)
+			s_MoveFire.Insert(body);
 		else
-			s_RushBuilding.Remove(body);
+			s_MoveFire.RemoveItem(body);
+
+		if (was && !enabled)
+		{
+			SetFireWanted(body, false);
+			s_MoveWeaponKnown.RemoveItem(body);
+			if (s_MoveWeaponUp.Contains(body))
+			{
+				s_MoveWeaponUp.RemoveItem(body);
+				SetWeaponRaised(body, false);
+			}
+		}
 	}
 
-	static void NoteTarget(IEntity soldier, BaseTarget target)
+	static bool IsMoveFire(IEntity soldier)
 	{
 		IEntity body = CharacterBody(soldier);
-		if (!body || !target || !s_RushBuilding.Contains(body))
+		return body && s_MoveFire.Contains(body);
+	}
+
+	static void ApplyMoveFire(SCR_AIUtilityComponent utility)
+	{
+		if (!utility)
 			return;
 
-		IEntity building = s_RushBuilding.Get(body);
-		if (!building)
+		if (
+			!IsMoveFire(utility.m_OwnerEntity) &&
+			!IsMoveFire(utility.GetOwner())
+		)
+		{
+			return;
+		}
+
+		if (utility.m_CombatMoveState && utility.m_CombatMoveState.IsExecutingRequest())
+			utility.m_CombatMoveState.CancelRequest();
+
+		BaseTarget target;
+		if (utility.m_CombatComponent)
+			target = utility.m_CombatComponent.GetCurrentTarget();
+
+		IEntity body = utility.m_OwnerEntity;
+		if (!body)
+		{
+			AIAgent agent = AIAgent.Cast(utility.GetOwner());
+			if (agent)
+				body = agent.GetControlledEntity();
+		}
+
+		// A selected target is not a sightline. Raising for a soldier he
+		// cannot see, then lowering when that selection drops, pumps the gun.
+		bool visible = target && CanSeeTarget(body, target);
+		bool wasUp = body && s_MoveWeaponUp.Contains(body);
+		CommandWeapon(body, visible);
+
+		if (!visible)
+		{
+			if (wasUp && utility.m_LookAction)
+				utility.m_LookAction.Cancel();
+
+			return;
+		}
+
+		if (!utility.m_LookAction)
 			return;
 
-		vector position = target.GetLastSeenPosition();
 		IEntity targetEntity = target.GetTargetEntity();
 		if (targetEntity)
-			position = targetEntity.GetOrigin();
-
-		if (PositionInside(building, position))
-			s_InteriorContact.Insert(body);
+			utility.m_LookAction.LookAt(targetEntity, 100, 3);
+		else
+			utility.m_LookAction.LookAt(target.GetLastSeenPosition(), 100, 3);
 	}
 
-	static bool HasInteriorContact(IEntity soldier)
+	// Only command the weapon when the sightline changes. Repeating the
+	// same raise or lower restarts the animation.
+	protected static void CommandWeapon(IEntity body, bool raised)
 	{
-		IEntity body = CharacterBody(soldier);
-		return body && s_InteriorContact.Contains(body);
+		if (!body)
+			return;
+
+		bool known = s_MoveWeaponKnown.Contains(body);
+		bool was = s_MoveWeaponUp.Contains(body);
+		if (known && was == raised)
+			return;
+
+		s_MoveWeaponKnown.Insert(body);
+		if (raised)
+			s_MoveWeaponUp.Insert(body);
+		else
+			s_MoveWeaponUp.RemoveItem(body);
+
+		SetWeaponRaised(body, raised);
+		SetFireWanted(body, raised);
 	}
 
-	static void ClearInteriorContact(IEntity soldier)
+	protected static bool CanSeeTarget(IEntity body, BaseTarget target)
 	{
-		IEntity body = CharacterBody(soldier);
-		if (body)
-			s_InteriorContact.RemoveItem(body);
+		if (!body || !target)
+			return false;
+
+		BaseWorld world = GetGame().GetWorld();
+		if (!world)
+			world = body.GetWorld();
+
+		if (!world)
+			return false;
+
+		IEntity enemy = target.GetTargetEntity();
+		vector aim = target.GetLastSeenPosition() + Vector(0, 1.3, 0);
+		if (enemy)
+			aim = enemy.GetOrigin() + Vector(0, 1.3, 0);
+
+		vector eye = body.GetOrigin() + Vector(0, 1.6, 0);
+		vector toAim = aim - eye;
+		float distance = toAim.Length();
+		if (distance < 0.75)
+			return true;
+
+		toAim = toAim * (1 / distance);
+
+		// The ray starts outside his own body. Characters are ignored, so
+		// only the building can block it. Stopping on a soldier made every
+		// shot look blocked.
+		vector start = eye + (toAim * 0.45);
+		vector end = aim - (toAim * 0.35);
+
+		if (!s_SightTrace)
+			s_SightTrace = new TraceParam();
+
+		s_SightViewer = body;
+		s_SightTrace.Flags = TraceFlags.ENTS | TraceFlags.WORLD;
+		s_SightTrace.Exclude = body;
+		s_SightTrace.TraceEnt = null;
+		s_SightTrace.Start = start;
+		s_SightTrace.End = end;
+
+		float fraction = world.TraceMove(s_SightTrace, FilterMoveSight);
+		s_SightViewer = null;
+
+		return fraction >= 0.98;
+	}
+
+	protected static bool FilterMoveSight(
+		IEntity entity,
+		vector start = "0 0 0",
+		vector dir = "0 0 0")
+	{
+		if (!entity || entity == s_SightViewer)
+			return false;
+
+		IEntity current = entity;
+		int depth;
+		while (current && depth < 8)
+		{
+			if (current == s_SightViewer)
+				return false;
+
+			if (ChimeraCharacter.Cast(current))
+				return false;
+
+			current = current.GetParent();
+			depth++;
+		}
+
+		return true;
+	}
+
+	protected static void SetWeaponRaised(IEntity body, bool raised)
+	{
+		CharacterControllerComponent controller = Controller(body);
+		if (controller)
+			controller.SetWeaponRaised(raised);
+	}
+
+	protected static void SetFireWanted(IEntity body, bool wanted)
+	{
+		CharacterControllerComponent controller = Controller(body);
+		if (controller)
+			controller.SetFireWeaponWanted(wanted);
+	}
+
+	protected static CharacterControllerComponent Controller(IEntity body)
+	{
+		if (!body)
+			return null;
+
+		return CharacterControllerComponent.Cast(
+			body.FindComponent(CharacterControllerComponent)
+		);
 	}
 
 	static bool PositionInside(IEntity building, vector worldPosition)
@@ -280,10 +437,6 @@ class KK_GarrisonHold
 
 		if (utility.m_CombatComponent)
 		{
-			KK_GarrisonHold.NoteTarget(
-				utility.m_OwnerEntity,
-				utility.m_CombatComponent.GetCurrentTarget()
-			);
 			utility.m_CombatComponent.SetPerceptionFactor(0);
 			utility.m_CombatComponent.KK_ClearTarget();
 		}
@@ -458,11 +611,13 @@ modded class SCR_AIAttackBehavior
 			agentEntity = m_Utility.GetOwner();
 		}
 
-		// Getting to the post outranks aiming. He can shoot once he is there,
-		// or sooner when an enemy is already inside.
+		// The route outranks aiming until he is on the post. Inside, he still
+		// shoots, but that shot is not allowed to replace the move.
 		if (
 			KK_GarrisonHold.IsIgnoringTargets(character) ||
-			KK_GarrisonHold.IsIgnoringTargets(agentEntity)
+			KK_GarrisonHold.IsIgnoringTargets(agentEntity) ||
+			KK_GarrisonHold.IsMoveFire(character) ||
+			KK_GarrisonHold.IsMoveFire(agentEntity)
 		)
 		{
 			return 0;
@@ -675,13 +830,7 @@ modded class SCR_AIUtilityComponent
 			KK_GarrisonHold.IsIgnoringTargets(GetOwner());
 
 		if (ignore && m_CombatComponent)
-		{
-			KK_GarrisonHold.NoteTarget(
-				m_OwnerEntity,
-				m_CombatComponent.GetCurrentTarget()
-			);
 			m_CombatComponent.KK_ClearTarget();
-		}
 
 		SCR_AIBehaviorBase result;
 		if (ignore)
@@ -691,6 +840,11 @@ modded class SCR_AIUtilityComponent
 
 		if (ignore)
 			KK_GarrisonHold.EnforceSprintIgnore(this);
+		else if (
+			KK_GarrisonHold.IsMoveFire(m_OwnerEntity) ||
+			KK_GarrisonHold.IsMoveFire(GetOwner())
+		)
+			KK_GarrisonHold.ApplyMoveFire(this);
 
 		return result;
 	}
@@ -717,6 +871,17 @@ modded class SCR_AISetWeaponRaised
 					controller.SetWeaponRaised(false);
 			}
 
+			return ENodeResult.SUCCESS;
+		}
+
+		if (KK_GarrisonHold.IsMoveFire(body) || KK_GarrisonHold.IsMoveFire(owner))
+		{
+			SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(owner);
+			if (soldier)
+				KK_GarrisonHold.ApplyMoveFire(soldier.m_UtilityComponent);
+
+			// The move order would lower the gun, then the next target
+			// refresh would raise it again. This node owns it instead.
 			return ENodeResult.SUCCESS;
 		}
 
