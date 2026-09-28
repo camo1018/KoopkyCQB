@@ -1385,6 +1385,10 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 		KK_GarrisonHold.SetDoorFiring(controlledEntity, false);
 
+		bool cannotShoot = KK_GarrisonHold.CannotShoot(controlledEntity);
+		if (cannotShoot)
+			assignment.m_fFireUntil = 0;
+
 		// The wait was the burst. The next move is through the doorway.
 		if (assignment.m_bHeldDoor)
 		{
@@ -1396,7 +1400,9 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 		if (!assignment.m_bBounding)
 		{
-			bool seeEnemy = HasVisibleTarget(assignment.m_Agent);
+			bool seeEnemy =
+				!cannotShoot &&
+				HasVisibleTarget(assignment.m_Agent);
 			if (!roomShot && seeEnemy && assignment.m_fFireUntil <= 0)
 				assignment.m_fFireUntil = currentTime + FIGHT_WINDOW_MS;
 
@@ -1415,7 +1421,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		{
 			assignment.m_bBounding = false;
 
-			if (!roomShot && HasVisibleTarget(assignment.m_Agent))
+			if (!cannotShoot && !roomShot && HasVisibleTarget(assignment.m_Agent))
 			{
 				assignment.m_fFireUntil = currentTime + FIGHT_WINDOW_MS;
 				KK_GarrisonHold.ClearApproachGoal(controlledEntity);
@@ -1446,6 +1452,12 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		float currentTime,
 		bool waitingOnDoor)
 	{
+		if (KK_GarrisonHold.CannotShoot(controlledEntity))
+		{
+			assignment.m_fSteadyUntil = 0;
+			return false;
+		}
+
 		bool want = KK_GarrisonHold.WantsSteadyShot(controlledEntity);
 		if (want)
 		{

@@ -230,11 +230,14 @@ class KK_GarrisonHold
 	protected static bool s_bShotTicking;
 	protected static const float ROOM_SCAN_RADIUS = 35;
 	protected static const int SHOT_CANDIDATES = 8;
-	protected static const float LEAN_OFFSET = 1.0;
+	protected static const float LEAN_OFFSET = 0.4;
 	protected static ref map<IEntity, float> s_ShotLean = new map<IEntity, float>();
 	protected static ref map<IEntity, IEntity> s_AimTarget = new map<IEntity, IEntity>();
 	protected static ref map<IEntity, float> s_AimSince = new map<IEntity, float>();
 	protected static ref set<IEntity> s_LeanHeld = new set<IEntity>();
+	protected static ref map<IEntity, float> s_WantedLean = new map<IEntity, float>();
+	protected static ref map<IEntity, IEntity> s_LookEntity = new map<IEntity, IEntity>();
+	protected static bool s_bLeanPumping;
 	protected static ref map<IEntity, float> s_PrimarySwitchAt =
 		new map<IEntity, float>();
 	protected static const float PRIMARY_SWITCH_RETRY_MS = 1000;
@@ -381,6 +384,21 @@ class KK_GarrisonHold
 
 		if (!firing)
 			return;
+
+		IEntity dryBody = utility.m_OwnerEntity;
+		if (!dryBody)
+		{
+			AIAgent dryAgent = AIAgent.Cast(utility.GetOwner());
+			if (dryAgent)
+				dryBody = dryAgent.GetControlledEntity();
+		}
+
+		// An empty gun does not cancel the move to stand and shoot.
+		if (CannotShoot(dryBody))
+		{
+			CommandWeapon(dryBody, false, false);
+			return;
+		}
 
 		if (utility.m_CombatMoveState && utility.m_CombatMoveState.IsExecutingRequest())
 			utility.m_CombatMoveState.CancelRequest();
@@ -724,6 +742,17 @@ class KK_GarrisonHold
 		return !loaded || loaded.GetAmmoCount() <= 0;
 	}
 
+	// No round left to fire, or the empty gun is still being reloaded.
+	// He should move, wait, or reload instead of planting on the enemy.
+	static bool CannotShoot(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return false;
+
+		return GunIsDry(body) || IsEmptyReload(body);
+	}
+
 	protected static bool ReloadInterrupted(IEntity body)
 	{
 		if (
@@ -964,6 +993,18 @@ class KK_GarrisonHold
 		if (!OwnsShot(body))
 		{
 			ReleaseLean(body);
+			ReleaseLook(utility, body);
+			return;
+		}
+
+		// An empty gun does not get a firing pose. The route and the reload
+		// can run instead of a stand-and-shoot.
+		if (CannotShoot(body))
+		{
+			ClearShot(body);
+			RememberLean(body, 0);
+			ReleaseLook(utility, body);
+			CommandWeapon(body, false, false);
 			return;
 		}
 
@@ -976,10 +1017,9 @@ class KK_GarrisonHold
 		if (!s_ShotLive.Contains(body))
 		{
 			ClearAim(body);
-			SetLean(body, 0);
+			RememberLean(body, 0);
 			CommandWeapon(body, FeelsThreatened(utility), false);
-			if (utility.m_LookAction)
-				utility.m_LookAction.Cancel();
+			ReleaseLook(utility, body);
 			return;
 		}
 
@@ -991,30 +1031,31 @@ class KK_GarrisonHold
 		if (s_ShotLean.Contains(body))
 			lean = s_ShotLean.Get(body);
 
-		bool canShoot = ShotStillVisible(body);
+		bool center = ShotStillVisible(body);
+		bool canShoot = center;
 		if (!canShoot && lean != 0)
 			canShoot = SideStillClear(body, enemy, lean);
 
+		float command = 0;
 		if (canShoot)
-			SetLean(body, lean);
-		else
-			SetLean(body, 0);
+			command = lean;
+
+		RememberLean(body, command);
 
 		bool fire = AimReady(body, enemy, canShoot);
 		CommandWeapon(body, canShoot || FeelsThreatened(utility), fire);
 		if (!fire)
 			SetFireWanted(body, false);
 
-		if (!canShoot || !utility.m_LookAction)
-			return;
-
-		if (enemy)
-			utility.m_LookAction.LookAt(enemy, 100, 3);
+		if (!canShoot)
+			ReleaseLook(utility, body);
+		else if (enemy)
+			AimLook(utility, body, enemy);
 		else
 		{
 			BaseTarget shot = ShotTarget(body);
-			if (shot)
-				utility.m_LookAction.LookAt(shot.GetLastSeenPosition(), 100, 3);
+			if (shot && utility.m_LookAction)
+				utility.m_LookAction.LookAt(shot.GetLastSeenPosition(), 100, 5);
 		}
 	}
 
@@ -1136,7 +1177,7 @@ class KK_GarrisonHold
 	// stops for that shot instead of carrying him past it.
 	static bool WantsSteadyShot(IEntity soldier)
 	{
-		if (!OwnsShot(soldier))
+		if (!OwnsShot(soldier) || CannotShoot(soldier))
 			return false;
 
 		IEntity body = CharacterBody(soldier);
@@ -1505,8 +1546,8 @@ class KK_GarrisonHold
 		return left || right;
 	}
 
-	// Rays start a meter to either side. He leans toward the only side
-	// that can see the enemy.
+	// The side point has to be in open air. A trace that starts inside a
+	// wall never hits that wall, so both sides were reporting clear.
 	protected static void SidesClear(
 		IEntity body,
 		IEntity enemy,
@@ -1529,20 +1570,24 @@ class KK_GarrisonHold
 		vector eye = body.GetOrigin() + Vector(0, 1.6, 0);
 		vector feet = enemy.GetOrigin();
 
-		left = SideRay(world, body, eye - side, feet);
-		right = SideRay(world, body, eye + side, feet);
+		left = SideRay(world, body, eye, eye - side, feet);
+		right = SideRay(world, body, eye, eye + side, feet);
 	}
 
 	protected static bool SideRay(
 		BaseWorld world,
 		IEntity body,
 		vector eye,
+		vector sideEye,
 		vector feet)
 	{
-		if (SightClear(world, body, eye, feet + Vector(0, 1.2, 0)))
+		if (!SightClear(world, body, eye, sideEye, 0.05))
+			return false;
+
+		if (SightClear(world, body, sideEye, feet + Vector(0, 1.2, 0), 0.05))
 			return true;
 
-		return SightClear(world, body, eye, feet + Vector(0, 1.7, 0));
+		return SightClear(world, body, sideEye, feet + Vector(0, 1.7, 0), 0.05);
 	}
 
 	protected static bool SideStillClear(IEntity body, IEntity enemy, float lean)
@@ -1560,13 +1605,11 @@ class KK_GarrisonHold
 		vector transform[4];
 		body.GetWorldTransform(transform);
 		vector eye = body.GetOrigin() + Vector(0, 1.6, 0);
-		vector side = transform[0] * LEAN_OFFSET;
+		vector sideEye = eye + (transform[0] * LEAN_OFFSET);
 		if (lean < 0)
-			eye = eye - side;
-		else
-			eye = eye + side;
+			sideEye = eye - (transform[0] * LEAN_OFFSET);
 
-		return SideRay(world, body, eye, enemy.GetOrigin());
+		return SideRay(world, body, eye, sideEye, enemy.GetOrigin());
 	}
 
 	protected static bool AimReady(IEntity body, IEntity enemy, bool canShoot)
@@ -1607,9 +1650,103 @@ class KK_GarrisonHold
 		controller.SetWantedLeaning(lean);
 	}
 
+	// The shot check is too slow to keep a lean pose. A behavior abort also
+	// clears it. While a lean is wanted, write it again every frame.
+	protected static void RememberLean(IEntity body, float lean)
+	{
+		if (!body)
+			return;
+
+		if (lean == 0)
+		{
+			if (!s_WantedLean.Contains(body))
+				return;
+
+			s_WantedLean.Remove(body);
+			SetLean(body, 0);
+			return;
+		}
+
+		s_WantedLean.Set(body, lean);
+		SetLean(body, lean);
+		EnsureLeanPump();
+	}
+
+	protected static void EnsureLeanPump()
+	{
+		if (s_bLeanPumping || !GetGame())
+			return;
+
+		s_bLeanPumping = true;
+		GetGame().GetCallqueue().CallLater(LeanPump, 0, false);
+	}
+
+	static void LeanPump()
+	{
+		if (!GetGame() || s_WantedLean.Count() == 0)
+		{
+			s_bLeanPumping = false;
+			return;
+		}
+
+		array<IEntity> bodies = {};
+		for (int i = 0; i < s_WantedLean.Count(); i++)
+			bodies.Insert(s_WantedLean.GetKey(i));
+
+		foreach (IEntity body : bodies)
+		{
+			if (!body || !s_WantedLean.Contains(body))
+			{
+				s_WantedLean.Remove(body);
+				continue;
+			}
+
+			SetLean(body, s_WantedLean.Get(body));
+		}
+
+		if (s_WantedLean.Count() == 0 || !GetGame())
+		{
+			s_bLeanPumping = false;
+			return;
+		}
+
+		GetGame().GetCallqueue().CallLater(LeanPump, 0, false);
+	}
+
+	// A fresh LookAt on every check restarts the turn. Issue it when the
+	// person changes, and cancel it once when that look is over.
+	protected static void AimLook(
+		SCR_AIUtilityComponent utility,
+		IEntity body,
+		IEntity enemy)
+	{
+		if (!utility || !utility.m_LookAction || !body || !enemy)
+			return;
+
+		if (s_LookEntity.Contains(body) && s_LookEntity.Get(body) == enemy)
+			return;
+
+		s_LookEntity.Set(body, enemy);
+		utility.m_LookAction.LookAt(enemy, 100, 5);
+	}
+
+	protected static void ReleaseLook(SCR_AIUtilityComponent utility, IEntity body)
+	{
+		if (!body || !s_LookEntity.Contains(body))
+			return;
+
+		s_LookEntity.Remove(body);
+		if (utility && utility.m_LookAction)
+			utility.m_LookAction.Cancel();
+	}
+
 	protected static void ReleaseLean(IEntity body)
 	{
-		if (!body || !s_LeanHeld.Contains(body))
+		if (!body)
+			return;
+
+		s_WantedLean.Remove(body);
+		if (!s_LeanHeld.Contains(body))
 			return;
 
 		s_LeanHeld.RemoveItem(body);
@@ -1670,7 +1807,8 @@ class KK_GarrisonHold
 		BaseWorld world,
 		IEntity body,
 		vector eye,
-		vector aim)
+		vector aim,
+		float inset = 0.4)
 	{
 		vector toAim = aim - eye;
 		float distance = toAim.Length();
@@ -1678,7 +1816,10 @@ class KK_GarrisonHold
 			return true;
 
 		toAim = toAim * (1 / distance);
-		vector start = eye + (toAim * 0.4);
+		if (inset > distance * 0.5)
+			inset = distance * 0.5;
+
+		vector start = eye + (toAim * inset);
 
 		if (!s_SightTrace)
 			s_SightTrace = new TraceParam();
@@ -1963,8 +2104,6 @@ modded class SCR_AIAttackBehavior
 {
 	override float CustomEvaluate()
 	{
-		float score = super.CustomEvaluate();
-
 		IEntity character;
 		IEntity agentEntity;
 		if (m_Utility)
@@ -1972,6 +2111,18 @@ modded class SCR_AIAttackBehavior
 			character = m_Utility.m_OwnerEntity;
 			agentEntity = m_Utility.GetOwner();
 		}
+
+		// Out of ammo he cannot take the shot. Leave the behavior so the
+		// move, the reload, and the rest of the order can run.
+		if (
+			(KK_GarrisonHold.HasBuilding(character) && KK_GarrisonHold.CannotShoot(character)) ||
+			(KK_GarrisonHold.HasBuilding(agentEntity) && KK_GarrisonHold.CannotShoot(agentEntity))
+		)
+		{
+			return 0;
+		}
+
+		float score = super.CustomEvaluate();
 
 		// A held post, a doorway, or a burst on the way in stands and shoots.
 		// A bound keeps the attack, and combat movement is forced on so the
