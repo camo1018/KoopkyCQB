@@ -128,6 +128,9 @@ modded class SCR_BaseGameMode
 	[Attribute("30", UIWidgets.EditBox, "Top off once the loaded magazine is under this percent, after the enemy has stayed out of sight. An empty gun still reloads immediately.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_ReloadRemainder;
 
+	[Attribute("8", UIWidgets.EditBox, "Seconds the enemy must stay out of sight before a partial magazine is topped off. An empty gun still reloads immediately. 0 tops off as soon as sight is lost.", category: "Koopky CQB/Combat")]
+	protected float m_fKK_OutOfSight;
+
 	[Attribute("1", UIWidgets.EditBox, "Recognition speed while clearing or garrisoning (×). 1 is normal.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_PerceptionFactor;
 
@@ -294,6 +297,7 @@ modded class SCR_BaseGameMode
 			KK_ReadFloat(context, "ShotInterval", m_fKK_ShotInterval);
 			m_fKK_ShotInterval = KK_ClampShotInterval(m_fKK_ShotInterval);
 			KK_ReadFloat(context, "ReloadRemainder", m_fKK_ReloadRemainder);
+			KK_ReadFloat(context, "OutOfSight", m_fKK_OutOfSight);
 			KK_ReadFloat(context, "PerceptionFactor", m_fKK_PerceptionFactor);
 			KK_ReadBool(context, "OpenDoors", m_bKK_OpenDoors);
 			KK_ReadNavMode(context);
@@ -439,6 +443,7 @@ modded class SCR_BaseGameMode
 		context.WriteValue("ShotDelay", m_fKK_ShotDelay);
 		context.WriteValue("ShotInterval", KK_GetShotInterval());
 		context.WriteValue("ReloadRemainder", m_fKK_ReloadRemainder);
+		context.WriteValue("OutOfSight", m_fKK_OutOfSight);
 		context.WriteValue("PerceptionFactor", m_fKK_PerceptionFactor);
 		context.WriteValue("OpenDoors", m_bKK_OpenDoors);
 		int navMode = KK_GetNavMode();
@@ -652,6 +657,11 @@ modded class SCR_BaseGameMode
 		return percent * 0.01;
 	}
 
+	float KK_GetOutOfSight()
+	{
+		return Math.Max(m_fKK_OutOfSight, 0);
+	}
+
 	float KK_GetPerceptionFactor()
 	{
 		return Math.Max(m_fKK_PerceptionFactor, 0);
@@ -765,6 +775,7 @@ modded class SCR_BaseGameMode
 
 		m_fKK_ReloadRemainder = value;
 	}
+	void KK_SetOutOfSight(float value) { m_fKK_OutOfSight = Math.Max(value, 0); }
 
 	protected float KK_ClampShotInterval(float value)
 	{

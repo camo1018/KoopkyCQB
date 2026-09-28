@@ -249,8 +249,6 @@ class KK_GarrisonHold
 		new map<IEntity, float>();
 	protected static const float RELOAD_RETRY_MS = 1500;
 	protected static const float TOPOFF_START_MS = 750;
-	// Sight has to stay broken this long before a partial magazine is swapped.
-	protected static const float EARLY_RELOAD_QUIET_MS = 8000;
 	protected static const string PRIMARY_SLOT = "primary";
 
 	static void SetPinned(IEntity soldier, bool pinned)
@@ -803,7 +801,7 @@ class KK_GarrisonHold
 	// under the limit, and nobody is shooting him.
 	protected static bool EarlyReloadAllowed(IEntity body)
 	{
-		if (ReloadInterrupted(body))
+		if (SeesEnemy(body) || ReloadInterrupted(body))
 			return false;
 
 		if (!MagazineLow(body))
@@ -812,7 +810,17 @@ class KK_GarrisonHold
 		if (!s_SeenEnemyAt.Contains(body))
 			return true;
 
-		return WorldTime() - s_SeenEnemyAt.Get(body) >= EARLY_RELOAD_QUIET_MS;
+		return WorldTime() - s_SeenEnemyAt.Get(body) >= OutOfSightMs();
+	}
+
+	protected static float OutOfSightMs()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		float seconds = 8;
+		if (mode)
+			seconds = mode.KK_GetOutOfSight();
+
+		return Math.Max(seconds, 0) * 1000;
 	}
 
 	protected static bool MagazineLow(IEntity body)
