@@ -247,8 +247,22 @@ class KK_GarrisonHold
 	protected static ref set<IEntity> s_EmptyReload = new set<IEntity>();
 	protected static ref map<IEntity, float> s_SeenEnemyAt =
 		new map<IEntity, float>();
+	protected static ref map<IEntity, IEntity> s_PressureFrom =
+		new map<IEntity, IEntity>();
+	protected static ref map<IEntity, vector> s_PressureAt =
+		new map<IEntity, vector>();
+	protected static ref map<IEntity, vector> s_ReloadDash =
+		new map<IEntity, vector>();
+	protected static ref map<IEntity, vector> s_ReloadThreat =
+		new map<IEntity, vector>();
+	protected static ref map<IEntity, float> s_ReloadDashAt =
+		new map<IEntity, float>();
+	protected static ref set<IEntity> s_ReloadCover = new set<IEntity>();
 	protected static const float RELOAD_RETRY_MS = 1500;
 	protected static const float TOPOFF_START_MS = 750;
+	protected static const float RELOAD_COVER_RADIUS = 1.25;
+	protected static const float RELOAD_DASH_MS = 8000;
+	protected static const float RELOAD_THREAT_MOVE = 4;
 	protected static const string PRIMARY_SLOT = "primary";
 
 	static void SetPinned(IEntity soldier, bool pinned)
@@ -582,8 +596,8 @@ class KK_GarrisonHold
 	}
 
 	// Swap a partial magazine for a fuller one only after the enemy has stayed
-	// out of sight and the loaded mag is low. An empty gun reloads anyway,
-	// including while the building shot is held. A sprint keeps moving.
+	// out of sight and the loaded mag is low. An empty gun reloads anyway.
+	// If that enemy is still in sight, he sprints to cover before the reload.
 	static void ConsiderTopOff(IEntity soldier)
 	{
 		IEntity body = CharacterBody(soldier);
@@ -594,6 +608,18 @@ class KK_GarrisonHold
 		NoteEnemySight(body);
 		if (IsIgnoringTargets(body))
 			return;
+
+		// The threat can still see him. The dash has to finish before the
+		// empty gun comes up to reload.
+		if (
+			dry &&
+			ReloadCoverEnabled() &&
+			SeesPressure(body) &&
+			!s_ReloadCover.Contains(body)
+		)
+		{
+			return;
+		}
 
 		// A partial magazine waits until he has been off the enemy for a
 		// while, and until the mag is actually low. An empty gun does not.
@@ -795,6 +821,7 @@ class KK_GarrisonHold
 			return;
 
 		s_SeenEnemyAt.Set(body, WorldTime());
+		RememberPressure(body);
 	}
 
 	// He tops off only after the enemy has stayed out of sight, the mag is
@@ -821,6 +848,284 @@ class KK_GarrisonHold
 			seconds = mode.KK_GetOutOfSight();
 
 		return Math.Max(seconds, 0) * 1000;
+	}
+
+	// Empty gun, and the threat is still in sight. Cover first.
+	static bool MustDashToReload(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !GunIsDry(body) || !ReloadCoverEnabled())
+			return false;
+
+		if (s_ReloadCover.Contains(body) || IsEmptyReload(body))
+			return false;
+
+		CharacterControllerComponent controller = Controller(body);
+		if (controller && controller.IsReloading())
+			return false;
+
+		if (!SeesPressure(body))
+			return false;
+
+		return FullerMagazine(body) != null;
+	}
+
+	// Out of sight. Garrison stays on the post. Clear waits here until the
+	// reload is finished. holdingArea is the post, or any clear step.
+	static bool ShouldHoldToReload(IEntity soldier, bool holdingArea)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !s_Buildings.Contains(body))
+			return false;
+
+		if (MustDashToReload(body))
+			return false;
+
+		CharacterControllerComponent controller = Controller(body);
+		if (s_ReloadCover.Contains(body))
+		{
+			bool reloading =
+				IsQuietReload(body) ||
+				(controller && controller.IsReloading());
+			if (reloading || (GunIsDry(body) && FullerMagazine(body)))
+				return true;
+
+			s_ReloadCover.RemoveItem(body);
+		}
+
+		if (IsQuietReload(body) || (controller && controller.IsReloading()))
+			return true;
+
+		if (SeesPressure(body))
+			return false;
+
+		if (GunIsDry(body))
+			return FullerMagazine(body) != null;
+
+		if (!holdingArea || !EarlyReloadAllowed(body))
+			return false;
+
+		return FullerMagazine(body) != null;
+	}
+
+	protected static bool ReloadCoverEnabled()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return true;
+
+		return mode.KK_GetReloadCover();
+	}
+
+	static bool PausesRoute(IEntity soldier)
+	{
+		return MustDashToReload(soldier) ||
+			ShouldHoldToReload(soldier, false);
+	}
+
+	static void SetReloadCover(IEntity soldier, bool allow)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		if (allow)
+			s_ReloadCover.Insert(body);
+		else
+			s_ReloadCover.RemoveItem(body);
+	}
+
+	static void ClearReloadDash(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		s_ReloadDash.Remove(body);
+		s_ReloadThreat.Remove(body);
+		s_ReloadDashAt.Remove(body);
+	}
+
+	static bool ReloadDashExpired(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !s_ReloadDashAt.Contains(body))
+			return false;
+
+		return WorldTime() - s_ReloadDashAt.Get(body) >= RELOAD_DASH_MS;
+	}
+
+	static bool AtReloadCover(IEntity soldier, vector position)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !s_ReloadDash.Contains(body))
+			return false;
+
+		return vector.Distance(position, s_ReloadDash.Get(body)) <=
+			RELOAD_COVER_RADIUS;
+	}
+
+	// Nearest interior node the threat cannot see. Keeps the last pick
+	// until that threat moves.
+	static bool SelectReloadCover(
+		IEntity soldier,
+		array<ref KK_InteriorTarget> targets,
+		out vector goal)
+	{
+		IEntity body = CharacterBody(soldier);
+		goal = vector.Zero;
+		if (!body || !targets || targets.IsEmpty())
+			return false;
+
+		RememberPressure(body);
+		vector threat;
+		if (!s_PressureAt.Contains(body))
+			return false;
+
+		threat = s_PressureAt.Get(body);
+		if (
+			s_ReloadDash.Contains(body) &&
+			s_ReloadThreat.Contains(body) &&
+			vector.Distance(s_ReloadThreat.Get(body), threat) < RELOAD_THREAT_MOVE
+		)
+		{
+			goal = s_ReloadDash.Get(body);
+			return true;
+		}
+
+		if (!FindReloadCover(body, targets, threat, goal))
+		{
+			ClearReloadDash(body);
+			return false;
+		}
+
+		bool sameGoal =
+			s_ReloadDash.Contains(body) &&
+			vector.Distance(s_ReloadDash.Get(body), goal) < 0.5;
+		s_ReloadDash.Set(body, goal);
+		s_ReloadThreat.Set(body, threat);
+		if (!sameGoal || !s_ReloadDashAt.Contains(body))
+			s_ReloadDashAt.Set(body, WorldTime());
+
+		return true;
+	}
+
+	protected static void RememberPressure(IEntity body)
+	{
+		if (!body)
+			return;
+
+		IEntity enemy = null;
+		if (s_ShotLook.Contains(body))
+			enemy = s_ShotLook.Get(body);
+
+		if (!enemy)
+		{
+			SCR_AIUtilityComponent utility = UtilityOf(body);
+			if (utility && utility.m_CombatComponent)
+			{
+				BaseTarget target = utility.m_CombatComponent.GetCurrentTarget();
+				if (target)
+					enemy = target.GetTargetEntity();
+
+				if (!enemy && target)
+					s_PressureAt.Set(body, target.GetLastSeenPosition());
+			}
+		}
+
+		if (!enemy)
+			return;
+
+		s_PressureFrom.Set(body, enemy);
+		s_PressureAt.Set(body, enemy.GetOrigin());
+	}
+
+	// In sight now, or the enemy he just broke from is still visible.
+	protected static bool SeesPressure(IEntity body)
+	{
+		if (!body)
+			return false;
+
+		if (SeesEnemy(body))
+		{
+			RememberPressure(body);
+			return true;
+		}
+
+		if (s_PressureFrom.Contains(body))
+		{
+			IEntity enemy = s_PressureFrom.Get(body);
+			if (!enemy || !CanSeeEntity(body, enemy))
+				return false;
+
+			s_PressureAt.Set(body, enemy.GetOrigin());
+			return true;
+		}
+
+		if (!s_PressureAt.Contains(body))
+			return false;
+
+		return CanSeePoint(body, s_PressureAt.Get(body));
+	}
+
+	protected static bool FindReloadCover(
+		IEntity body,
+		array<ref KK_InteriorTarget> targets,
+		vector threat,
+		out vector goal)
+	{
+		BaseWorld world = null;
+		if (GetGame())
+			world = GetGame().GetWorld();
+
+		if (!world)
+			world = body.GetWorld();
+
+		if (!world)
+			return false;
+
+		vector eye = threat + Vector(0, 1.6, 0);
+		float soldierY = body.GetOrigin()[1];
+		bool found = false;
+		float best = 0;
+		vector bestGoal = vector.Zero;
+
+		for (int pass = 0; pass < 2 && !found; pass++)
+		{
+			foreach (KK_InteriorTarget target : targets)
+			{
+				if (!target || target.m_eState == KK_EInteriorTargetState.UNREACHABLE)
+					continue;
+
+				vector node = target.m_vPosition;
+				if (vector.Distance(body.GetOrigin(), node) < 0.75)
+					continue;
+
+				float rise = node[1] - soldierY;
+				if (rise < 0)
+					rise = -rise;
+
+				if (pass == 0 && rise > 2)
+					continue;
+
+				if (SightClear(world, body, eye, node + Vector(0, 1.2, 0)))
+					continue;
+
+				float distance = vector.Distance(body.GetOrigin(), node);
+				if (found && distance >= best)
+					continue;
+
+				found = true;
+				best = distance;
+				bestGoal = node;
+			}
+		}
+
+		if (!found)
+			return false;
+
+		goal = bestGoal;
+		return true;
 	}
 
 	protected static bool MagazineLow(IEntity body)
@@ -1082,6 +1387,7 @@ class KK_GarrisonHold
 		// can run instead of a stand-and-shoot.
 		if (CannotShoot(body))
 		{
+			RememberPressure(body);
 			ClearShot(body);
 			RememberLean(body, 0);
 			ReleaseLook(utility, body);
@@ -1153,6 +1459,12 @@ class KK_GarrisonHold
 			s_ToppingOff.RemoveItem(body);
 			s_EmptyReload.RemoveItem(body);
 			s_SeenEnemyAt.Remove(body);
+			s_PressureFrom.Remove(body);
+			s_PressureAt.Remove(body);
+			s_ReloadDash.Remove(body);
+			s_ReloadThreat.Remove(body);
+			s_ReloadDashAt.Remove(body);
+			s_ReloadCover.RemoveItem(body);
 			ClearShot(body);
 			return;
 		}

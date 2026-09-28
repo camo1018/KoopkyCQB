@@ -12,6 +12,8 @@ class KK_InteriorAgentAssignment
 	bool m_bClearsPoint;
 	bool m_bFacingApplied;
 	bool m_bCombatOwnsWeapon;
+	bool m_bReloadMove;
+	vector m_vReloadGoal;
 	ref array<vector> m_aRouteGoals = {};
 	int m_iRouteIndex;
 
@@ -428,6 +430,23 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				vector unitPosition =
 					assignment.m_Agent.GetControlledEntity().GetOrigin();
 
+				bool reloadMove = DriveClearReload(
+					assignment,
+					unitPosition,
+					currentTime
+				);
+				if (assignment.m_bReloadMove && !reloadMove)
+				{
+					assignment.m_fLastOrderAt = currentTime;
+					IssueMoveOrder(
+						assignment.m_Agent,
+						AssignmentMoveGoal(assignment)
+					);
+				}
+				assignment.m_bReloadMove = reloadMove;
+
+				if (!reloadMove)
+				{
 				vector moveGoal = AssignmentMoveGoal(assignment);
 				bool onFinalGoal = KK_AuthoredRouteHelper.IsOnFinalGoal(
 					assignment.m_aRouteGoals,
@@ -632,6 +651,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 						assignment.m_Agent,
 						AssignmentMoveGoal(assignment)
 					);
+				}
 				}
 			}
 
@@ -1807,6 +1827,117 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				)
 			);
 		}
+	}
+
+	protected bool DriveClearReload(
+		notnull KK_InteriorAgentAssignment assignment,
+		vector unitPosition,
+		float currentTime)
+	{
+		IEntity body = assignment.m_Agent.GetControlledEntity();
+		if (!body || !m_Plan)
+			return false;
+
+		bool dash = KK_GarrisonHold.MustDashToReload(body);
+		if (dash && KK_GarrisonHold.ReloadDashExpired(body))
+		{
+			KK_GarrisonHold.ClearReloadDash(body);
+			KK_GarrisonHold.SetReloadCover(body, true);
+			dash = false;
+		}
+
+		if (dash)
+		{
+			vector goal;
+			if (!KK_GarrisonHold.SelectReloadCover(
+				body,
+				m_Plan.GetTargets(),
+				goal
+			))
+			{
+				KK_GarrisonHold.ClearReloadDash(body);
+				KK_GarrisonHold.SetReloadCover(body, true);
+			}
+			else if (KK_GarrisonHold.AtReloadCover(body, unitPosition))
+			{
+				KK_GarrisonHold.ClearReloadDash(body);
+				KK_GarrisonHold.SetReloadCover(body, true);
+			}
+			else
+			{
+				KK_GarrisonHold.SetReloadCover(body, false);
+				KK_GarrisonHold.SetPinned(body, false);
+				assignment.m_fStillSince = currentTime;
+				assignment.m_fStartedAt = currentTime;
+
+				IEntity doorEntity = assignment.m_DoorEntity;
+				bool waitingOnDoor = KK_DoorAssist.Handle(
+					assignment.m_Agent,
+					goal,
+					doorEntity
+				);
+				assignment.m_DoorEntity = doorEntity;
+				if (waitingOnDoor)
+				{
+					KK_AgentMove.SetWantedSpeed(
+						assignment.m_Agent,
+						EMovementType.WALK
+					);
+				}
+
+				bool newGoal =
+					vector.Distance(assignment.m_vReloadGoal, goal) > 1;
+				if (
+					!waitingOnDoor &&
+					(
+						!assignment.m_bReloadMove ||
+						newGoal ||
+						currentTime - assignment.m_fLastOrderAt >=
+							KK_AgentMove.REISSUE_INTERVAL_MS
+					)
+				)
+				{
+					assignment.m_vReloadGoal = goal;
+					assignment.m_fLastOrderAt = currentTime;
+					KK_AgentMove.Issue(
+						this,
+						m_Group,
+						assignment.m_Agent,
+						goal,
+						m_mSoloHandlers,
+						KK_AgentMove.PRIORITY_LEVEL,
+						EMovementType.SPRINT
+					);
+				}
+				else if (!waitingOnDoor)
+				{
+					KK_AgentMove.SetWantedSpeed(
+						assignment.m_Agent,
+						EMovementType.SPRINT
+					);
+				}
+
+				return true;
+			}
+		}
+
+		if (KK_GarrisonHold.ShouldHoldToReload(body, true))
+		{
+			KK_GarrisonHold.ClearReloadDash(body);
+			KK_GarrisonHold.SetPinned(body, true);
+			assignment.m_fStillSince = currentTime;
+			assignment.m_fStartedAt = currentTime;
+			return true;
+		}
+
+		if (assignment.m_bReloadMove)
+		{
+			KK_GarrisonHold.ClearReloadDash(body);
+			KK_GarrisonHold.SetReloadCover(body, false);
+			KK_GarrisonHold.SetPinned(body, false);
+		}
+
+		return false;
 	}
 
 	protected void IssueMoveOrder(

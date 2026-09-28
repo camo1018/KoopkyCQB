@@ -172,6 +172,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 12: return mode.KK_GetWaypointAuthoring();
 			case 13: return mode.KK_GetRotateDuringCombat();
 			case 14: return mode.KK_GetRoomCombat();
+			case 15: return mode.KK_GetReloadCover();
 		}
 
 		return mode.KK_GetGarrisonAfterClear();
@@ -194,6 +195,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 12: mode.KK_SetWaypointAuthoring(value); break;
 			case 13: mode.KK_SetRotateDuringCombat(value); break;
 			case 14: mode.KK_SetRoomCombat(value); break;
+			case 15: mode.KK_SetReloadCover(value); break;
 			default: mode.KK_SetGarrisonAfterClear(value); break;
 		}
 	}
@@ -273,6 +275,8 @@ class KK_CQBAttrShotInterval : KK_CQBFloatEditorAttribute {}
 class KK_CQBAttrReloadRemainder : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrOutOfSight : KK_CQBFloatEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrReloadCover : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrPerceptionFactor : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]

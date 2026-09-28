@@ -20,6 +20,8 @@ class KK_GarrisonAgentAssignment
 	bool m_bInteriorHold;
 	bool m_bBounding;
 	bool m_bHeldDoor;
+	bool m_bReloadMove;
+	vector m_vReloadGoal;
 	float m_fFireUntil;
 	float m_fBoundUntil;
 	float m_fSteadyUntil;
@@ -372,6 +374,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			// not arriving. Advancing here would walk the route ahead of him.
 			if (
 				!onFinalGoal &&
+				!KK_GarrisonHold.PausesRoute(controlledEntity) &&
 				assignment.m_fFireUntil <= currentTime &&
 				assignment.m_fSteadyUntil <= currentTime &&
 				!assignment.m_bHeldDoor
@@ -489,6 +492,25 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				KK_GarrisonHold.ClearApproachGoal(controlledEntity);
 			}
 
+			bool reloadMove = DriveGarrisonReload(
+				assignment,
+				controlledEntity,
+				unitPosition,
+				currentTime,
+				atHold
+			);
+			if (assignment.m_bReloadMove && !reloadMove && !atHold)
+			{
+				assignment.m_fLastOrderAt = currentTime;
+				IssueMoveOrder(assignment, true, assignment.m_bCanFight);
+			}
+			assignment.m_bReloadMove = reloadMove;
+			if (reloadMove)
+			{
+				i--;
+				continue;
+			}
+
 			if (atHold && !passageOverride)
 			{
 				if (!assignment.m_bHolding)
@@ -529,6 +551,9 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				bool allowRotate =
 					!attacking ||
 					m_GarrisonWaypoint.GetRotateDuringCombat();
+
+				if (KK_GarrisonHold.ShouldHoldToReload(controlledEntity, true))
+					allowRotate = false;
 
 				if (
 					allowRotate &&
@@ -1603,6 +1628,129 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			assignment.m_aRouteGoals,
 			assignment.m_iRouteIndex
 		);
+	}
+
+	protected bool DriveGarrisonReload(
+		notnull KK_GarrisonAgentAssignment assignment,
+		notnull IEntity controlledEntity,
+		vector unitPosition,
+		float currentTime,
+		bool atHold)
+	{
+		bool dash = KK_GarrisonHold.MustDashToReload(controlledEntity);
+		if (dash && KK_GarrisonHold.ReloadDashExpired(controlledEntity))
+		{
+			KK_GarrisonHold.ClearReloadDash(controlledEntity);
+			KK_GarrisonHold.SetReloadCover(controlledEntity, true);
+			dash = false;
+		}
+
+		if (dash && m_Plan)
+		{
+			vector goal;
+			if (!KK_GarrisonHold.SelectReloadCover(
+				controlledEntity,
+				m_Plan.GetTargets(),
+				goal
+			))
+			{
+				KK_GarrisonHold.ClearReloadDash(controlledEntity);
+				KK_GarrisonHold.SetReloadCover(controlledEntity, true);
+			}
+			else if (KK_GarrisonHold.AtReloadCover(controlledEntity, unitPosition))
+			{
+				KK_GarrisonHold.ClearReloadDash(controlledEntity);
+				KK_GarrisonHold.SetReloadCover(controlledEntity, true);
+			}
+			else
+			{
+				assignment.m_bHolding = false;
+				assignment.m_bBounding = false;
+				assignment.m_bHeldDoor = false;
+				assignment.m_fFireUntil = 0;
+				assignment.m_fBoundUntil = 0;
+				assignment.m_fSteadyUntil = 0;
+				KK_GarrisonHold.SetReloadCover(controlledEntity, false);
+				KK_GarrisonHold.SetPinned(controlledEntity, false);
+				assignment.m_fStillSince = currentTime;
+				assignment.m_fStartedAt = currentTime;
+
+				IEntity doorEntity = assignment.m_DoorEntity;
+				bool waitingOnDoor = KK_DoorAssist.Handle(
+					assignment.m_Agent,
+					goal,
+					doorEntity
+				);
+				assignment.m_DoorEntity = doorEntity;
+				if (waitingOnDoor)
+				{
+					KK_AgentMove.SetWantedSpeed(
+						assignment.m_Agent,
+						EMovementType.WALK
+					);
+				}
+
+				bool newGoal =
+					vector.Distance(assignment.m_vReloadGoal, goal) > 1;
+				if (
+					!waitingOnDoor &&
+					(
+						!assignment.m_bReloadMove ||
+						newGoal ||
+						currentTime - assignment.m_fLastOrderAt >=
+							KK_AgentMove.REISSUE_INTERVAL_MS
+					)
+				)
+				{
+					assignment.m_vReloadGoal = goal;
+					assignment.m_fLastOrderAt = currentTime;
+					KK_AgentMove.Issue(
+						this,
+						m_Group,
+						assignment.m_Agent,
+						goal,
+						m_mSoloHandlers,
+						KK_AgentMove.PRIORITY_LEVEL,
+						EMovementType.SPRINT
+					);
+				}
+				else if (!waitingOnDoor)
+				{
+					KK_AgentMove.SetWantedSpeed(
+						assignment.m_Agent,
+						EMovementType.SPRINT
+					);
+				}
+
+				return true;
+			}
+		}
+
+		// Off the post, an empty gun out of sight still waits here. On the
+		// post the hold below already keeps him.
+		if (!atHold && KK_GarrisonHold.ShouldHoldToReload(controlledEntity, false))
+		{
+			KK_GarrisonHold.ClearReloadDash(controlledEntity);
+			KK_GarrisonHold.SetPinned(controlledEntity, true);
+			assignment.m_bBounding = false;
+			assignment.m_fFireUntil = 0;
+			assignment.m_fSteadyUntil = 0;
+			assignment.m_fStillSince = currentTime;
+			assignment.m_fStartedAt = currentTime;
+			return true;
+		}
+
+		if (
+			assignment.m_bReloadMove &&
+			!KK_GarrisonHold.ShouldHoldToReload(controlledEntity, true)
+		)
+		{
+			KK_GarrisonHold.ClearReloadDash(controlledEntity);
+			KK_GarrisonHold.SetReloadCover(controlledEntity, false);
+			KK_GarrisonHold.SetPinned(controlledEntity, false);
+		}
+
+		return false;
 	}
 
 	protected void IssuePassageMove(
