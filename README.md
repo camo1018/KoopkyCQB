@@ -25,7 +25,7 @@ A finished clear garrisons that building when nothing else is queued and **Garri
 
 ## Garrison
 
-Puts the squad on posts inside the building. They sprint toward the building and run once they are inside. Outside, a soldier who can see an enemy stops and shoots, then runs to the next step, and repeats. If he cannot see anyone, he keeps running. Inside, with **Fight the nearest enemy in the building** on, a shot stops him until that enemy is gone. The next run still fires on the move, and when that run ends a remaining enemy stops him again. A closed door holds him, and he can shoot while he waits. At the post, he holds and fights from there.
+Puts the squad on posts inside the building. They sprint toward the building and run once they are inside. On the way in, a bound runs and shoots. Inside, with **Fight the nearest enemy in the building** on, an enemy in the building stops him until that enemy is gone, and only then does he run on. A closed door holds him, and he can shoot while he waits. At the post, he holds and fights from there.
 
 A post only counts if the soldier is on that floor. A sampled interior post allows a wider drift (the garrison hold radius, 5 m). A placed window, door, or post uses the tighter placed-waypoint hold radius (1 m).
 

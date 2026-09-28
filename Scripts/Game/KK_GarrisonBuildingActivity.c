@@ -1319,14 +1319,15 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		bool passageBusy,
 		bool advancedRoute)
 	{
-		// A bound keeps moving. The room gun and the attack still fire,
-		// so he shoots on the way instead of planting for every target.
+		// On the way to the building, a bound runs and shoots. Inside, an
+		// enemy in the house is handled below and stops him.
 		bool boundRunning =
 			assignment.m_bBounding &&
 			!advancedRoute &&
 			currentTime < assignment.m_fBoundUntil;
+		bool outside = !IsInsideBuilding(controlledEntity.GetOrigin());
 
-		if (boundRunning && !waitingOnDoor && !passageBusy)
+		if (boundRunning && outside && !waitingOnDoor && !passageBusy)
 		{
 			assignment.m_fSteadyUntil = 0;
 			KK_GarrisonHold.SetDoorFiring(controlledEntity, false);
