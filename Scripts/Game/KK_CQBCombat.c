@@ -70,6 +70,7 @@ modded class SCR_AICombatComponent
 		}
 
 		BaseWeaponComponent previousWeapon = m_SelectedWeaponComp;
+		int previousMuzzle = m_iSelectedMuzzle;
 
 		super.EvaluateWeaponAndTarget(
 			outWeaponEvent,
@@ -79,6 +80,18 @@ modded class SCR_AICombatComponent
 			outRetreatTargetChanged,
 			outCompartmentChanged
 		);
+
+		// A reload already in the gun shows up as a new magazine. That catch-up
+		// is not another swap, or he would start the animation twice.
+		if (
+			outWeaponEvent &&
+			m_SelectedWeaponComp == previousWeapon &&
+			m_iSelectedMuzzle == previousMuzzle &&
+			KK_SelectedMagazineIsLoaded()
+		)
+		{
+			outWeaponEvent = false;
+		}
 
 		if (KK_GarrisonHold.CombatOwnsWeapon(GetOwner()) && KK_KeepPrimary())
 		{
@@ -164,6 +177,20 @@ modded class SCR_AICombatComponent
 		KK_GarrisonHold.ReturnToPrimary(GetOwner());
 		return true;
 	}
+
+	protected bool KK_SelectedMagazineIsLoaded()
+	{
+		if (!m_SelectedMagazineComp || !m_SelectedWeaponComp)
+			return false;
+
+		array<BaseMuzzleComponent> muzzles = {};
+		m_SelectedWeaponComp.GetMuzzlesList(muzzles);
+		if (m_iSelectedMuzzle < 0 || m_iSelectedMuzzle >= muzzles.Count())
+			return false;
+
+		BaseMuzzleComponent muzzle = muzzles[m_iSelectedMuzzle];
+		return muzzle && muzzle.GetMagazine() == m_SelectedMagazineComp;
+	}
 }
 
 class KK_GarrisonHold
@@ -211,6 +238,12 @@ class KK_GarrisonHold
 	protected static ref map<IEntity, float> s_PrimarySwitchAt =
 		new map<IEntity, float>();
 	protected static const float PRIMARY_SWITCH_RETRY_MS = 1000;
+	protected static ref map<IEntity, float> s_ReloadAt =
+		new map<IEntity, float>();
+	protected static ref set<IEntity> s_ToppingOff = new set<IEntity>();
+	protected static ref set<IEntity> s_EmptyReload = new set<IEntity>();
+	protected static const float RELOAD_RETRY_MS = 1500;
+	protected static const float TOPOFF_START_MS = 750;
 	protected static const string PRIMARY_SLOT = "primary";
 
 	static void SetPinned(IEntity soldier, bool pinned)
@@ -528,6 +561,280 @@ class KK_GarrisonHold
 		);
 	}
 
+	// Swap a partial magazine for a fuller one when he is not in a fight.
+	// An empty gun reloads anyway, including while the building shot is held.
+	// A sprint keeps moving. A visible enemy or incoming fire keeps a loaded gun up.
+	static void ConsiderTopOff(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !s_Buildings.Contains(body))
+			return;
+
+		bool dry = GunIsDry(body);
+		if (IsIgnoringTargets(body))
+			return;
+
+		if (!dry && ReloadInterrupted(body))
+			return;
+
+		CharacterControllerComponent controller = Controller(body);
+		if (
+			!controller ||
+			controller.IsDead() ||
+			controller.IsUnconscious() ||
+			controller.IsChangingItem() ||
+			controller.IsSprinting() ||
+			controller.IsMeleeAttack() ||
+			controller.IsUsingItem()
+		)
+		{
+			return;
+		}
+
+		if (controller.IsReloading())
+		{
+			if (dry)
+				s_EmptyReload.Insert(body);
+
+			return;
+		}
+
+		if (HoldingThrowable(body))
+			return;
+
+		float now = 0;
+		BaseWorld world = GetGame().GetWorld();
+		if (world)
+			now = world.GetWorldTime();
+
+		if (
+			s_ReloadAt.Contains(body) &&
+			now - s_ReloadAt.Get(body) < RELOAD_RETRY_MS
+		)
+		{
+			return;
+		}
+
+		if (!dry && !UseRoomCombat() && HasVisibleTarget(body))
+		{
+			s_ReloadAt.Set(body, now);
+			return;
+		}
+
+		IEntity spare = FullerMagazine(body);
+		s_ReloadAt.Set(body, now);
+		if (!spare)
+			return;
+
+		BaseMagazineComponent loaded = LoadedMagazine(body);
+		bool forceDetach = loaded && loaded.GetAmmoCount() > 0;
+		controller.SetFireWeaponWanted(false);
+		s_MoveFiring.RemoveItem(body);
+		if (!controller.ReloadWeaponWith(spare, forceDetach))
+			return;
+
+		if (dry)
+			s_EmptyReload.Insert(body);
+		else
+			s_ToppingOff.Insert(body);
+	}
+
+	// True while a clear or garrison reload should be left to finish.
+	// A loaded gun drops the reload when contact starts. An empty gun finishes it.
+	static bool IsQuietReload(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return false;
+
+		if (IsEmptyReload(body))
+			return true;
+
+		bool started = s_ToppingOff.Contains(body);
+		if (!started && !s_Buildings.Contains(body))
+			return false;
+
+		if (ReloadInterrupted(body))
+		{
+			if (started)
+				s_ToppingOff.RemoveItem(body);
+
+			return false;
+		}
+
+		CharacterControllerComponent controller = Controller(body);
+		if (controller && controller.IsReloading())
+			return true;
+
+		if (!started)
+			return false;
+
+		float now = 0;
+		BaseWorld world = GetGame().GetWorld();
+		if (world)
+			now = world.GetWorldTime();
+
+		if (
+			s_ReloadAt.Contains(body) &&
+			now - s_ReloadAt.Get(body) < TOPOFF_START_MS
+		)
+		{
+			return true;
+		}
+
+		s_ToppingOff.RemoveItem(body);
+		return false;
+	}
+
+	// The building shot keeps the trigger down. That has to stay off until a
+	// dry gun has a magazine again, or the reload never starts.
+	protected static bool IsEmptyReload(IEntity body)
+	{
+		if (!body || !s_EmptyReload.Contains(body))
+			return false;
+
+		CharacterControllerComponent controller = Controller(body);
+		if (controller && controller.IsReloading())
+			return true;
+
+		float now = 0;
+		BaseWorld world = GetGame().GetWorld();
+		if (world)
+			now = world.GetWorldTime();
+
+		if (
+			s_ReloadAt.Contains(body) &&
+			now - s_ReloadAt.Get(body) < TOPOFF_START_MS
+		)
+		{
+			return true;
+		}
+
+		s_EmptyReload.RemoveItem(body);
+		return false;
+	}
+
+	protected static bool GunIsDry(IEntity body)
+	{
+		BaseMuzzleComponent muzzle = PrimaryMuzzle(body);
+		if (!muzzle || muzzle.GetAmmoCount() > 0)
+			return false;
+
+		BaseMagazineComponent loaded = muzzle.GetMagazine();
+		return !loaded || loaded.GetAmmoCount() <= 0;
+	}
+
+	protected static bool ReloadInterrupted(IEntity body)
+	{
+		if (
+			s_ShotLive.Contains(body) ||
+			s_MoveFiring.Contains(body) ||
+			s_RoomFire.Contains(body)
+		)
+		{
+			return true;
+		}
+
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (!utility || !utility.m_ThreatSystem)
+			return false;
+
+		return utility.m_ThreatSystem.GetState() == EAIThreatState.THREATENED;
+	}
+
+	protected static bool HasVisibleTarget(IEntity body)
+	{
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (!utility || !utility.m_CombatComponent)
+			return false;
+
+		BaseTarget target = utility.m_CombatComponent.GetCurrentTarget();
+		return target && CanSeeTarget(body, target);
+	}
+
+	protected static IEntity FullerMagazine(IEntity body)
+	{
+		BaseMuzzleComponent muzzle = PrimaryMuzzle(body);
+		if (!muzzle)
+			return null;
+
+		BaseMagazineWell well = muzzle.GetMagazineWell();
+		if (!well)
+			return null;
+
+		int loadedAmmo = 0;
+		IEntity loadedEntity = null;
+		BaseMagazineComponent loaded = muzzle.GetMagazine();
+		if (loaded)
+		{
+			int maxAmmo = loaded.GetMaxAmmoCount();
+			loadedAmmo = loaded.GetAmmoCount();
+			if (maxAmmo <= 0 || loadedAmmo >= maxAmmo)
+				return null;
+
+			loadedEntity = loaded.GetOwner();
+		}
+
+		SCR_InventoryStorageManagerComponent inventory =
+			SCR_InventoryStorageManagerComponent.Cast(
+				body.FindComponent(SCR_InventoryStorageManagerComponent)
+			);
+		if (!inventory)
+			return null;
+
+		SCR_MagazinePredicate predicate = new SCR_MagazinePredicate();
+		predicate.magWellType = well.Type();
+
+		array<IEntity> found = {};
+		inventory.FindItems(found, predicate, EStoragePurpose.PURPOSE_DEPOSIT);
+
+		IEntity best = null;
+		int bestAmmo = loadedAmmo;
+		foreach (IEntity item : found)
+		{
+			if (!item || item == loadedEntity || !inventory.Contains(item))
+				continue;
+
+			BaseMagazineComponent magazine = BaseMagazineComponent.Cast(
+				item.FindComponent(BaseMagazineComponent)
+			);
+			if (!magazine)
+				continue;
+
+			int ammo = magazine.GetAmmoCount();
+			if (ammo <= bestAmmo)
+				continue;
+
+			bestAmmo = ammo;
+			best = item;
+		}
+
+		return best;
+	}
+
+	protected static BaseMagazineComponent LoadedMagazine(IEntity body)
+	{
+		BaseMuzzleComponent muzzle = PrimaryMuzzle(body);
+		if (!muzzle)
+			return null;
+
+		return muzzle.GetMagazine();
+	}
+
+	protected static BaseMuzzleComponent PrimaryMuzzle(IEntity body)
+	{
+		BaseWeaponComponent weapon = CurrentWeapon(body);
+		if (!weapon || IsThrowableType(weapon.GetWeaponType()))
+			return null;
+
+		array<BaseMuzzleComponent> muzzles = {};
+		weapon.GetMuzzlesList(muzzles);
+		if (muzzles.Count() == 0 || !muzzles[0] || muzzles[0].IsDisposable())
+			return null;
+
+		return muzzles[0];
+	}
+
 	// Only command the weapon when the stance changes. Repeating the same
 	// raise or lower restarts the animation.
 	protected static void CommandWeapon(IEntity body, bool raised, bool fire)
@@ -543,9 +850,22 @@ class KK_GarrisonHold
 			fire = false;
 		}
 
+		// The building shot would hold the trigger on an empty gun and the
+		// reload would never leave the magazine well.
+		bool dry = GunIsDry(body);
+		if (dry || IsEmptyReload(body))
+		{
+			fire = false;
+			if (dry)
+				ConsiderTopOff(body);
+		}
+
+		// Another raise while the magazine is coming out restarts the reload.
+		// A shot still goes through, so contact cancels a loaded gun's reload.
 		bool known = s_MoveWeaponKnown.Contains(body);
 		bool wasRaised = s_MoveWeaponUp.Contains(body);
-		if (!known || wasRaised != raised)
+		bool holdReload = !fire && IsQuietReload(body);
+		if (!holdReload && (!known || wasRaised != raised))
 		{
 			s_MoveWeaponKnown.Insert(body);
 			if (raised)
@@ -563,8 +883,11 @@ class KK_GarrisonHold
 			s_MoveFiring.RemoveItem(body);
 
 		// The raise is sent once. The trigger is sent every update, or a
-		// later node clears it and the shot never starts.
-		if (fire || wasFiring)
+		// later node clears it and the shot never starts. A dry gun stays
+		// off the trigger for the whole reload.
+		if (dry || IsEmptyReload(body))
+			SetFireWanted(body, false);
+		else if (fire || wasFiring)
 			SetFireWanted(body, fire);
 	}
 
@@ -704,6 +1027,9 @@ class KK_GarrisonHold
 		if (!building)
 		{
 			s_Buildings.Remove(body);
+			s_ReloadAt.Remove(body);
+			s_ToppingOff.RemoveItem(body);
+			s_EmptyReload.RemoveItem(body);
 			ClearShot(body);
 			return;
 		}
@@ -1889,6 +2215,15 @@ modded class SCR_AIUtilityComponent
 		)
 			KK_GarrisonHold.ApplyMoveFire(this);
 
+		if (!ignore)
+		{
+			IEntity soldier = m_OwnerEntity;
+			if (!soldier)
+				soldier = GetOwner();
+
+			KK_GarrisonHold.ConsiderTopOff(soldier);
+		}
+
 		return result;
 	}
 }
@@ -1941,6 +2276,10 @@ modded class SCR_AISetWeaponRaised
 			// refresh would raise it again. This node owns it instead.
 			return ENodeResult.SUCCESS;
 		}
+
+		// The move order raises on a loop. That raise restarts a reload.
+		if (KK_GarrisonHold.IsQuietReload(body) || KK_GarrisonHold.IsQuietReload(owner))
+			return ENodeResult.SUCCESS;
 
 		return super.EOnTaskSimulate(owner, dt);
 	}

@@ -1857,6 +1857,10 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		if (!controller)
 			return;
 
+		// A raise or lower from the move order restarts a reload already playing.
+		if (KK_GarrisonHold.IsQuietReload(controlledEntity))
+			return;
+
 		controller.SetWeaponRaised(raised);
 	}
 
