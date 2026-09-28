@@ -1837,6 +1837,16 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		if (!controlledEntity)
 			return;
 
+		// Raising a frag restarts the throw. Room combat wants the rifle.
+		if (
+			KK_GarrisonHold.CombatOwnsWeapon(controlledEntity) &&
+			KK_GarrisonHold.HoldingThrowable(controlledEntity)
+		)
+		{
+			KK_GarrisonHold.ReturnToPrimary(controlledEntity);
+			return;
+		}
+
 		SCR_CharacterControllerComponent controller =
 			SCR_CharacterControllerComponent.Cast(
 				controlledEntity.FindComponent(

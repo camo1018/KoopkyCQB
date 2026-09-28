@@ -69,6 +69,8 @@ modded class SCR_AICombatComponent
 			return;
 		}
 
+		BaseWeaponComponent previousWeapon = m_SelectedWeaponComp;
+
 		super.EvaluateWeaponAndTarget(
 			outWeaponEvent,
 			outSelectedTargetChanged,
@@ -77,6 +79,16 @@ modded class SCR_AICombatComponent
 			outRetreatTargetChanged,
 			outCompartmentChanged
 		);
+
+		if (KK_GarrisonHold.CombatOwnsWeapon(GetOwner()) && KK_KeepPrimary())
+		{
+			// The selector just asked for a frag. Publishing that change
+			// would equip it again. The hands are already back on the rifle.
+			if (m_SelectedWeaponComp == previousWeapon)
+				outWeaponEvent = false;
+			else
+				outWeaponEvent = true;
+		}
 
 		if (!KK_GarrisonHold.UseRoomCombat() || !KK_GarrisonHold.HasBuilding(GetOwner()))
 			return;
@@ -107,6 +119,50 @@ modded class SCR_AICombatComponent
 			m_SelectedTargetDestinationPos = preferred.GetLastSeenPosition();
 		outCurrentTarget = preferred;
 		outSelectedTargetChanged = false;
+	}
+
+	// A held trigger cooks a frag. Room combat never releases it, so the
+	// selector is put back on the primary weapon and the hands follow.
+	protected bool KK_KeepPrimary()
+	{
+		if (
+			!m_SelectedWeaponComp ||
+			!KK_GarrisonHold.IsThrowableType(m_SelectedWeaponComp.GetWeaponType())
+		)
+		{
+			return false;
+		}
+
+		BaseWeaponComponent primary = KK_GarrisonHold.PrimaryWeapon(GetOwner());
+		if (!primary)
+			return false;
+
+		m_SelectedWeaponComp = primary;
+		m_iSelectedMuzzle = 0;
+		m_SelectedMagazineComp = null;
+		m_fSelectedWeaponMinDist = 0;
+		m_fSelectedWeaponMaxDist = 800;
+		m_bSelectedWeaponDirectDamage = true;
+
+		EMuzzleType muzzleType = EMuzzleType.MT_BaseMuzzle;
+		array<BaseMuzzleComponent> muzzles = {};
+		primary.GetMuzzlesList(muzzles);
+		if (muzzles.Count() > 0 && muzzles[0])
+		{
+			m_SelectedMagazineComp = muzzles[0].GetMagazine();
+			muzzleType = muzzles[0].GetMuzzleType();
+		}
+
+		if (m_ConfigComponent)
+		{
+			m_SelectedWeaponResource = m_ConfigComponent.GetTreeNameForWeaponType(
+				primary.GetWeaponType(),
+				muzzleType
+			);
+		}
+
+		KK_GarrisonHold.ReturnToPrimary(GetOwner());
+		return true;
 	}
 }
 
@@ -152,6 +208,10 @@ class KK_GarrisonHold
 	protected static ref map<IEntity, IEntity> s_AimTarget = new map<IEntity, IEntity>();
 	protected static ref map<IEntity, float> s_AimSince = new map<IEntity, float>();
 	protected static ref set<IEntity> s_LeanHeld = new set<IEntity>();
+	protected static ref map<IEntity, float> s_PrimarySwitchAt =
+		new map<IEntity, float>();
+	protected static const float PRIMARY_SWITCH_RETRY_MS = 1000;
+	protected static const string PRIMARY_SLOT = "primary";
 
 	static void SetPinned(IEntity soldier, bool pinned)
 	{
@@ -346,12 +406,142 @@ class KK_GarrisonHold
 			utility.m_LookAction.LookAt(shot.GetLastSeenPosition(), 100, 3);
 	}
 
+	static bool CombatOwnsWeapon(IEntity soldier)
+	{
+		return OwnsShot(soldier) ||
+			IsMoveFire(soldier) ||
+			IsRoomFire(soldier);
+	}
+
+	static bool IsThrowableType(EWeaponType type)
+	{
+		return type == EWeaponType.WT_FRAGGRENADE ||
+			type == EWeaponType.WT_SMOKEGRENADE;
+	}
+
+	static bool HoldingThrowable(IEntity soldier)
+	{
+		BaseWeaponComponent current = CurrentWeapon(soldier);
+		return current && IsThrowableType(current.GetWeaponType());
+	}
+
+	// The slot named primary, or the first gun if that slot is empty.
+	static BaseWeaponComponent PrimaryWeapon(IEntity soldier)
+	{
+		BaseWeaponManagerComponent manager = WeaponManager(soldier);
+		if (!manager)
+			return null;
+
+		array<WeaponSlotComponent> slots = {};
+		manager.GetWeaponsSlots(slots);
+
+		BaseWeaponComponent fallback;
+		foreach (WeaponSlotComponent slot : slots)
+		{
+			if (!slot)
+				continue;
+
+			BaseWeaponComponent weapon = WeaponInSlot(slot);
+			if (!weapon || IsThrowableType(weapon.GetWeaponType()))
+				continue;
+
+			if (slot.GetWeaponSlotType() == PRIMARY_SLOT)
+				return weapon;
+
+			if (!fallback)
+				fallback = weapon;
+		}
+
+		return fallback;
+	}
+
+	// One request at a time. A repeat while the swap is playing restarts it.
+	static void ReturnToPrimary(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		if (!HoldingThrowable(body))
+		{
+			s_PrimarySwitchAt.Remove(body);
+			return;
+		}
+
+		CharacterControllerComponent controller = Controller(body);
+		if (!controller || controller.IsChangingItem())
+			return;
+
+		float now = 0;
+		BaseWorld world = GetGame().GetWorld();
+		if (world)
+			now = world.GetWorldTime();
+
+		if (
+			s_PrimarySwitchAt.Contains(body) &&
+			now - s_PrimarySwitchAt.Get(body) < PRIMARY_SWITCH_RETRY_MS
+		)
+		{
+			return;
+		}
+
+		BaseWeaponComponent primary = PrimaryWeapon(body);
+		if (!primary)
+			return;
+
+		s_PrimarySwitchAt.Set(body, now);
+		controller.SetFireWeaponWanted(false);
+		SCR_AIWeaponHandling.StartWeaponSwitchCharacter(controller, primary);
+	}
+
+	protected static BaseWeaponComponent CurrentWeapon(IEntity soldier)
+	{
+		BaseWeaponManagerComponent manager = WeaponManager(soldier);
+		if (!manager)
+			return null;
+
+		return manager.GetCurrentWeapon();
+	}
+
+	protected static BaseWeaponManagerComponent WeaponManager(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return null;
+
+		return BaseWeaponManagerComponent.Cast(
+			body.FindComponent(BaseWeaponManagerComponent)
+		);
+	}
+
+	protected static BaseWeaponComponent WeaponInSlot(WeaponSlotComponent slot)
+	{
+		if (!slot)
+			return null;
+
+		IEntity weaponEntity = slot.GetWeaponEntity();
+		if (!weaponEntity)
+			return null;
+
+		return BaseWeaponComponent.Cast(
+			weaponEntity.FindComponent(BaseWeaponComponent)
+		);
+	}
+
 	// Only command the weapon when the stance changes. Repeating the same
 	// raise or lower restarts the animation.
 	protected static void CommandWeapon(IEntity body, bool raised, bool fire)
 	{
 		if (!body)
 			return;
+
+		// The trigger is a cook on a frag. Get the rifle back before it.
+		if (HoldingThrowable(body))
+		{
+			ReturnToPrimary(body);
+			raised = false;
+			fire = false;
+		}
 
 		bool known = s_MoveWeaponKnown.Contains(body);
 		bool wasRaised = s_MoveWeaponUp.Contains(body);
