@@ -1839,8 +1839,11 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			return false;
 
 		bool dash = KK_GarrisonHold.MustDashToReload(body);
-		if (dash && KK_GarrisonHold.ReloadDashExpired(body))
+		if (!dash)
+			KK_GarrisonHold.LogReload(body, KK_GarrisonHold.ReloadSkipReason(body));
+		else if (KK_GarrisonHold.ReloadDashExpired(body))
 		{
+			KK_GarrisonHold.LogReload(body, "dash-timeout");
 			KK_GarrisonHold.ClearReloadDash(body);
 			KK_GarrisonHold.SetReloadCover(body, true);
 			dash = false;
@@ -1855,16 +1858,19 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				goal
 			))
 			{
+				KK_GarrisonHold.LogReload(body, "no-hidden-node");
 				KK_GarrisonHold.ClearReloadDash(body);
 				KK_GarrisonHold.SetReloadCover(body, true);
 			}
 			else if (KK_GarrisonHold.AtReloadCover(body, unitPosition))
 			{
+				KK_GarrisonHold.LogReload(body, "already-at-node");
 				KK_GarrisonHold.ClearReloadDash(body);
 				KK_GarrisonHold.SetReloadCover(body, true);
 			}
 			else
 			{
+				KK_GarrisonHold.LogReload(body, "relocate");
 				KK_GarrisonHold.SetReloadCover(body, false);
 				KK_GarrisonHold.SetPinned(body, false);
 				assignment.m_fStillSince = currentTime;
@@ -1906,14 +1912,14 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 						goal,
 						m_mSoloHandlers,
 						KK_AgentMove.PRIORITY_LEVEL,
-						EMovementType.SPRINT
+						EMovementType.RUN
 					);
 				}
 				else if (!waitingOnDoor)
 				{
 					KK_AgentMove.SetWantedSpeed(
 						assignment.m_Agent,
-						EMovementType.SPRINT
+						EMovementType.RUN
 					);
 				}
 

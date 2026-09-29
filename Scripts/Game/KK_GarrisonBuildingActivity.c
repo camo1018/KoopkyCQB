@@ -1638,8 +1638,11 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		bool atHold)
 	{
 		bool dash = KK_GarrisonHold.MustDashToReload(controlledEntity);
-		if (dash && KK_GarrisonHold.ReloadDashExpired(controlledEntity))
+		if (!dash)
+			KK_GarrisonHold.LogReload(controlledEntity, KK_GarrisonHold.ReloadSkipReason(controlledEntity));
+		else if (KK_GarrisonHold.ReloadDashExpired(controlledEntity))
 		{
+			KK_GarrisonHold.LogReload(controlledEntity, "dash-timeout");
 			KK_GarrisonHold.ClearReloadDash(controlledEntity);
 			KK_GarrisonHold.SetReloadCover(controlledEntity, true);
 			dash = false;
@@ -1654,16 +1657,19 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				goal
 			))
 			{
+				KK_GarrisonHold.LogReload(controlledEntity, "no-hidden-node");
 				KK_GarrisonHold.ClearReloadDash(controlledEntity);
 				KK_GarrisonHold.SetReloadCover(controlledEntity, true);
 			}
 			else if (KK_GarrisonHold.AtReloadCover(controlledEntity, unitPosition))
 			{
+				KK_GarrisonHold.LogReload(controlledEntity, "already-at-node");
 				KK_GarrisonHold.ClearReloadDash(controlledEntity);
 				KK_GarrisonHold.SetReloadCover(controlledEntity, true);
 			}
 			else
 			{
+				KK_GarrisonHold.LogReload(controlledEntity, "relocate");
 				assignment.m_bHolding = false;
 				assignment.m_bBounding = false;
 				assignment.m_bHeldDoor = false;
@@ -1711,14 +1717,14 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 						goal,
 						m_mSoloHandlers,
 						KK_AgentMove.PRIORITY_LEVEL,
-						EMovementType.SPRINT
+						EMovementType.RUN
 					);
 				}
 				else if (!waitingOnDoor)
 				{
 					KK_AgentMove.SetWantedSpeed(
 						assignment.m_Agent,
-						EMovementType.SPRINT
+						EMovementType.RUN
 					);
 				}
 
