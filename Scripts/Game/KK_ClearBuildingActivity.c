@@ -415,14 +415,21 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				)
 				{
 					assignment.m_bCombatOwnsWeapon = false;
-					SetWeaponRaised(assignment.m_Agent, true);
-					OrderWeaponRaised(assignment.m_Agent, true);
-					KK_AgentMove.SetWantedSpeed(
-						assignment.m_Agent,
-						EMovementType.RUN
-					);
+					if (!KK_GarrisonHold.SprintBeforeReload(
+						assignment.m_Agent.GetControlledEntity()
+					))
+					{
+						SetWeaponRaised(assignment.m_Agent, true);
+						OrderWeaponRaised(assignment.m_Agent, true);
+						KK_AgentMove.SetWantedSpeed(
+							assignment.m_Agent,
+							EMovementType.RUN
+						);
+					}
 				}
-				else
+				else if (!KK_GarrisonHold.SprintBeforeReload(
+					assignment.m_Agent.GetControlledEntity()
+				))
 				{
 					SetWeaponRaised(assignment.m_Agent, true);
 				}
@@ -1835,7 +1842,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		float currentTime)
 	{
 		IEntity body = assignment.m_Agent.GetControlledEntity();
-		if (!body || !m_Plan)
+		if (!body)
 			return false;
 
 		bool dash = KK_GarrisonHold.MustDashToReload(body);
@@ -1852,25 +1859,32 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		if (dash)
 		{
 			vector goal;
-			if (!KK_GarrisonHold.SelectReloadCover(
+			array<ref KK_InteriorTarget> targets;
+			if (m_Plan)
+				targets = m_Plan.GetTargets();
+
+			if (!KK_GarrisonHold.KeepReloadMove(
 				body,
-				m_Plan.GetTargets(),
+				targets,
+				unitPosition,
 				goal
 			))
 			{
-				KK_GarrisonHold.LogReload(body, "no-hidden-node");
-				KK_GarrisonHold.ClearReloadDash(body);
-				KK_GarrisonHold.SetReloadCover(body, true);
-			}
-			else if (KK_GarrisonHold.AtReloadCover(body, unitPosition))
-			{
-				KK_GarrisonHold.LogReload(body, "already-at-node");
+				KK_GarrisonHold.LogReload(body, "hold");
 				KK_GarrisonHold.ClearReloadDash(body);
 				KK_GarrisonHold.SetReloadCover(body, true);
 			}
 			else
 			{
-				KK_GarrisonHold.LogReload(body, "relocate");
+				EMovementType speed = KK_GarrisonHold.ReloadMoveSpeed(body);
+				string choice = "break";
+				if (speed == EMovementType.SPRINT)
+				{
+					choice = "sprint";
+					KK_GarrisonHold.LowerForReloadSprint(assignment.m_Agent);
+				}
+
+				KK_GarrisonHold.LogReload(body, choice);
 				KK_GarrisonHold.SetReloadCover(body, false);
 				KK_GarrisonHold.SetPinned(body, false);
 				assignment.m_fStillSince = currentTime;
@@ -1912,14 +1926,14 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 						goal,
 						m_mSoloHandlers,
 						KK_AgentMove.PRIORITY_LEVEL,
-						EMovementType.RUN
+						speed
 					);
 				}
 				else if (!waitingOnDoor)
 				{
 					KK_AgentMove.SetWantedSpeed(
 						assignment.m_Agent,
-						EMovementType.RUN
+						speed
 					);
 				}
 

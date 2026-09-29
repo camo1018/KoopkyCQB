@@ -1648,28 +1648,36 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			dash = false;
 		}
 
-		if (dash && m_Plan)
+		if (dash)
 		{
 			vector goal;
-			if (!KK_GarrisonHold.SelectReloadCover(
+			array<ref KK_InteriorTarget> targets;
+			if (m_Plan)
+				targets = m_Plan.GetTargets();
+
+			if (!KK_GarrisonHold.KeepReloadMove(
 				controlledEntity,
-				m_Plan.GetTargets(),
+				targets,
+				unitPosition,
 				goal
 			))
 			{
-				KK_GarrisonHold.LogReload(controlledEntity, "no-hidden-node");
-				KK_GarrisonHold.ClearReloadDash(controlledEntity);
-				KK_GarrisonHold.SetReloadCover(controlledEntity, true);
-			}
-			else if (KK_GarrisonHold.AtReloadCover(controlledEntity, unitPosition))
-			{
-				KK_GarrisonHold.LogReload(controlledEntity, "already-at-node");
+				KK_GarrisonHold.LogReload(controlledEntity, "hold");
 				KK_GarrisonHold.ClearReloadDash(controlledEntity);
 				KK_GarrisonHold.SetReloadCover(controlledEntity, true);
 			}
 			else
 			{
-				KK_GarrisonHold.LogReload(controlledEntity, "relocate");
+				EMovementType speed =
+					KK_GarrisonHold.ReloadMoveSpeed(controlledEntity);
+				string choice = "break";
+				if (speed == EMovementType.SPRINT)
+				{
+					choice = "sprint";
+					KK_GarrisonHold.LowerForReloadSprint(assignment.m_Agent);
+				}
+
+				KK_GarrisonHold.LogReload(controlledEntity, choice);
 				assignment.m_bHolding = false;
 				assignment.m_bBounding = false;
 				assignment.m_bHeldDoor = false;
@@ -1717,14 +1725,14 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 						goal,
 						m_mSoloHandlers,
 						KK_AgentMove.PRIORITY_LEVEL,
-						EMovementType.RUN
+						speed
 					);
 				}
 				else if (!waitingOnDoor)
 				{
 					KK_AgentMove.SetWantedSpeed(
 						assignment.m_Agent,
-						EMovementType.RUN
+						speed
 					);
 				}
 
