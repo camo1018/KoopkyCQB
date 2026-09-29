@@ -1965,6 +1965,43 @@ class KK_GarrisonHold
 		return (int)Math.Round(mode.KK_GetShotInterval());
 	}
 
+	// An enemy inside this building. The shot owns his facing, even when
+	// the threat state has dropped below alerted.
+	static bool FightingInside(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !s_Buildings.Contains(body))
+			return false;
+
+		IEntity building = s_Buildings.Get(body);
+		if (!building || !PositionInside(building, body.GetOrigin()))
+			return false;
+
+		if (s_ShotLive.Contains(body))
+			return true;
+
+		if (s_ShotLook.Contains(body))
+		{
+			IEntity shot = s_ShotLook.Get(body);
+			if (shot && PositionInside(building, shot.GetOrigin()))
+				return true;
+		}
+
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (!utility || !utility.m_CombatComponent)
+			return false;
+
+		BaseTarget target = utility.m_CombatComponent.GetCurrentTarget();
+		if (!target)
+			return false;
+
+		IEntity enemy = target.GetTargetEntity();
+		if (enemy)
+			return PositionInside(building, enemy.GetOrigin());
+
+		return PositionInside(building, target.GetLastSeenPosition());
+	}
+
 	// Inside the order's building, this soldier's gun is ours. The attack
 	// behavior can still stop him, but it does not decide the shot.
 	static bool OwnsShot(IEntity soldier)

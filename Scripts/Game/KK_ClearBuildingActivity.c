@@ -503,7 +503,12 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					assignment.m_fStillSince = currentTime;
 					assignment.m_fStartedAt = currentTime;
 
-					if (IsEngagingEnemy(assignment.m_Agent))
+					if (
+						IsEngagingEnemy(assignment.m_Agent) ||
+						KK_GarrisonHold.FightingInside(
+							assignment.m_Agent.GetControlledEntity()
+						)
+					)
 					{
 						assignment.m_bFacingApplied = false;
 					}

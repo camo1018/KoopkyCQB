@@ -533,11 +533,14 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 					}
 				}
 
-				if (attacking)
+				bool indoorFight =
+					KK_GarrisonHold.FightingInside(controlledEntity);
+				if (attacking || indoorFight)
 					assignment.m_bFacingApplied = false;
 
 				if (
 					!attacking &&
+					!indoorFight &&
 					KK_HoldFacing.HasFacing(assignment.m_Target)
 				)
 				{
