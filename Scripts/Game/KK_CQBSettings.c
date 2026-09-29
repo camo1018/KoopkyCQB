@@ -137,7 +137,7 @@ modded class SCR_BaseGameMode
 	[Attribute("1", UIWidgets.EditBox, "Recognition speed while clearing or garrisoning (×). 1 is normal.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_PerceptionFactor;
 
-	[Attribute("1", UIWidgets.CheckBox, "Open a closed door ahead, after the squad steps out of its swing", category: "Koopky CQB/Combat")]
+	[Attribute("1", UIWidgets.CheckBox, "Open a closed door ahead. Step back only when it swings outward", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_OpenDoors;
 
 	[Attribute("0", UIWidgets.ComboBox, "AI navigation improvements", "Off leaves movement alone. Make Way yields. Pass-through drops character collision only while blocked.", ParamEnumArray.FromEnum(KK_ENavMode))]

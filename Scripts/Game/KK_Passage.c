@@ -146,10 +146,13 @@ class KK_Passage
 	protected static const float STALL_RATE = 0.05;
 	protected static const float RAY_HEIGHT = 1.0;
 	// Body radius plus a small margin. The leaf still collides with characters
-	// when they pass through each other, so the quarter in front of an outswing
-	// door has to be empty before it can move.
+	// when they pass through each other, so anyone in the quarter in front of
+	// an outswing door is stepped back once that swing is known.
 	protected static const float SWING_CLEARANCE = 0.5;
 	protected static const float OPEN_RETRY_MS = 1200;
+	// A free door moves its latch far enough to show in or out well inside
+	// this. Longer than that, still shut, means a body is in an outward arc.
+	protected static const float SWING_REVEAL_MS = 800;
 
 	protected static ref map<IEntity, ref KK_Opening> s_mOpenings =
 		new map<IEntity, ref KK_Opening>();
@@ -857,9 +860,6 @@ class KK_Passage
 
 	protected static bool ReserveApproach(notnull KK_Opening opening)
 	{
-		if (opening.m_bStalled)
-			return true;
-
 		foreach (KK_OpeningLeaf leaf : opening.m_aLeaves)
 		{
 			if (!LeafSweeps(opening, leaf))
@@ -884,11 +884,30 @@ class KK_Passage
 		if (leaf.m_Door.IsOpen() || leaf.m_Door.CanCharacterPass(PASS_WIDTH))
 			return false;
 
-		// Known inswing opens away from the squad, so the approach side can stay.
-		if (leaf.m_bSwingKnown && !leaf.m_bSwingsOut && !opening.m_bStalled)
+		// Direction comes from the first latch movement. Until then the squad
+		// stays in the lane and the door is asked open. An inward leaf leaves
+		// the approach side alone. An outward leaf needs it clear, and so does
+		// a leaf that stalls against a body before its swing can be seen.
+		if (!leaf.m_bSwingKnown)
+			return BlockedBeforeSwing(opening);
+
+		if (!leaf.m_bSwingsOut && !opening.m_bStalled)
 			return false;
 
 		return true;
+	}
+
+	protected static bool BlockedBeforeSwing(notnull KK_Opening opening)
+	{
+		if (!opening.m_bOpenCalled || !opening.m_bStalled)
+			return false;
+
+		BaseWorld world = GetGame().GetWorld();
+		if (!world)
+			return true;
+
+		float now = world.GetWorldTime();
+		return now - opening.m_fLastOpenCall >= SWING_REVEAL_MS;
 	}
 
 	protected static bool InSwingDisk(
