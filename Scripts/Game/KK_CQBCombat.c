@@ -93,14 +93,11 @@ modded class SCR_AICombatComponent
 			outWeaponEvent = false;
 		}
 
-		if (KK_GarrisonHold.CombatOwnsWeapon(GetOwner()) && KK_KeepPrimary())
+		if (KK_GarrisonHold.ShouldKeepRifle(GetOwner()) && KK_KeepPrimary())
 		{
-			// The selector just asked for a frag. Publishing that change
-			// would equip it again. The hands are already back on the rifle.
-			if (m_SelectedWeaponComp == previousWeapon)
-				outWeaponEvent = false;
-			else
-				outWeaponEvent = true;
+			// Publishing the frag would equip it. The empty rifle is then
+			// forced back, and the two swaps never finish a reload.
+			outWeaponEvent = false;
 		}
 
 		if (!KK_GarrisonHold.UseRoomCombat() || !KK_GarrisonHold.HasBuilding(GetOwner()))
@@ -276,12 +273,12 @@ class KK_GarrisonHold
 	protected static const float TOPOFF_START_MS = 750;
 	protected static const float RELOAD_COVER_RADIUS = 0.8;
 	protected static const float RELOAD_NODE_RADIUS = 0.2;
-	protected static const float RELOAD_NODE_WALK = 1.2;
-	protected static const float RELOAD_NODE_RUN = 2.5;
 	protected static const float RELOAD_NODE_NAVMESH = 0.5;
 	protected static const float RELOAD_NODE_STALL_MS = 1000;
-	protected static const float RELOAD_BASH_RANGE = 2.2;
-	protected static const float RELOAD_BASH_KEEP = 3.2;
+	// Center to center. He only swings when he has run into the other body.
+	// A couple of meters is still a lunge, and he should keep going to cover.
+	protected static const float RELOAD_BASH_RANGE = 1.25;
+	protected static const float RELOAD_BASH_KEEP = 1.6;
 	protected static const float RELOAD_BASH_WALK = 1.6;
 	protected static const float RELOAD_BREAK_RADIUS = 2;
 	protected static const float RELOAD_DASH_MS = 8000;
@@ -503,6 +500,20 @@ class KK_GarrisonHold
 		return OwnsShot(soldier) ||
 			IsMoveFire(soldier) ||
 			IsRoomFire(soldier);
+	}
+
+	// Room combat, the cover sprint, and a bash stay on the rifle. A frag
+	// selected for an empty gun would swap forever with the primary.
+	static bool ShouldKeepRifle(IEntity soldier)
+	{
+		if (CombatOwnsWeapon(soldier))
+			return true;
+
+		if (SprintBeforeReload(soldier) || IsReloadBashing(soldier))
+			return true;
+
+		IEntity body = CharacterBody(soldier);
+		return body && s_SprintNode.Contains(body);
 	}
 
 	static bool IsThrowableType(EWeaponType type)
@@ -951,23 +962,14 @@ class KK_GarrisonHold
 		return !controller || !controller.IsReloading();
 	}
 
+	// The whole approach is a sprint. A walk or jog at the end, or a look
+	// back at the threat, turns it into a strafe and the reload never starts.
 	static EMovementType ReloadMoveSpeed(IEntity soldier)
 	{
-		if (!SprintBeforeReload(soldier))
-			return EMovementType.RUN;
+		if (SprintBeforeReload(soldier))
+			return EMovementType.SPRINT;
 
-		IEntity body = CharacterBody(soldier);
-		if (body && s_ReloadDash.Contains(body))
-		{
-			float dist = vector.Distance(body.GetOrigin(), s_ReloadDash.Get(body));
-			if (dist <= RELOAD_NODE_WALK)
-				return EMovementType.WALK;
-
-			if (dist <= RELOAD_NODE_RUN)
-				return EMovementType.RUN;
-		}
-
-		return EMovementType.SPRINT;
+		return EMovementType.RUN;
 	}
 
 	// Beats attack, sidestep, and the melee shove. The node is the only move.
@@ -1188,8 +1190,11 @@ class KK_GarrisonHold
 		s_MoveWeaponKnown.Insert(body);
 		s_MoveWeaponUp.RemoveItem(body);
 		CancelCombatMove(body);
+		ReleaseLean(body);
 
 		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
+		if (soldier && soldier.m_UtilityComponent)
+			CancelLook(soldier.m_UtilityComponent, body);
 		if (!soldier || !soldier.m_UtilityComponent)
 			return;
 
@@ -2065,6 +2070,9 @@ class KK_GarrisonHold
 	{
 		BaseWeaponComponent weapon = CurrentWeapon(body);
 		if (!weapon || IsThrowableType(weapon.GetWeaponType()))
+			weapon = PrimaryWeapon(body);
+
+		if (!weapon || IsThrowableType(weapon.GetWeaponType()))
 			return null;
 
 		array<BaseMuzzleComponent> muzzles = {};
@@ -2244,6 +2252,17 @@ class KK_GarrisonHold
 			AIAgent agent = AIAgent.Cast(utility.GetOwner());
 			if (agent)
 				body = agent.GetControlledEntity();
+		}
+
+		if (SprintBeforeReload(body))
+		{
+			RememberPressure(body);
+			ClearShot(body);
+			RememberLean(body, 0);
+			ReleaseLean(body);
+			CancelLook(utility, body);
+			CommandWeapon(body, false, false);
+			return;
 		}
 
 		if (!OwnsShot(body))
@@ -3015,6 +3034,17 @@ class KK_GarrisonHold
 			utility.m_LookAction.Cancel();
 	}
 
+	// Drops a look we did not start. Facing the threat while sprinting
+	// to cover holds him in a strafe.
+	protected static void CancelLook(SCR_AIUtilityComponent utility, IEntity body)
+	{
+		if (body)
+			s_LookEntity.Remove(body);
+
+		if (utility && utility.m_LookAction)
+			utility.m_LookAction.Cancel();
+	}
+
 	protected static void ReleaseLean(IEntity body)
 	{
 		if (!body)
@@ -3555,6 +3585,27 @@ modded class SCR_AIAvoidCharacterBehavior
 	}
 }
 
+modded class SCR_AIThrowGrenadeToBehavior
+{
+	override float CustomEvaluate()
+	{
+		if (
+			m_Utility &&
+			(
+				KK_GarrisonHold.SprintBeforeReload(m_Utility.m_OwnerEntity) ||
+				KK_GarrisonHold.SprintBeforeReload(m_Utility.GetOwner()) ||
+				KK_GarrisonHold.IsReloadBashing(m_Utility.m_OwnerEntity) ||
+				KK_GarrisonHold.IsReloadBashing(m_Utility.GetOwner())
+			)
+		)
+		{
+			return 0;
+		}
+
+		return super.CustomEvaluate();
+	}
+}
+
 modded class SCR_AIRetreatWhileLookAtBehavior
 {
 	override float CustomEvaluate()
@@ -3764,7 +3815,7 @@ modded class SCR_AILookAction
 {
 	override void LookAt(vector pos, float priority, float duration = 0.8)
 	{
-		if (SprintIgnoring())
+		if (SprintIgnoring() || SprintingToCover())
 			return;
 
 		super.LookAt(pos, priority, duration);
@@ -3772,7 +3823,7 @@ modded class SCR_AILookAction
 
 	override void LookAt(IEntity ent, float priority, float duration = 0.8)
 	{
-		if (SprintIgnoring())
+		if (SprintIgnoring() || SprintingToCover())
 			return;
 
 		super.LookAt(ent, priority, duration);
@@ -3784,6 +3835,15 @@ modded class SCR_AILookAction
 			(
 				KK_GarrisonHold.IsIgnoringTargets(m_Utility.m_OwnerEntity) ||
 				KK_GarrisonHold.IsIgnoringTargets(m_Utility.GetOwner())
+			);
+	}
+
+	protected bool SprintingToCover()
+	{
+		return m_Utility &&
+			(
+				KK_GarrisonHold.SprintBeforeReload(m_Utility.m_OwnerEntity) ||
+				KK_GarrisonHold.SprintBeforeReload(m_Utility.GetOwner())
 			);
 	}
 }
