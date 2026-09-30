@@ -131,10 +131,10 @@ modded class SCR_BaseGameMode
 	[Attribute("8", UIWidgets.EditBox, "Seconds the enemy must stay out of sight before a partial magazine is topped off. An empty gun still reloads immediately. 0 tops off as soon as sight is lost.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_OutOfSight;
 
-	[Attribute("1", UIWidgets.CheckBox, "Under threat, start the reload and run to break sight. A nearby squadmate is preferred. Off reloads in place.", category: "Koopky CQB/Combat")]
+	[Attribute("1", UIWidgets.CheckBox, "Under threat, start the reload and run to the cluster node farthest from the threat. He still goes if the way there crosses the threat. A squadmate or a short step is used when the building has no node. Off reloads in place.", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_ReloadCover;
 
-	[Attribute("0", UIWidgets.CheckBox, "Experimental. With Run while reloading on, an empty gun with the target still visible sprints to a hidden node, then reloads. Off starts the reload immediately and runs to break sight.", category: "Koopky CQB/Combat")]
+	[Attribute("0", UIWidgets.CheckBox, "Experimental. With Run while reloading on, an empty gun with the target still visible sprints to the hidden node farthest from the threat, then reloads. Off starts the reload immediately and runs to that node.", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_ReloadSprint;
 
 	[Attribute("1", UIWidgets.EditBox, "Recognition speed while clearing or garrisoning (×). 1 is normal.", category: "Koopky CQB/Combat")]

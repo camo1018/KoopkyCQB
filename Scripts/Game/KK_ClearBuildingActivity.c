@@ -415,9 +415,14 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				)
 				{
 					assignment.m_bCombatOwnsWeapon = false;
-					if (!KK_GarrisonHold.SprintBeforeReload(
-						assignment.m_Agent.GetControlledEntity()
-					))
+					if (
+						!KK_GarrisonHold.SprintBeforeReload(
+							assignment.m_Agent.GetControlledEntity()
+						) &&
+						!KK_GarrisonHold.IsReloadBashing(
+							assignment.m_Agent.GetControlledEntity()
+						)
+					)
 					{
 						SetWeaponRaised(assignment.m_Agent, true);
 						OrderWeaponRaised(assignment.m_Agent, true);
@@ -427,9 +432,14 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 						);
 					}
 				}
-				else if (!KK_GarrisonHold.SprintBeforeReload(
-					assignment.m_Agent.GetControlledEntity()
-				))
+				else if (
+					!KK_GarrisonHold.SprintBeforeReload(
+						assignment.m_Agent.GetControlledEntity()
+					) &&
+					!KK_GarrisonHold.IsReloadBashing(
+						assignment.m_Agent.GetControlledEntity()
+					)
+				)
 				{
 					SetWeaponRaised(assignment.m_Agent, true);
 				}
@@ -1841,6 +1851,54 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		}
 	}
 
+	protected bool IssueReloadBash(
+		notnull KK_InteriorAgentAssignment assignment,
+		notnull IEntity body,
+		float currentTime)
+	{
+		vector bashGoal;
+		EMovementType bashSpeed;
+		if (!KK_GarrisonHold.DriveReloadBash(
+			assignment.m_Agent,
+			body,
+			bashGoal,
+			bashSpeed
+		))
+		{
+			return false;
+		}
+
+		KK_GarrisonHold.LogReload(body, "bash");
+		KK_GarrisonHold.SetPinned(body, false);
+		KK_GarrisonHold.SetReloadCover(body, false);
+
+		bool newGoal = vector.Distance(assignment.m_vReloadGoal, bashGoal) > 0.4;
+		if (
+			!assignment.m_bReloadMove ||
+			newGoal ||
+			currentTime - assignment.m_fLastOrderAt >= 400
+		)
+		{
+			assignment.m_vReloadGoal = bashGoal;
+			assignment.m_fLastOrderAt = currentTime;
+			KK_AgentMove.Issue(
+				this,
+				m_Group,
+				assignment.m_Agent,
+				bashGoal,
+				m_mSoloHandlers,
+				KK_AgentMove.EnterBuildingPriorityLevel(),
+				bashSpeed
+			);
+		}
+		else
+		{
+			KK_AgentMove.SetWantedSpeed(assignment.m_Agent, bashSpeed);
+		}
+
+		return true;
+	}
+
 	protected bool DriveClearReload(
 		notnull KK_InteriorAgentAssignment assignment,
 		vector unitPosition,
@@ -1850,10 +1908,23 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		if (!body)
 			return false;
 
+		if (IssueReloadBash(assignment, body, currentTime))
+			return true;
+
 		bool dash = KK_GarrisonHold.MustDashToReload(body);
 		if (!dash)
 			KK_GarrisonHold.LogReload(body, KK_GarrisonHold.ReloadSkipReason(body));
-		else if (KK_GarrisonHold.ReloadDashExpired(body))
+		else if (KK_GarrisonHold.SprintNodeStuck(body))
+		{
+			KK_GarrisonHold.LogReload(body, "node");
+			KK_GarrisonHold.ClearReloadDash(body);
+			KK_GarrisonHold.SetReloadCover(body, true);
+			dash = false;
+		}
+		else if (
+			KK_GarrisonHold.ReloadDashExpired(body) &&
+			!KK_GarrisonHold.SprintBeforeReload(body)
+		)
 		{
 			KK_GarrisonHold.LogReload(body, "dash-timeout");
 			KK_GarrisonHold.ClearReloadDash(body);
@@ -1883,7 +1954,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			{
 				EMovementType speed = KK_GarrisonHold.ReloadMoveSpeed(body);
 				string choice = "break";
-				if (speed == EMovementType.SPRINT)
+				if (KK_GarrisonHold.SprintBeforeReload(body))
 				{
 					choice = "sprint";
 					KK_GarrisonHold.LowerForReloadSprint(assignment.m_Agent);
@@ -1917,8 +1988,10 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					(
 						!assignment.m_bReloadMove ||
 						newGoal ||
-						currentTime - assignment.m_fLastOrderAt >=
-							KK_AgentMove.REISSUE_INTERVAL_MS
+						KK_GarrisonHold.ReloadOrderDue(
+							body,
+							currentTime - assignment.m_fLastOrderAt
+						)
 					)
 				)
 				{
@@ -1930,7 +2003,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 						assignment.m_Agent,
 						goal,
 						m_mSoloHandlers,
-						KK_AgentMove.PRIORITY_LEVEL,
+						KK_GarrisonHold.ReloadMovePriority(body),
 						speed
 					);
 				}

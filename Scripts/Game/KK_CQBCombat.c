@@ -258,6 +258,14 @@ class KK_GarrisonHold
 	protected static ref map<IEntity, float> s_ReloadDashAt =
 		new map<IEntity, float>();
 	protected static ref set<IEntity> s_ReloadCover = new set<IEntity>();
+	protected static ref set<IEntity> s_SprintNode = new set<IEntity>();
+	protected static ref map<IEntity, float> s_SprintDist =
+		new map<IEntity, float>();
+	protected static ref map<IEntity, float> s_SprintDistAt =
+		new map<IEntity, float>();
+	protected static ref set<IEntity> s_ReloadBash = new set<IEntity>();
+	protected static ref map<IEntity, IEntity> s_BashTarget =
+		new map<IEntity, IEntity>();
 	protected static ref map<IEntity, string> s_ReloadNote =
 		new map<IEntity, string>();
 	protected static ref map<IEntity, int> s_CoverChecked =
@@ -267,11 +275,17 @@ class KK_GarrisonHold
 	protected static const float RELOAD_RETRY_MS = 1500;
 	protected static const float TOPOFF_START_MS = 750;
 	protected static const float RELOAD_COVER_RADIUS = 0.8;
+	protected static const float RELOAD_NODE_RADIUS = 0.2;
+	protected static const float RELOAD_NODE_WALK = 1.2;
+	protected static const float RELOAD_NODE_RUN = 2.5;
+	protected static const float RELOAD_NODE_NAVMESH = 0.5;
+	protected static const float RELOAD_NODE_STALL_MS = 1000;
+	protected static const float RELOAD_BASH_RANGE = 2.2;
+	protected static const float RELOAD_BASH_KEEP = 3.2;
+	protected static const float RELOAD_BASH_WALK = 1.6;
 	protected static const float RELOAD_BREAK_RADIUS = 2;
 	protected static const float RELOAD_DASH_MS = 8000;
 	protected static const float RELOAD_THREAT_MOVE = 4;
-	protected static const float RELOAD_MIN_AWAY = 5;
-	protected static const float RELOAD_MATE_NEAR = 4;
 	protected static const float RELOAD_MATE_BESIDE = 2.5;
 	protected static const float RELOAD_MATE_RANGE = 12;
 	protected static const string PRIMARY_SLOT = "primary";
@@ -618,7 +632,7 @@ class KK_GarrisonHold
 
 		bool dry = GunIsDry(body);
 		NoteEnemySight(body);
-		if (IsIgnoringTargets(body))
+		if (IsIgnoringTargets(body) || s_ReloadBash.Contains(body))
 			return;
 
 		// Experimental. The target is still in sight and the gun is empty, so
@@ -874,6 +888,13 @@ class KK_GarrisonHold
 		if (!body || !ReloadCoverEnabled() || s_ReloadCover.Contains(body))
 			return false;
 
+		if (s_ReloadBash.Contains(body))
+			return false;
+
+		// A hidden node is already chosen. He finishes that move, then reloads.
+		if (CommittedSprintNode(body))
+			return true;
+
 		if (!SeesPressure(body))
 			return false;
 
@@ -891,14 +912,36 @@ class KK_GarrisonHold
 	}
 
 	// Experimental. Empty gun, the target he would still shoot is visible,
-	// and the reload has not started.
+	// and the reload has not started. Once a node is chosen he stays on it
+	// until he is standing there, then the reload starts.
 	static bool SprintBeforeReload(IEntity soldier)
 	{
 		IEntity body = CharacterBody(soldier);
-		if (!body || !ReloadSprintEnabled() || !SeesEnemy(body))
+		if (!body || !ReloadSprintEnabled() || !ReloadCoverEnabled() || !GunIsDry(body))
 			return false;
 
-		if (!MustDashToReload(body) || !GunIsDry(body))
+		if (s_ReloadBash.Contains(body))
+			return false;
+
+		if (IsQuietReload(body) || IsEmptyReload(body))
+			return false;
+
+		CharacterControllerComponent controller = Controller(body);
+		if (controller && controller.IsReloading())
+			return false;
+
+		if (s_SprintNode.Contains(body))
+			return true;
+
+		if (!SeesEnemy(body) || !MustDashToReload(body))
+			return false;
+
+		return !controller || !controller.IsReloading();
+	}
+
+	protected static bool CommittedSprintNode(IEntity body)
+	{
+		if (!body || !s_SprintNode.Contains(body) || !GunIsDry(body))
 			return false;
 
 		if (IsQuietReload(body) || IsEmptyReload(body))
@@ -910,10 +953,224 @@ class KK_GarrisonHold
 
 	static EMovementType ReloadMoveSpeed(IEntity soldier)
 	{
-		if (SprintBeforeReload(soldier))
-			return EMovementType.SPRINT;
+		if (!SprintBeforeReload(soldier))
+			return EMovementType.RUN;
 
-		return EMovementType.RUN;
+		IEntity body = CharacterBody(soldier);
+		if (body && s_ReloadDash.Contains(body))
+		{
+			float dist = vector.Distance(body.GetOrigin(), s_ReloadDash.Get(body));
+			if (dist <= RELOAD_NODE_WALK)
+				return EMovementType.WALK;
+
+			if (dist <= RELOAD_NODE_RUN)
+				return EMovementType.RUN;
+		}
+
+		return EMovementType.SPRINT;
+	}
+
+	// Beats attack, sidestep, and the melee shove. The node is the only move.
+	static float ReloadMovePriority(IEntity soldier)
+	{
+		if (SprintBeforeReload(soldier))
+			return KK_AgentMove.EnterBuildingPriorityLevel();
+
+		return KK_AgentMove.PRIORITY_LEVEL;
+	}
+
+	// Far away, leave the path alone. Once he has stopped short of the node,
+	// send the order again so the move does not finish early.
+	static bool ReloadOrderDue(IEntity soldier, float sinceOrderMs)
+	{
+		if (sinceOrderMs >= KK_AgentMove.REISSUE_INTERVAL_MS)
+			return true;
+
+		if (!SprintBeforeReload(soldier))
+			return false;
+
+		IEntity body = CharacterBody(soldier);
+		if (!body || !s_ReloadDash.Contains(body))
+			return false;
+
+		float dist = vector.Distance(body.GetOrigin(), s_ReloadDash.Get(body));
+		if (dist <= RELOAD_NODE_RADIUS)
+			return false;
+
+		Physics physics = body.GetPhysics();
+		if (!physics)
+			return true;
+
+		vector velocity = physics.GetVelocity();
+		velocity[1] = 0;
+		return velocity.Length() < 0.35;
+	}
+
+	static bool IsReloadBashing(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		return body && s_ReloadBash.Contains(body);
+	}
+
+	// He ran into someone on the way to the node. The reload is dropped.
+	// moveTo is that enemy, and he keeps swinging while they stay in reach.
+	static bool DriveReloadBash(
+		AIAgent agent,
+		IEntity soldier,
+		out vector moveTo,
+		out EMovementType speed)
+	{
+		moveTo = vector.Zero;
+		speed = EMovementType.RUN;
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return false;
+
+		bool bashing = s_ReloadBash.Contains(body);
+		if (!bashing && !SprintBeforeReload(body))
+			return false;
+
+		float reach = RELOAD_BASH_RANGE;
+		if (bashing)
+			reach = RELOAD_BASH_KEEP;
+
+		IEntity enemy = BashTarget(body, reach);
+		if (!enemy)
+		{
+			if (bashing)
+				EndReloadBash(body);
+
+			return false;
+		}
+
+		if (!bashing)
+		{
+			ClearReloadDash(body);
+			s_ToppingOff.RemoveItem(body);
+			s_EmptyReload.RemoveItem(body);
+			s_ReloadCover.RemoveItem(body);
+		}
+
+		s_ReloadBash.Insert(body);
+		s_BashTarget.Set(body, enemy);
+		CommandReloadBash(agent, body, enemy, true);
+		moveTo = enemy.GetOrigin();
+		if (vector.Distance(body.GetOrigin(), moveTo) <= RELOAD_BASH_WALK)
+			speed = EMovementType.WALK;
+
+		return true;
+	}
+
+	protected static void EndReloadBash(IEntity body)
+	{
+		if (!body)
+			return;
+
+		s_ReloadBash.RemoveItem(body);
+		s_BashTarget.Remove(body);
+		CommandReloadBash(null, body, null, false);
+	}
+
+	protected static void CommandReloadBash(
+		AIAgent agent,
+		IEntity body,
+		IEntity enemy,
+		bool attack)
+	{
+
+		CharacterControllerComponent controller = Controller(body);
+		if (controller)
+		{
+			controller.SetFireWeaponWanted(false);
+			if (!attack)
+				controller.SetMeleeAttack(false);
+			else if (!controller.IsMeleeAttack())
+				controller.SetMeleeAttack(true);
+		}
+
+		if (attack)
+			CancelCombatMove(body);
+
+		if (!attack || !agent || !enemy)
+			return;
+
+		SetWeaponRaised(body, false);
+		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
+		if (!soldier || !soldier.m_UtilityComponent || !soldier.m_UtilityComponent.m_LookAction)
+			return;
+
+		soldier.m_UtilityComponent.m_LookAction.LookAt(enemy, 100, 5);
+	}
+
+	protected static IEntity BashTarget(IEntity body, float reach)
+	{
+		IEntity best = null;
+		if (s_BashTarget.Contains(body))
+			best = NearerBash(body, s_BashTarget.Get(body), best, reach);
+
+		if (s_PressureFrom.Contains(body))
+			best = NearerBash(body, s_PressureFrom.Get(body), best, reach);
+
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (utility && utility.m_CombatComponent)
+		{
+			BaseTarget target = utility.m_CombatComponent.GetCurrentTarget();
+			if (target)
+				best = NearerBash(body, target.GetTargetEntity(), best, reach);
+		}
+
+		PerceptionComponent perception = PerceptionComponent.Cast(
+			body.FindComponent(PerceptionComponent)
+		);
+		if (!perception)
+			return best;
+
+		array<BaseTarget> perceived = {};
+		perception.GetTargetsList(perceived, ETargetCategory.ENEMY);
+		foreach (BaseTarget candidate : perceived)
+		{
+			if (!candidate)
+				continue;
+
+			best = NearerBash(body, candidate.GetTargetEntity(), best, reach);
+		}
+
+		return best;
+	}
+
+	protected static IEntity NearerBash(
+		IEntity body,
+		IEntity enemy,
+		IEntity best,
+		float reach)
+	{
+		if (!CanBash(body, enemy))
+			return best;
+
+		float dist = vector.Distance(body.GetOrigin(), enemy.GetOrigin());
+		if (dist > reach)
+			return best;
+
+		if (!best)
+			return enemy;
+
+		float bestDist = vector.Distance(body.GetOrigin(), best.GetOrigin());
+		if (dist < bestDist)
+			return enemy;
+
+		return best;
+	}
+
+	protected static bool CanBash(IEntity body, IEntity enemy)
+	{
+		if (!body || !enemy || enemy == body)
+			return false;
+
+		if (!IsHostile(body, enemy) || !IsLiving(enemy))
+			return false;
+
+		CharacterControllerComponent controller = Controller(enemy);
+		return !controller || !controller.IsUnconscious();
 	}
 
 	// A raised weapon will not sprint. Drop it and keep the move order from
@@ -930,6 +1187,7 @@ class KK_GarrisonHold
 		SetWeaponRaised(body, false);
 		s_MoveWeaponKnown.Insert(body);
 		s_MoveWeaponUp.RemoveItem(body);
+		CancelCombatMove(body);
 
 		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
 		if (!soldier || !soldier.m_UtilityComponent)
@@ -947,6 +1205,9 @@ class KK_GarrisonHold
 	{
 		IEntity body = CharacterBody(soldier);
 		if (!body || !s_Buildings.Contains(body))
+			return false;
+
+		if (s_ReloadBash.Contains(body))
 			return false;
 
 		if (MustDashToReload(body))
@@ -1135,6 +1396,43 @@ class KK_GarrisonHold
 		s_ReloadDash.Remove(body);
 		s_ReloadThreat.Remove(body);
 		s_ReloadDashAt.Remove(body);
+		s_SprintNode.RemoveItem(body);
+		s_SprintDist.Remove(body);
+		s_SprintDistAt.Remove(body);
+	}
+
+	// Stopped making ground. Close to the node, the mesh will not get him
+	// any nearer, so the reload can start. Far away, the same pause gives up.
+	static bool SprintNodeStuck(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !s_SprintNode.Contains(body) || !s_ReloadDash.Contains(body))
+			return false;
+
+		float dist = vector.Distance(body.GetOrigin(), s_ReloadDash.Get(body));
+		float now = WorldTime();
+		bool improved =
+			!s_SprintDist.Contains(body) ||
+			dist < s_SprintDist.Get(body) - 0.25;
+		if (improved)
+		{
+			s_SprintDist.Set(body, dist);
+			s_SprintDistAt.Set(body, now);
+			return false;
+		}
+
+		if (!s_SprintDistAt.Contains(body))
+		{
+			s_SprintDist.Set(body, dist);
+			s_SprintDistAt.Set(body, now);
+			return false;
+		}
+
+		float idle = now - s_SprintDistAt.Get(body);
+		if (dist <= RELOAD_NODE_NAVMESH && idle >= RELOAD_NODE_STALL_MS)
+			return true;
+
+		return idle >= RELOAD_DASH_MS;
 	}
 
 	static bool ReloadDashExpired(IEntity soldier)
@@ -1156,9 +1454,8 @@ class KK_GarrisonHold
 			RELOAD_COVER_RADIUS;
 	}
 
-	// True while he should keep moving. The sprint experiment uses a hidden
-	// node. Otherwise he runs toward a squadmate, or just far enough to
-	// break sight.
+	// True while he should keep moving. He runs to the cluster node farthest
+	// from the threat. The sprint experiment uses that node before the reload.
 	static bool KeepReloadMove(
 		IEntity soldier,
 		array<ref KK_InteriorTarget> targets,
@@ -1175,12 +1472,12 @@ class KK_GarrisonHold
 		if (sprint)
 			have = SelectReloadCover(soldier, targets, goal);
 		else
-			have = SelectReloadBreak(soldier, goal);
+			have = SelectReloadBreak(soldier, targets, goal);
 
 		if (!have)
 			return false;
 
-		float radius = RELOAD_COVER_RADIUS;
+		float radius = RELOAD_NODE_RADIUS;
 		if (!sprint)
 			radius = RELOAD_BREAK_RADIUS;
 
@@ -1205,7 +1502,7 @@ class KK_GarrisonHold
 			started = s_ReloadDashAt.Get(body);
 
 		ClearReloadDash(body);
-		if (!SelectReloadBreak(body, goal))
+		if (!SelectReloadBreak(body, targets, goal))
 			return false;
 
 		if (hadStart)
@@ -1214,9 +1511,9 @@ class KK_GarrisonHold
 		return vector.Distance(position, goal) > radius;
 	}
 
-	// A node in another cluster, hidden from the threat. On that shortlist
-	// he prefers one near a squad mate, then one at least 5 m away, then
-	// the one farthest from the threat. The last pick stays until he moves.
+	// The hidden node farthest from the threat. A node he can still be seen
+	// from is used when nothing is hidden. Once chosen, that node stays
+	// until he is standing on it.
 	static bool SelectReloadCover(
 		IEntity soldier,
 		array<ref KK_InteriorTarget> targets,
@@ -1224,7 +1521,16 @@ class KK_GarrisonHold
 	{
 		IEntity body = CharacterBody(soldier);
 		goal = vector.Zero;
-		if (!body || !targets || targets.IsEmpty())
+		if (!body)
+			return false;
+
+		if (s_SprintNode.Contains(body) && s_ReloadDash.Contains(body))
+		{
+			goal = s_ReloadDash.Get(body);
+			return true;
+		}
+
+		if (!targets || targets.IsEmpty())
 			return false;
 
 		RememberPressure(body);
@@ -1233,16 +1539,6 @@ class KK_GarrisonHold
 			return false;
 
 		threat = s_PressureAt.Get(body);
-		if (
-			s_ReloadDash.Contains(body) &&
-			s_ReloadThreat.Contains(body) &&
-			vector.Distance(s_ReloadThreat.Get(body), threat) < RELOAD_THREAT_MOVE
-		)
-		{
-			goal = s_ReloadDash.Get(body);
-			return true;
-		}
-
 		if (!FindReloadCover(body, targets, threat, goal))
 		{
 			ClearReloadDash(body);
@@ -1254,6 +1550,7 @@ class KK_GarrisonHold
 			vector.Distance(s_ReloadDash.Get(body), goal) < 0.5;
 		s_ReloadDash.Set(body, goal);
 		s_ReloadThreat.Set(body, threat);
+		s_SprintNode.Insert(body);
 		if (!sameGoal || !s_ReloadDashAt.Contains(body))
 			s_ReloadDashAt.Set(body, WorldTime());
 
@@ -1412,9 +1709,12 @@ class KK_GarrisonHold
 			(!controller.IsDead() && !controller.IsUnconscious());
 	}
 
-	// Run toward a squadmate when one is close. Otherwise step away from
-	// the threat until a wall sits between them.
-	protected static bool SelectReloadBreak(IEntity soldier, out vector goal)
+	// A cluster node as far from the threat as he can get. A squadmate or a
+	// short step is the fallback when the building has no node to run to.
+	protected static bool SelectReloadBreak(
+		IEntity soldier,
+		array<ref KK_InteriorTarget> targets,
+		out vector goal)
 	{
 		IEntity body = CharacterBody(soldier);
 		goal = vector.Zero;
@@ -1426,14 +1726,6 @@ class KK_GarrisonHold
 			return false;
 
 		vector threat = s_PressureAt.Get(body);
-		IEntity mate = FindSupportMate(body, threat);
-		if (mate)
-		{
-			goal = mate.GetOrigin();
-			RememberReloadGoal(body, goal, threat);
-			return true;
-		}
-
 		if (
 			s_ReloadDash.Contains(body) &&
 			s_ReloadThreat.Contains(body) &&
@@ -1441,6 +1733,24 @@ class KK_GarrisonHold
 		)
 		{
 			goal = s_ReloadDash.Get(body);
+			return true;
+		}
+
+		if (
+			targets &&
+			!targets.IsEmpty() &&
+			FindReloadCover(body, targets, threat, goal)
+		)
+		{
+			RememberReloadGoal(body, goal, threat);
+			return true;
+		}
+
+		IEntity mate = FindSupportMate(body, threat);
+		if (mate)
+		{
+			goal = mate.GetOrigin();
+			RememberReloadGoal(body, goal, threat);
 			return true;
 		}
 
@@ -1546,44 +1856,6 @@ class KK_GarrisonHold
 		return point;
 	}
 
-	protected static int HomeCluster(
-		IEntity body,
-		array<ref KK_InteriorTarget> targets)
-	{
-		float best = 0;
-		int cluster = -1;
-		bool found = false;
-
-		foreach (KK_InteriorTarget target : targets)
-		{
-			if (!target)
-				continue;
-
-			float distance = vector.Distance(body.GetOrigin(), target.m_vPosition);
-			if (found && distance >= best)
-				continue;
-
-			found = true;
-			best = distance;
-			cluster = target.m_iCluster;
-		}
-
-		return cluster;
-	}
-
-	protected static bool HasOtherCluster(
-		array<ref KK_InteriorTarget> targets,
-		int home)
-	{
-		foreach (KK_InteriorTarget target : targets)
-		{
-			if (target && target.m_iCluster != home)
-				return true;
-		}
-
-		return false;
-	}
-
 	protected static SCR_AIGroup GroupOf(IEntity body)
 	{
 		if (!body)
@@ -1603,40 +1875,6 @@ class KK_GarrisonHold
 		return SCR_AIGroup.Cast(agent.GetParentGroup());
 	}
 
-	// Another living member of his group is standing in this pocket.
-	protected static bool NearSquadMate(IEntity body, vector node)
-	{
-		SCR_AIGroup group = GroupOf(body);
-		if (!group)
-			return false;
-
-		array<AIAgent> agents = {};
-		group.GetAgents(agents);
-		foreach (AIAgent agent : agents)
-		{
-			if (!agent)
-				continue;
-
-			IEntity mate = agent.GetControlledEntity();
-			if (!mate || mate == body)
-				continue;
-
-			CharacterControllerComponent controller = Controller(mate);
-			if (
-				controller &&
-				(controller.IsDead() || controller.IsUnconscious())
-			)
-			{
-				continue;
-			}
-
-			if (vector.Distance(mate.GetOrigin(), node) <= RELOAD_MATE_NEAR)
-				return true;
-		}
-
-		return false;
-	}
-
 	protected static bool FindReloadCover(
 		IEntity body,
 		array<ref KK_InteriorTarget> targets,
@@ -1654,93 +1892,64 @@ class KK_GarrisonHold
 			return false;
 
 		vector eye = threat + Vector(0, 1.6, 0);
-		float soldierY = body.GetOrigin()[1];
-		int home = HomeCluster(body, targets);
-		bool haveOther = HasOtherCluster(targets, home);
-		bool found = false;
-		bool bestMate = false;
-		bool bestFar = false;
-		float bestAway = -1;
-		vector bestGoal = vector.Zero;
+		bool foundHidden = false;
+		float bestHiddenAway = -1;
+		vector bestHiddenGoal = vector.Zero;
+		bool foundAny = false;
+		float bestAnyAway = -1;
+		vector bestAnyGoal = vector.Zero;
 		int checked = 0;
 		int hidden = 0;
 
-		// 0: another cluster, this floor, hidden.
-		// 1: another cluster, any floor, hidden.
-		// 2: another cluster even if he can still be seen.
-		// A building with one cluster uses a hidden node instead.
-		// Inside a pass: near a squad mate, then at least 5 m from him,
-		// then farthest from the threat.
-		for (int pass = 0; pass < 3 && !found; pass++)
+		// Every reachable node, including his own cluster. Hidden nodes come
+		// first, and inside that set the one farthest from the threat wins.
+		// The walk is allowed to cross the threat. That is still the spot.
+		foreach (KK_InteriorTarget target : targets)
 		{
-			if (!haveOther && pass == 2)
+			if (!target || target.m_eState == KK_EInteriorTargetState.UNREACHABLE)
 				continue;
 
-			foreach (KK_InteriorTarget target : targets)
+			vector node = target.m_vPosition;
+			if (vector.Distance(body.GetOrigin(), node) < 0.75)
+				continue;
+
+			checked++;
+			bool blocked = !SightClear(world, body, eye, node + Vector(0, 1.2, 0));
+			if (blocked)
+				hidden++;
+
+			float away = vector.Distance(node, threat);
+			if (!foundAny || away > bestAnyAway)
 			{
-				if (!target || target.m_eState == KK_EInteriorTargetState.UNREACHABLE)
-					continue;
-
-				bool other = target.m_iCluster != home;
-				if (haveOther && !other)
-					continue;
-
-				vector node = target.m_vPosition;
-				if (vector.Distance(body.GetOrigin(), node) < 0.75)
-					continue;
-
-				float rise = node[1] - soldierY;
-				if (rise < 0)
-					rise = -rise;
-
-				if (pass == 0 && rise > 2)
-					continue;
-
-				checked++;
-				bool blocked = !SightClear(world, body, eye, node + Vector(0, 1.2, 0));
-				if (blocked)
-					hidden++;
-
-				if (pass < 2 && !blocked)
-					continue;
-
-				bool mate = NearSquadMate(body, node);
-				float fromHim = vector.Distance(body.GetOrigin(), node);
-				bool far = fromHim >= RELOAD_MIN_AWAY;
-				float away = vector.Distance(node, threat);
-				if (found)
-				{
-					if (mate != bestMate)
-					{
-						if (!mate)
-							continue;
-					}
-					else if (far != bestFar)
-					{
-						if (!far)
-							continue;
-					}
-					else if (away <= bestAway)
-					{
-						continue;
-					}
-				}
-
-				found = true;
-				bestMate = mate;
-				bestFar = far;
-				bestAway = away;
-				bestGoal = node;
+				foundAny = true;
+				bestAnyAway = away;
+				bestAnyGoal = node;
 			}
+
+			if (!blocked)
+				continue;
+
+			if (foundHidden && away <= bestHiddenAway)
+				continue;
+
+			foundHidden = true;
+			bestHiddenAway = away;
+			bestHiddenGoal = node;
 		}
 
 		s_CoverChecked.Set(body, checked);
 		s_CoverHidden.Set(body, hidden);
 
-		if (!found)
+		if (foundHidden)
+		{
+			goal = bestHiddenGoal;
+			return true;
+		}
+
+		if (!foundAny)
 			return false;
 
-		goal = bestGoal;
+		goal = bestAnyGoal;
 		return true;
 	}
 
@@ -1877,6 +2086,14 @@ class KK_GarrisonHold
 		if (HoldingThrowable(body))
 		{
 			ReturnToPrimary(body);
+			raised = false;
+			fire = false;
+		}
+
+		// A sprint to a node keeps the rifle down. A raise will not sprint,
+		// and it would start the reload before he is there.
+		if (SprintBeforeReload(body) || s_ReloadBash.Contains(body))
+		{
 			raised = false;
 			fire = false;
 		}
@@ -2118,6 +2335,10 @@ class KK_GarrisonHold
 			s_ReloadThreat.Remove(body);
 			s_ReloadDashAt.Remove(body);
 			s_ReloadCover.RemoveItem(body);
+			s_SprintNode.RemoveItem(body);
+			s_SprintDist.Remove(body);
+			s_SprintDistAt.Remove(body);
+			EndReloadBash(body);
 			s_ReloadNote.Remove(body);
 			s_CoverChecked.Remove(body);
 			s_CoverHidden.Remove(body);
@@ -2335,9 +2556,12 @@ class KK_GarrisonHold
 		if (!selected || !CanSeeTarget(body, selected))
 			return;
 
+		IEntity enemy = selected.GetTargetEntity();
+		if (enemy && !IsLiving(enemy))
+			return;
+
 		s_ShotLive.Insert(body);
 		s_ShotBase.Set(body, selected);
-		IEntity enemy = selected.GetTargetEntity();
 		if (enemy)
 		{
 			s_ShotLook.Set(body, enemy);
@@ -2543,13 +2767,14 @@ class KK_GarrisonHold
 		return null;
 	}
 
+	// Dead and unconscious are not targets. Vanilla combat leaves both alone.
 	protected static bool IsLiving(IEntity character)
 	{
 		CharacterControllerComponent controller = Controller(character);
-		if (!controller)
+		if (!controller || controller.IsUnconscious())
 			return false;
 
-		return controller.GetLifeState() != ECharacterLifeState.DEAD;
+		return controller.GetLifeState() == ECharacterLifeState.ALIVE;
 	}
 
 	protected static bool IsHostile(IEntity self, IEntity other)
@@ -3237,6 +3462,19 @@ modded class SCR_AICombatMoveLogicBase
 		if (owner)
 			body = owner.GetControlledEntity();
 
+		if (
+			KK_GarrisonHold.SprintBeforeReload(body) ||
+			KK_GarrisonHold.SprintBeforeReload(owner) ||
+			KK_GarrisonHold.IsReloadBashing(body) ||
+			KK_GarrisonHold.IsReloadBashing(owner)
+		)
+		{
+			if (m_State && m_State.IsExecutingRequest())
+				m_State.CancelRequest();
+
+			return ENodeResult.RUNNING;
+		}
+
 		if (KK_GarrisonHold.IsPinned(body))
 		{
 			if (m_State && m_State.IsExecutingRequest())
@@ -3283,10 +3521,28 @@ modded class SCR_AIAvoidCharacterBehavior
 {
 	override float CustomEvaluate()
 	{
-		if (DoorFiring())
+		if (DoorFiring() || RunningToReloadNode() || BashingReload())
 			return 0;
 
 		return super.CustomEvaluate();
+	}
+
+	protected bool RunningToReloadNode()
+	{
+		return m_Utility &&
+			(
+				KK_GarrisonHold.SprintBeforeReload(m_Utility.m_OwnerEntity) ||
+				KK_GarrisonHold.SprintBeforeReload(m_Utility.GetOwner())
+			);
+	}
+
+	protected bool BashingReload()
+	{
+		return m_Utility &&
+			(
+				KK_GarrisonHold.IsReloadBashing(m_Utility.m_OwnerEntity) ||
+				KK_GarrisonHold.IsReloadBashing(m_Utility.GetOwner())
+			);
 	}
 
 	protected bool DoorFiring()
@@ -3307,7 +3563,11 @@ modded class SCR_AIRetreatWhileLookAtBehavior
 			m_Utility &&
 			(
 				KK_GarrisonHold.IsDoorFiring(m_Utility.m_OwnerEntity) ||
-				KK_GarrisonHold.IsDoorFiring(m_Utility.GetOwner())
+				KK_GarrisonHold.IsDoorFiring(m_Utility.GetOwner()) ||
+				KK_GarrisonHold.SprintBeforeReload(m_Utility.m_OwnerEntity) ||
+				KK_GarrisonHold.SprintBeforeReload(m_Utility.GetOwner()) ||
+				KK_GarrisonHold.IsReloadBashing(m_Utility.m_OwnerEntity) ||
+				KK_GarrisonHold.IsReloadBashing(m_Utility.GetOwner())
 			)
 		)
 		{
@@ -3487,7 +3747,9 @@ modded class SCR_AISetWeaponRaised
 
 		if (
 			KK_GarrisonHold.SprintBeforeReload(body) ||
-			KK_GarrisonHold.SprintBeforeReload(owner)
+			KK_GarrisonHold.SprintBeforeReload(owner) ||
+			KK_GarrisonHold.IsReloadBashing(body) ||
+			KK_GarrisonHold.IsReloadBashing(owner)
 		)
 		{
 			KK_GarrisonHold.LowerForReloadSprint(owner);
