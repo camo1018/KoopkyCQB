@@ -173,8 +173,8 @@ class KK_DoorAssist
 		return true;
 	}
 
-	// The ray follows the way he is walking. While he is stopped, it keeps
-	// the last direction. The goal is only used before he has moved.
+	// The ray follows the way he is walking. While he is stopped, the last
+	// direction is kept only when it still points at the goal.
 	protected static vector WalkAim(
 		notnull AIAgent agent,
 		notnull IEntity user,
@@ -190,10 +190,21 @@ class KK_DoorAssist
 		}
 
 		vector heading;
-		if (StoredHeading(agent, heading))
-			return origin + heading;
+		if (!StoredHeading(agent, heading))
+			return goal;
 
-		return goal;
+		// A new node is often off the last strafe. Aiming the door ray
+		// down that old heading misses the doorway and the path never starts.
+		vector toGoal = goal - origin;
+		toGoal[1] = 0;
+		if (toGoal.Length() > 0.5)
+		{
+			toGoal.Normalize();
+			if (vector.Dot(heading, toGoal) < 0.5)
+				return goal;
+		}
+
+		return origin + heading;
 	}
 
 	protected static vector HorizontalVelocity(notnull IEntity user)

@@ -29,6 +29,7 @@ class KK_GarrisonAgentAssignment
 	float m_fSteadyUntil;
 	float m_fBestDistance;
 	bool m_bHadContact;
+	float m_fContactSeenAt;
 	EMovementType m_eApproachSpeed;
 	ref array<vector> m_aRouteGoals = {};
 	int m_iRouteIndex;
@@ -88,6 +89,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 	protected static const float PLANNING_INTERVAL_MS = 1000.0;
 	protected static const float STILL_DISTANCE = 0.1;
+	protected static const float CONTACT_GRACE_MS = 1000;
 	// Interior floors are separated by at least 2 m, so 1 m keeps a hold on its own storey.
 	protected static const float SAME_FLOOR_HEIGHT = 1.0;
 	// Long enough to fire, short enough that the fight still closes on the building.
@@ -150,6 +152,12 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			!m_GarrisonWaypoint
 		)
 		{
+			return 0;
+		}
+
+		if (OrderWasReplaced())
+		{
+			CancelGarrison();
 			return 0;
 		}
 
@@ -519,7 +527,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				timerDelta = 0;
 			assignment.m_fLastTimerUpdate = currentTime;
 
-			bool attacking = InContact(assignment.m_Agent);
+			bool attacking = InContact(assignment, currentTime);
 
 			if (assignment.m_bHadContact && !attacking)
 			{
@@ -529,6 +537,12 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 					unitPosition,
 					moveGoal
 				);
+				KK_GarrisonHold.ReleaseLatentCombat(controlledEntity);
+				IssueMoveOrder(assignment);
+			}
+			else if (!assignment.m_bHadContact && attacking)
+			{
+				IssueMoveOrder(assignment);
 			}
 
 			assignment.m_bHadContact = attacking;
@@ -651,8 +665,6 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 					KK_GarrisonHold.FightingInside(controlledEntity);
 				if (attacking || indoorFight)
 					assignment.m_bFacingApplied = false;
-				else
-					KK_GarrisonHold.ReleaseLatentCombat(controlledEntity);
 
 				if (
 					!attacking &&
@@ -1527,7 +1539,6 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			assignment.m_fSteadyUntil = 0;
 			KK_GarrisonHold.ClearApproachGoal(controlledEntity);
 			KK_GarrisonHold.SetDoorFiring(controlledEntity, false);
-			KK_GarrisonHold.ReleaseLatentCombat(controlledEntity);
 			return;
 		}
 
@@ -1687,23 +1698,27 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		);
 	}
 
-	// Visible enemy, or a living one the threat system is still on. Alert
-	// after that body is gone does not keep the combat strafe.
-	protected bool InContact(notnull AIAgent agent)
+	// Someone he can see, plus a second after the trace breaks. The threat
+	// bar stays alerted for much longer, and that was holding the route.
+	protected bool InContact(
+		notnull KK_GarrisonAgentAssignment assignment,
+		float currentTime)
 	{
-		if (HasVisibleTarget(agent))
-			return true;
-
-		if (!IsEngagingEnemy(agent))
+		if (!assignment.m_Agent)
 			return false;
 
-		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
+		if (HasVisibleTarget(assignment.m_Agent))
+		{
+			assignment.m_fContactSeenAt = currentTime;
+			return true;
+		}
+
+		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(assignment.m_Agent);
 		if (!soldier || !soldier.m_UtilityComponent)
 			return false;
 
 		SCR_AICombatComponent combat =
 			soldier.m_UtilityComponent.m_CombatComponent;
-
 		if (!combat)
 			return false;
 
@@ -1712,22 +1727,13 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			return false;
 
 		IEntity enemy = target.GetTargetEntity();
-		return enemy && KK_GarrisonHold.IsFightable(enemy);
-	}
-
-	protected bool IsEngagingEnemy(notnull AIAgent agent)
-	{
-		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
-		if (!soldier || !soldier.m_UtilityComponent)
+		if (!enemy || !KK_GarrisonHold.IsFightable(enemy))
 			return false;
 
-		SCR_AIThreatSystem threat = soldier.m_UtilityComponent.m_ThreatSystem;
-		if (!threat)
+		if (assignment.m_fContactSeenAt <= 0)
 			return false;
 
-		EAIThreatState state = threat.GetState();
-		return state == EAIThreatState.ALERTED ||
-			state == EAIThreatState.THREATENED;
+		return currentTime - assignment.m_fContactSeenAt <= CONTACT_GRACE_MS;
 	}
 
 	protected vector AimPosition(notnull AIAgent agent, vector fallback)
@@ -2020,7 +2026,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 		bool entering;
 		float priority = PriorityForSoldier(
-			assignment.m_Agent,
+			assignment,
 			false,
 			entering,
 			holdForDoor,
@@ -2054,7 +2060,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		if (controlledEntity)
 		{
 			// A sprint order drops the weapon and then blocks the shot.
-			if (InContact(assignment.m_Agent))
+			if (InContact(assignment, NowMs()))
 				speed = EMovementType.RUN;
 			else
 				speed = GetApproachSpeed(controlledEntity.GetOrigin());
@@ -2064,7 +2070,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 		bool entering;
 		float priority = PriorityForSoldier(
-			assignment.m_Agent,
+			assignment,
 			forceTravel,
 			entering,
 			false,
@@ -2086,7 +2092,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 	// Same score as a clear move. Attack-selected is higher, so a fight
 	// takes over and the sprint to the building does not.
 	protected float PriorityForSoldier(
-		notnull AIAgent agent,
+		notnull KK_GarrisonAgentAssignment assignment,
 		bool forceTravel,
 		out bool entering,
 		bool holdForDoor = false,
@@ -2097,7 +2103,23 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		if (holdForDoor)
 			return 0;
 
+		// Danger and retreat outrank a normal move while suppression is
+		// still falling. Room combat off leaves that fight alone.
+		if (
+			KK_GarrisonHold.UseRoomCombat() &&
+			!InContact(assignment, NowMs())
+		)
+			return KK_AgentMove.EnterBuildingPriorityLevel();
+
 		return KK_AgentMove.PRIORITY_LEVEL;
+	}
+
+	protected float NowMs()
+	{
+		if (!GetGame() || !GetGame().GetWorld())
+			return 0;
+
+		return GetGame().GetWorld().GetWorldTime();
 	}
 
 	protected void ApplyMovePriority(
@@ -2402,8 +2424,15 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 		Fail(true);
 
-		if (group && waypoint)
+		if (
+			!KK_CQBOrders.IsRetiringOrder() &&
+			group &&
+			waypoint &&
+			WaypointStillAssigned()
+		)
+		{
 			group.CompleteWaypoint(waypoint);
+		}
 	}
 
 	protected void AbortGarrison(string reason)
@@ -2482,6 +2511,11 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		return false;
 	}
 
+	protected bool OrderWasReplaced()
+	{
+		return m_GarrisonWaypoint && m_GarrisonWaypoint.IsReplaced();
+	}
+
 	protected void RetainAfterRestart()
 	{
 		m_bRetain = true;
@@ -2519,7 +2553,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		if (m_bFinished || m_bCancelled)
 			return;
 
-		if (WaypointStillAssigned())
+		if (!OrderWasReplaced() && WaypointStillAssigned())
 		{
 			RetainAfterRestart();
 			return;
@@ -2535,7 +2569,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		if (m_bFinished || m_bCancelled)
 			return;
 
-		if (WaypointStillAssigned())
+		if (!OrderWasReplaced() && WaypointStillAssigned())
 		{
 			RetainAfterRestart();
 			return;

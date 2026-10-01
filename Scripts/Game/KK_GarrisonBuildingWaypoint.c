@@ -60,6 +60,7 @@ class KK_GarrisonBuildingWaypoint : SCR_AIWaypoint
 
 	protected BaseBuilding m_OrderBuilding;
 	protected bool m_bOrderBuildingLocked;
+	protected bool m_bReplaced;
 
 	float GetBuildingSearchRadius()
 	{
@@ -172,6 +173,16 @@ class KK_GarrisonBuildingWaypoint : SCR_AIWaypoint
 	bool IsOrderBuildingLocked()
 	{
 		return m_bOrderBuildingLocked && m_OrderBuilding;
+	}
+
+	void MarkReplaced()
+	{
+		m_bReplaced = true;
+	}
+
+	bool IsReplaced()
+	{
+		return m_bReplaced;
 	}
 
 	bool GetDebugDraw()

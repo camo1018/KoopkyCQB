@@ -21,6 +21,19 @@ class KK_ClearBuildingWaypointState : SCR_AIWaypointState
 
 	protected void StartClearActivity()
 	{
+		KK_ClearBuildingWaypoint waypoint =
+			KK_ClearBuildingWaypoint.Cast(m_Waypoint);
+
+		// A new clear or garrison waypoint replaces this one. Do not
+		// start it again. A soldier still spawning restarts this same
+		// waypoint, and that order has to keep running.
+		if (waypoint && waypoint.IsReplaced())
+		{
+			if (m_Activity)
+				m_Activity.CancelClear();
+			return;
+		}
+
 		// A joining soldier restarts the waypoint tree. The order already
 		// running has to stay. A failed one is dropped without completing
 		// the waypoint, then started again for the squad as it is now.
@@ -29,9 +42,6 @@ class KK_ClearBuildingWaypointState : SCR_AIWaypointState
 
 		if (m_Activity)
 			m_Activity.Supersede();
-
-		KK_ClearBuildingWaypoint waypoint =
-			KK_ClearBuildingWaypoint.Cast(m_Waypoint);
 
 		if (!waypoint)
 		{

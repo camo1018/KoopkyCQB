@@ -1495,6 +1495,9 @@ class KK_CQBOrders
 				continue;
 			}
 
+			if (IsReplacedOrder(waypoint))
+				continue;
+
 			float distance = vector.Distance(waypoint.GetOrigin(), position);
 			if (distance >= nearestDistance)
 				continue;
@@ -1527,5 +1530,117 @@ class KK_CQBOrders
 			return null;
 
 		return SCR_AIGroup.Cast(agent.GetParentGroup());
+	}
+
+	protected static int s_iRetiring;
+
+	static bool IsRetiringOrder()
+	{
+		return s_iRetiring > 0;
+	}
+
+	static bool IsBuildingOrder(AIWaypoint waypoint)
+	{
+		return KK_ClearBuildingWaypoint.Cast(waypoint) ||
+			KK_GarrisonBuildingWaypoint.Cast(waypoint);
+	}
+
+	static bool IsReplacedOrder(AIWaypoint waypoint)
+	{
+		KK_ClearBuildingWaypoint clear =
+			KK_ClearBuildingWaypoint.Cast(waypoint);
+		if (clear)
+			return clear.IsReplaced();
+
+		KK_GarrisonBuildingWaypoint garrison =
+			KK_GarrisonBuildingWaypoint.Cast(waypoint);
+		if (garrison)
+			return garrison.IsReplaced();
+
+		return false;
+	}
+
+	protected static void MarkReplaced(AIWaypoint waypoint)
+	{
+		KK_ClearBuildingWaypoint clear =
+			KK_ClearBuildingWaypoint.Cast(waypoint);
+		if (clear)
+		{
+			clear.MarkReplaced();
+			return;
+		}
+
+		KK_GarrisonBuildingWaypoint garrison =
+			KK_GarrisonBuildingWaypoint.Cast(waypoint);
+		if (garrison)
+			garrison.MarkReplaced();
+	}
+
+	// A radial command and a Game Master placement both add a waypoint.
+	// That is a new order, so the clear or garrison already running has
+	// to end. Soldiers still spawning restart the same waypoint instead,
+	// and that path does not come through here.
+	static void RetirePreviousBuildingOrders(
+		notnull SCR_AIGroup group,
+		AIWaypoint incoming)
+	{
+		if (!IsBuildingOrder(incoming))
+			return;
+
+		array<AIWaypoint> waypoints = {};
+		group.GetWaypoints(waypoints);
+
+		foreach (AIWaypoint waypoint : waypoints)
+		{
+			if (
+				!waypoint ||
+				waypoint == incoming ||
+				!IsBuildingOrder(waypoint) ||
+				IsReplacedOrder(waypoint)
+			)
+			{
+				continue;
+			}
+
+			MarkReplaced(waypoint);
+
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				Print("KK: Previous building order replaced by a new one");
+
+			s_iRetiring++;
+			group.CompleteWaypoint(waypoint);
+			s_iRetiring--;
+		}
+	}
+}
+
+modded class SCR_AIGroup
+{
+	protected bool m_bKK_OrderFillScheduled;
+	protected bool m_bKK_OrdersArmed;
+
+	override void OnWaypointAdded(AIWaypoint wp)
+	{
+		super.OnWaypointAdded(wp);
+
+		// Waypoints already on the group when it comes up are one queue.
+		// A waypoint added after that, from the radial or the editor, is
+		// a new order and replaces the clear or garrison already running.
+		if (!m_bKK_OrdersArmed)
+		{
+			if (!m_bKK_OrderFillScheduled && GetGame())
+			{
+				m_bKK_OrderFillScheduled = true;
+				GetGame().GetCallqueue().CallLater(ArmBuildingOrders, 0, false);
+			}
+			return;
+		}
+
+		KK_CQBOrders.RetirePreviousBuildingOrders(this, wp);
+	}
+
+	protected void ArmBuildingOrders()
+	{
+		m_bKK_OrdersArmed = true;
 	}
 }

@@ -12,8 +12,11 @@ class KK_InteriorAgentAssignment
 	bool m_bClearsPoint;
 	bool m_bFacingApplied;
 	bool m_bCombatOwnsWeapon;
+	bool m_bWeaponUp;
+	bool m_bRunSet;
 	bool m_bReloadMove;
 	bool m_bHadContact;
+	float m_fContactSeenAt;
 	vector m_vReloadGoal;
 	ref array<vector> m_aRouteGoals = {};
 	int m_iRouteIndex;
@@ -90,6 +93,10 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 	protected static const float PLANNING_INTERVAL_MS = 1000.0;
 	protected static const float STILL_DISTANCE = 0.1;
 	protected static const float PROGRESS_DISTANCE = 0.5;
+	// Suppression falls off over tens of seconds, and a remembered body keeps
+	// the soldier alerted the whole time. That is long enough to miss the
+	// node. A second covers a corner blocking the trace.
+	protected static const float CONTACT_GRACE_MS = 1000;
 
 	void KK_ClearBuildingActivity(
 		SCR_AIGroupUtilityComponent utility,
@@ -149,6 +156,12 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			!m_ClearWaypoint
 		)
 		{
+			return 0;
+		}
+
+		if (OrderWasReplaced())
+		{
+			CancelClear();
 			return 0;
 		}
 
@@ -462,15 +475,33 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				assignment.m_fLastTimerUpdate = currentTime;
 
 				// Alert after the body is gone is not a firefight. A living
-				// target still pauses the clocks, including a frame where
-				// the wall breaks the trace. When that contact ends, the
-				// node gets a fresh travel budget.
-				bool contact = InContact(assignment.m_Agent);
+				// target still pauses the clocks for a short grace after
+				// the trace breaks. The threat bar stays up much longer
+				// than that, and it must not hold the route.
+				bool contact = InContact(assignment, currentTime);
 
 				if (assignment.m_bHadContact && !contact)
 				{
 					assignment.m_fStillSince = currentTime;
 					assignment.m_fStartedAt = currentTime;
+					KK_GarrisonHold.ReleaseLatentCombat(
+						assignment.m_Agent.GetControlledEntity()
+					);
+					IssueMoveOrder(
+						assignment.m_Agent,
+						AssignmentMoveGoal(assignment),
+						EMovementType.RUN,
+						true
+					);
+				}
+				else if (!assignment.m_bHadContact && contact)
+				{
+					IssueMoveOrder(
+						assignment.m_Agent,
+						AssignmentMoveGoal(assignment),
+						EMovementType.RUN,
+						true
+					);
 				}
 
 				assignment.m_bHadContact = contact;
@@ -494,6 +525,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					if (!assignment.m_bCombatOwnsWeapon)
 					{
 						assignment.m_bCombatOwnsWeapon = true;
+						assignment.m_bWeaponUp = false;
 						SetWeaponRaised(assignment.m_Agent, false);
 						OrderWeaponRaised(assignment.m_Agent, false);
 					}
@@ -504,6 +536,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				)
 				{
 					assignment.m_bCombatOwnsWeapon = false;
+					assignment.m_bWeaponUp = true;
 					if (
 						!KK_GarrisonHold.SprintBeforeReload(
 							assignment.m_Agent.GetControlledEntity()
@@ -522,6 +555,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					}
 				}
 				else if (
+					!assignment.m_bWeaponUp &&
 					!KK_GarrisonHold.SprintBeforeReload(
 						assignment.m_Agent.GetControlledEntity()
 					) &&
@@ -530,6 +564,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					)
 				)
 				{
+					assignment.m_bWeaponUp = true;
 					SetWeaponRaised(assignment.m_Agent, true);
 				}
 
@@ -550,11 +585,6 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					);
 				}
 				assignment.m_bReloadMove = reloadMove;
-
-				if (!reloadMove && !contact)
-					KK_GarrisonHold.ReleaseLatentCombat(
-						assignment.m_Agent.GetControlledEntity()
-					);
 
 				if (!reloadMove)
 				{
@@ -658,9 +688,13 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				bool waitingOnDoor = false;
 				bool passageHold = false;
 
+				bool passageSteering = false;
 				if (havePassage)
 				{
 					passageHold = passageOrder.m_bHoldTimers;
+					passageSteering =
+						passageOrder.m_bHoldTimers ||
+						passageOrder.m_bOverride;
 					if (passageOrder.m_bIssueNow || advancedRoute)
 					{
 						EMovementType passageSpeed = EMovementType.RUN;
@@ -671,7 +705,8 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 						IssueMoveOrder(
 							assignment.m_Agent,
 							passageOrder.m_vMoveTo,
-							passageSpeed
+							passageSpeed,
+							true
 						);
 					}
 				}
@@ -692,6 +727,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 					if (waitingOnDoor)
 					{
+						assignment.m_bRunSet = false;
 						KK_AgentMove.SetWantedSpeed(
 							assignment.m_Agent,
 							EMovementType.WALK
@@ -707,12 +743,15 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					havePassage &&
 					passageOrder.m_bOverride &&
 					passageOrder.m_bWalk;
-				if (
+				if (passageWalk)
+					assignment.m_bRunSet = false;
+				else if (
 					KK_Passage.Enabled() &&
 					!waitingOnDoor &&
-					!passageWalk
+					!assignment.m_bRunSet
 				)
 				{
+					assignment.m_bRunSet = true;
 					KK_AgentMove.SetWantedSpeed(
 						assignment.m_Agent,
 						EMovementType.RUN
@@ -731,9 +770,11 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				{
 					if (SCR_BaseGameMode.KK_LogEnabled())
 						PrintFormat(
-							"KK: Unit stood still for %1s heading to interior target %2",
+							"KK: Unit stood still for %1s heading to interior target %2, move goal %3, %4m away",
 							m_ClearWaypoint.GetStuckTimeout(),
-							assignment.m_Target.m_vPosition
+							assignment.m_Target.m_vPosition,
+							moveGoal,
+							distanceToTarget
 						);
 
 					if (assignment.m_bClearsPoint)
@@ -760,7 +801,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 						ReleaseAssignment(i);
 				}
 				else if (
-					!havePassage &&
+					!passageSteering &&
 					!waitingOnDoor &&
 					!holdingSpare &&
 					currentTime - assignment.m_fLastOrderAt >=
@@ -772,7 +813,9 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					assignment.m_fLastOrderAt = currentTime;
 					IssueMoveOrder(
 						assignment.m_Agent,
-						AssignmentMoveGoal(assignment)
+						AssignmentMoveGoal(assignment),
+						EMovementType.RUN,
+						true
 					);
 				}
 				}
@@ -2200,7 +2243,8 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 	protected void IssueMoveOrder(
 		notnull AIAgent agent,
 		vector position,
-		EMovementType movementType = EMovementType.RUN)
+		EMovementType movementType = EMovementType.RUN,
+		bool force = false)
 	{
 		float now = 0;
 		if (GetGame() && GetGame().GetWorld())
@@ -2217,7 +2261,10 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 		// Rebuilding the spare every pass was broadcasting a new path to the
 		// same point and the soldier stuttered instead of walking it.
-		if (sameGoal && recent)
+		// A pass-through retry is forced: the first order went out while
+		// the bodies still blocked each other, and dropping this one leaves
+		// him standing on the node.
+		if (!force && sameGoal && recent)
 		{
 			KK_AgentMove.SetWantedSpeed(agent, movementType);
 			return;
@@ -2228,8 +2275,16 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 		float priority = KK_AgentMove.PRIORITY_LEVEL;
 		// Attack stays selected on an unconscious body and outranks the
-		// route order. Step over it once that body can no longer fight.
-		if (HoldsDownedTarget(agent))
+		// route order. With room combat on, leftover danger does the same
+		// while the threat bar is still falling. Room combat off leaves
+		// that fight at the normal priorities.
+		bool stepOver =
+			HoldsDownedTarget(agent) ||
+			(
+				KK_GarrisonHold.UseRoomCombat() &&
+				!AgentInContact(agent, now)
+			);
+		if (stepOver)
 			priority = KK_AgentMove.EnterBuildingPriorityLevel();
 
 		KK_AgentMove.Issue(
@@ -2316,18 +2371,37 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		}
 	}
 
-	// Someone he can see, or a living body the threat system is still on.
-	// Alert after that body is gone does not count. That was steering the
-	// route after the fight.
-	protected bool InContact(notnull AIAgent agent)
+	protected bool InContact(
+		notnull KK_InteriorAgentAssignment assignment,
+		float currentTime)
 	{
-		if (HasLivingTarget(agent))
-			return true;
-
-		if (!IsEngagingEnemy(agent))
+		if (!assignment.m_Agent)
 			return false;
 
-		return HasFightableTarget(agent);
+		if (HasLivingTarget(assignment.m_Agent))
+		{
+			assignment.m_fContactSeenAt = currentTime;
+			return true;
+		}
+
+		if (!HasFightableTarget(assignment.m_Agent))
+			return false;
+
+		if (assignment.m_fContactSeenAt <= 0)
+			return false;
+
+		return currentTime - assignment.m_fContactSeenAt <= CONTACT_GRACE_MS;
+	}
+
+	protected bool AgentInContact(notnull AIAgent agent, float currentTime)
+	{
+		foreach (KK_InteriorAgentAssignment assignment : m_aAssignments)
+		{
+			if (assignment && assignment.m_Agent == agent)
+				return InContact(assignment, currentTime);
+		}
+
+		return false;
 	}
 
 	protected bool HasFightableTarget(notnull AIAgent agent)
@@ -2337,21 +2411,6 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			return false;
 
 		return KK_GarrisonHold.IsFightable(target.GetTargetEntity());
-	}
-
-	protected bool IsEngagingEnemy(notnull AIAgent agent)
-	{
-		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
-		if (!soldier || !soldier.m_UtilityComponent)
-			return false;
-
-		SCR_AIThreatSystem threat = soldier.m_UtilityComponent.m_ThreatSystem;
-		if (!threat)
-			return false;
-
-		EAIThreatState state = threat.GetState();
-		return state == EAIThreatState.ALERTED ||
-			state == EAIThreatState.THREATENED;
 	}
 
 	protected BaseTarget CurrentTarget(notnull AIAgent agent)
@@ -2527,15 +2586,6 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		float currentTime,
 		float sightRetryMs)
 	{
-		if (
-			target.m_mSightMissAt &&
-			target.m_mSightMissAt.Contains(agent) &&
-			currentTime - target.m_mSightMissAt.Get(agent) < sightRetryMs
-		)
-		{
-			return false;
-		}
-
 		BaseWorld world = GetGame().GetWorld();
 		if (!world)
 			return false;
@@ -2546,25 +2596,134 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		if (!IsInFieldOfView(viewer, eyePosition, aimPosition))
 			return false;
 
+		// Same place and the same look: a wall that blocked last time
+		// still blocks. A step or a turn is a new line, so it traces again.
+		if (SightMissFresh(target, agent, viewer, currentTime, sightRetryMs))
+			return false;
+
+		if (SightLineClear(world, viewer, eyePosition, aimPosition))
+			return true;
+
+		RememberSightMiss(target, agent, viewer, currentTime);
+		return false;
+	}
+
+	// The center ray clips a door frame or the surface the point sits on.
+	// A step to either side is still that point, and a wall blocks all three.
+	protected bool SightLineClear(
+		notnull BaseWorld world,
+		notnull IEntity viewer,
+		vector eyePosition,
+		vector aimPosition)
+	{
+		if (SightRayClear(world, viewer, eyePosition, aimPosition))
+			return true;
+
+		vector flat = aimPosition - eyePosition;
+		flat[1] = 0;
+		if (flat.Length() < 0.05)
+			return false;
+
+		flat.Normalize();
+		vector side = Vector(-flat[2], 0, flat[0]) * 0.25;
+		if (SightRayClear(world, viewer, eyePosition, aimPosition + side))
+			return true;
+
+		return SightRayClear(world, viewer, eyePosition, aimPosition - side);
+	}
+
+	protected bool SightRayClear(
+		notnull BaseWorld world,
+		notnull IEntity viewer,
+		vector eyePosition,
+		vector aimPosition)
+	{
+		vector toAim = aimPosition - eyePosition;
+		float distance = toAim.Length();
+		if (distance < 0.05)
+			return true;
+
+		toAim = toAim * (1 / distance);
+
+		// Start past the soldier's own frame. A ray that begins in the
+		// doorway fails or passes with the animation, not the room.
+		float inset = 0.4;
+		if (inset > distance * 0.45)
+			inset = distance * 0.45;
+
+		float traced = distance - inset;
+		vector start = eyePosition + (toAim * inset);
+
 		if (!m_SightTrace)
 			m_SightTrace = new TraceParam();
 
 		m_SightViewer = viewer;
 		m_SightTrace.Flags = TraceFlags.ENTS | TraceFlags.WORLD;
 		m_SightTrace.Exclude = viewer;
-		m_SightTrace.Start = eyePosition;
+		m_SightTrace.TraceEnt = null;
+		m_SightTrace.Start = start;
 		m_SightTrace.End = aimPosition;
 
 		float result = world.TraceMove(m_SightTrace, FilterSightTrace);
 		m_SightViewer = null;
-		if (result >= 0.99)
+
+		// Same graze, every distance. A fraction cutoff gets stricter
+		// as the soldier gets closer, so a near point flickers.
+		float shortBy = (1 - result) * traced;
+		return shortBy <= 0.15;
+	}
+
+	protected bool SightMissFresh(
+		notnull KK_InteriorTarget target,
+		notnull AIAgent agent,
+		notnull IEntity viewer,
+		float currentTime,
+		float sightRetryMs)
+	{
+		if (!target.m_mSightMissAt || !target.m_mSightMissAt.Contains(agent))
+			return false;
+
+		KK_SightMiss miss = target.m_mSightMissAt.Get(agent);
+		if (!miss)
+			return false;
+
+		if (currentTime - miss.m_fTime >= sightRetryMs)
+			return false;
+
+		if (vector.Distance(viewer.GetOrigin(), miss.m_vOrigin) > 0.45)
+			return false;
+
+		vector lookDirection = GetLookDirection(viewer);
+		lookDirection[1] = 0;
+		vector oldLook = miss.m_vLook;
+		oldLook[1] = 0;
+		if (lookDirection.Length() < 0.01 || oldLook.Length() < 0.01)
 			return true;
 
-		if (!target.m_mSightMissAt)
-			target.m_mSightMissAt = new map<AIAgent, float>();
+		lookDirection.Normalize();
+		oldLook.Normalize();
+		return vector.Dot(lookDirection, oldLook) >= 0.9;
+	}
 
-		target.m_mSightMissAt.Set(agent, currentTime);
-		return false;
+	protected void RememberSightMiss(
+		notnull KK_InteriorTarget target,
+		notnull AIAgent agent,
+		notnull IEntity viewer,
+		float currentTime)
+	{
+		if (!target.m_mSightMissAt)
+			target.m_mSightMissAt = new map<AIAgent, ref KK_SightMiss>();
+
+		KK_SightMiss miss = target.m_mSightMissAt.Get(agent);
+		if (!miss)
+		{
+			miss = new KK_SightMiss();
+			target.m_mSightMissAt.Set(agent, miss);
+		}
+
+		miss.m_fTime = currentTime;
+		miss.m_vOrigin = viewer.GetOrigin();
+		miss.m_vLook = GetLookDirection(viewer);
 	}
 
 	protected bool FilterSightTrace(
@@ -2583,6 +2742,14 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			if (ChimeraCharacter.Cast(current))
 				return false;
 
+			// An open door's collision often stays in the ray after the
+			// panel has swung clear, so the same doorway clears or not.
+			BaseDoorComponent door = BaseDoorComponent.Cast(
+				current.FindComponent(BaseDoorComponent)
+			);
+			if (door && (door.IsOpen() || door.CanCharacterPass(0.5)))
+				return false;
+
 			current = current.GetParent();
 			depth++;
 		}
@@ -2595,16 +2762,27 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		vector eyePosition,
 		vector aimPosition)
 	{
-		// 120 degree cone around the head look direction.
+		// 120 degrees horizontally. Pitch is ignored: the aim point sits
+		// near the floor, and a nod was dropping points still in front.
 		const float HALF_FOV_COS = 0.5;
 
 		vector toTarget = aimPosition - eyePosition;
+		toTarget[1] = 0;
 		if (toTarget.Length() < 0.05)
 			return true;
 
 		toTarget.Normalize();
 
 		vector lookDirection = GetLookDirection(viewer);
+		lookDirection[1] = 0;
+		if (lookDirection.Length() < 0.01)
+		{
+			vector transform[4];
+			viewer.GetWorldTransform(transform);
+			lookDirection = transform[2];
+			lookDirection[1] = 0;
+		}
+
 		if (lookDirection.Length() < 0.01)
 			return false;
 
@@ -3006,8 +3184,15 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 		Fail(true);
 
-		if (group && waypoint)
+		if (
+			!KK_CQBOrders.IsRetiringOrder() &&
+			group &&
+			waypoint &&
+			WaypointStillAssigned()
+		)
+		{
 			group.CompleteWaypoint(waypoint);
+		}
 	}
 
 	protected void CompleteClear()
@@ -3214,6 +3399,11 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		return false;
 	}
 
+	protected bool OrderWasReplaced()
+	{
+		return m_ClearWaypoint && m_ClearWaypoint.IsReplaced();
+	}
+
 	protected void RetainAfterRestart()
 	{
 		m_bRetain = true;
@@ -3251,7 +3441,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		if (m_bFinished || m_bCancelled)
 			return;
 
-		if (WaypointStillAssigned())
+		if (!OrderWasReplaced() && WaypointStillAssigned())
 		{
 			RetainAfterRestart();
 			return;
@@ -3267,7 +3457,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		if (m_bFinished || m_bCancelled)
 			return;
 
-		if (WaypointStillAssigned())
+		if (!OrderWasReplaced() && WaypointStillAssigned())
 		{
 			RetainAfterRestart();
 			return;

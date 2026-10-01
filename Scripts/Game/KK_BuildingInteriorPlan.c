@@ -22,6 +22,13 @@ enum KK_EInteriorOpening
 	WINDOW
 }
 
+class KK_SightMiss
+{
+	float m_fTime;
+	vector m_vOrigin;
+	vector m_vLook;
+}
+
 class KK_InteriorTarget
 {
 	vector m_vPosition;
@@ -39,7 +46,7 @@ class KK_InteriorTarget
 
 	KK_EInteriorTargetState m_eState;
 	KK_EInteriorOpening m_eOpening;
-	ref map<AIAgent, float> m_mSightMissAt;
+	ref map<AIAgent, ref KK_SightMiss> m_mSightMissAt;
 
 	void KK_InteriorTarget(
 		vector position,

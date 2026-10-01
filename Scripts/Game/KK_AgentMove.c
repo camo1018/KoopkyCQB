@@ -59,6 +59,7 @@ class KK_AgentMove
 		EMovementType movementType = EMovementType.RUN)
 	{
 		ClaimSoloHandler(group, agent, soloHandlers);
+		position = OnNavmesh(group, position);
 
 		SCR_AIMessage_Move message = SCR_AIMessage_Move.Create(
 			null,
@@ -95,6 +96,33 @@ class KK_AgentMove
 			return;
 
 		utility.m_Mailbox.RequestBroadcast(message, agent);
+	}
+
+	// An authored hop that missed the mesh is stored in the air. A move
+	// to that point fails immediately and the soldier never steps off.
+	protected static vector OnNavmesh(SCR_AIGroup group, vector position)
+	{
+		if (!group)
+			return position;
+
+		AIPathfindingComponent pathfinding = AIPathfindingComponent.Cast(
+			group.FindComponent(AIPathfindingComponent)
+		);
+
+		if (!pathfinding)
+			return position;
+
+		vector corrected;
+		if (!pathfinding.GetClosestPositionOnNavmesh(
+			position,
+			Vector(1.25, 0.9, 1.25),
+			corrected
+		))
+		{
+			return position;
+		}
+
+		return corrected;
 	}
 
 	static void SetWantedSpeed(

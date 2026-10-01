@@ -4177,6 +4177,28 @@ modded class SCR_AICombatMoveLogicBase
 			return ENodeResult.RUNNING;
 		}
 
+		// A raised threat keeps requesting a short strafe after the enemy
+		// is gone. Cancelling that every evaluation is the shuffle.
+		bool onOrder =
+			KK_GarrisonHold.UseRoomCombat() &&
+			(
+				KK_GarrisonHold.HasBuilding(body) ||
+				KK_GarrisonHold.HasBuilding(owner)
+			);
+		if (
+			onOrder &&
+			!KK_GarrisonHold.HasVisibleEnemy(body) &&
+			!KK_GarrisonHold.HasVisibleEnemy(owner) &&
+			!KK_GarrisonHold.OwnsShot(body) &&
+			!KK_GarrisonHold.OwnsShot(owner)
+		)
+		{
+			if (m_State && m_State.IsExecutingRequest())
+				m_State.CancelRequest();
+
+			return ENodeResult.SUCCESS;
+		}
+
 		vector goal;
 		if (
 			m_Utility &&
