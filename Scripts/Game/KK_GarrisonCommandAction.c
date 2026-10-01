@@ -11,10 +11,31 @@ class KK_GarrisonCommandAction : SCR_WaypointBaseCommandAction
 		int flags,
 		int param = -1)
 	{
+		IEntity hitEntity;
+		if (hoveredEntity)
+			hitEntity = hoveredEntity.GetOwner();
+
+		BaseBuilding building;
+		bool locked;
 		vector buildingPosition =
-			KK_BuildingResolver.FindNearestBuildingPosition(
-				cursorWorldPosition
+			KK_BuildingResolver.ResolveOrderPosition(
+				hitEntity,
+				cursorWorldPosition,
+				building,
+				locked
 			);
+
+		foreach (SCR_EditableEntityComponent selected : selectedEntities)
+		{
+			if (!selected)
+				continue;
+
+			KK_CQBOrders.NoteOrderBuilding(
+				selected.GetOwner(),
+				building,
+				locked
+			);
+		}
 
 		super.Perform(
 			hoveredEntity,
@@ -31,7 +52,9 @@ class KK_GarrisonCommandAction : SCR_WaypointBaseCommandAction
 
 			KK_CQBOrders.ApplyLatestGarrison(
 				entity.GetOwner(),
-				buildingPosition
+				buildingPosition,
+				building,
+				locked
 			);
 		}
 	}

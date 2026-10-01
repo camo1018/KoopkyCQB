@@ -8,10 +8,17 @@ class KK_GarrisonCommand : SCR_WaypointGroupCommand
 		int playerID,
 		bool isClient)
 	{
+		BaseBuilding building;
+		bool locked;
 		vector buildingPosition =
-			KK_BuildingResolver.FindNearestBuildingPosition(
-				targetPosition
+			KK_BuildingResolver.ResolveOrderPosition(
+				cursorTarget,
+				targetPosition,
+				building,
+				locked
 			);
+
+		KK_CQBOrders.NoteOrderBuilding(groupEnt, building, locked);
 
 		bool created = super.Execute(
 			cursorTarget,
@@ -21,9 +28,19 @@ class KK_GarrisonCommand : SCR_WaypointGroupCommand
 			isClient
 		);
 
-		if (created)
-			KK_CQBOrders.ApplyLatestGarrison(groupEnt, buildingPosition);
+		if (!created)
+		{
+			KK_CQBOrders.ClearNotedOrder(groupEnt);
+			return false;
+		}
 
-		return created;
+		KK_CQBOrders.ApplyLatestGarrison(
+			groupEnt,
+			buildingPosition,
+			building,
+			locked
+		);
+
+		return true;
 	}
 }

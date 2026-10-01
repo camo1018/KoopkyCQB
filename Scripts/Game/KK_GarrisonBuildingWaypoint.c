@@ -58,6 +58,9 @@ class KK_GarrisonBuildingWaypoint : SCR_AIWaypoint
 	[Attribute("0", UIWidgets.CheckBox, "Draw interior debug points in Workbench")]
 	protected bool m_bDebugDraw;
 
+	protected BaseBuilding m_OrderBuilding;
+	protected bool m_bOrderBuildingLocked;
+
 	float GetBuildingSearchRadius()
 	{
 		return m_fBuildingSearchRadius;
@@ -153,6 +156,22 @@ class KK_GarrisonBuildingWaypoint : SCR_AIWaypoint
 	bool GetClassifyOpenings()
 	{
 		return m_bClassifyOpenings;
+	}
+
+	void SetOrderBuilding(BaseBuilding building, bool locked)
+	{
+		m_OrderBuilding = building;
+		m_bOrderBuildingLocked = locked && building;
+	}
+
+	BaseBuilding GetOrderBuilding()
+	{
+		return m_OrderBuilding;
+	}
+
+	bool IsOrderBuildingLocked()
+	{
+		return m_bOrderBuildingLocked && m_OrderBuilding;
 	}
 
 	bool GetDebugDraw()

@@ -108,6 +108,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		}
 
 		m_Plan = new KK_BuildingInteriorPlan();
+		ClaimPendingBuilding();
 
 		SetPriority(
 			SCR_AIActionBase.PRIORITY_LEVEL_GAMEMASTER
@@ -185,20 +186,55 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		return GetPriority();
 	}
 
+	protected void ClaimPendingBuilding()
+	{
+		if (!m_Group || !m_GarrisonWaypoint)
+			return;
+
+		BaseBuilding building;
+		bool locked;
+		if (!KK_BuildingResolver.TakePendingOrder(m_Group, building, locked))
+			return;
+
+		m_GarrisonWaypoint.SetOrderBuilding(building, locked);
+	}
+
+	// Planning can begin before the aimed building is stored on the waypoint.
+	protected void AlignLockedBuilding()
+	{
+		if (!m_GarrisonWaypoint || m_bPlanReady)
+			return;
+
+		if (!m_GarrisonWaypoint.IsOrderBuildingLocked())
+			return;
+
+		BaseBuilding lockedBuilding = m_GarrisonWaypoint.GetOrderBuilding();
+		if (
+			m_aBuildingCandidates.Count() == 1 &&
+			m_aBuildingCandidates[0] == lockedBuilding
+		)
+			return;
+
+		m_aBuildingCandidates.Clear();
+		m_Building = null;
+		m_iBuildingCandidateIndex = 0;
+		m_iNavmeshLoadAttempts = 0;
+	}
+
 	protected void UpdatePlanning()
 	{
+		AlignLockedBuilding();
+
 		if (m_aBuildingCandidates.IsEmpty())
 		{
-			array<BaseBuilding> found =
-				KK_BuildingResolver.FindOccupiableBuildings(
-					m_GarrisonWaypoint.GetOrigin(),
-					m_GarrisonWaypoint.GetBuildingSearchRadius()
-				);
-
-			foreach (BaseBuilding candidate : found)
-			{
-				m_aBuildingCandidates.Insert(candidate);
-			}
+			// The aimed piece stays on that building. A ground click can still move on.
+			KK_BuildingResolver.FillOrderCandidates(
+				m_aBuildingCandidates,
+				m_GarrisonWaypoint.GetOrderBuilding(),
+				m_GarrisonWaypoint.IsOrderBuildingLocked(),
+				m_GarrisonWaypoint.GetOrigin(),
+				m_GarrisonWaypoint.GetBuildingSearchRadius()
+			);
 
 			m_iBuildingCandidateIndex = 0;
 		}

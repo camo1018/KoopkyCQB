@@ -1367,25 +1367,81 @@ class KK_PerceptionBoost
 
 class KK_CQBOrders
 {
-	static void ApplyLatestClear(IEntity groupEntity, vector position)
+	static void NoteOrderBuilding(
+		IEntity groupEntity,
+		BaseBuilding building,
+		bool locked)
+	{
+		NotePending(ResolveGroup(groupEntity), building, locked);
+	}
+
+	static void ClearNotedOrder(IEntity groupEntity)
+	{
+		ClearPending(ResolveGroup(groupEntity));
+	}
+
+	protected static void NotePending(
+		SCR_AIGroup group,
+		BaseBuilding building,
+		bool locked)
+	{
+		if (!group)
+			return;
+
+		KK_BuildingResolver.SetPendingOrder(group, building, locked);
+
+		SCR_AIGroup slave = group.GetSlave();
+		if (slave && slave != group)
+			KK_BuildingResolver.SetPendingOrder(slave, building, locked);
+	}
+
+	protected static void ClearPending(SCR_AIGroup group)
+	{
+		if (!group)
+			return;
+
+		KK_BuildingResolver.ClearPendingOrder(group);
+
+		SCR_AIGroup slave = group.GetSlave();
+		if (slave && slave != group)
+			KK_BuildingResolver.ClearPendingOrder(slave);
+	}
+
+	static void ApplyLatestClear(
+		IEntity groupEntity,
+		vector position,
+		BaseBuilding building = null,
+		bool locked = false)
 	{
 		KK_ClearBuildingWaypoint waypoint = KK_ClearBuildingWaypoint.Cast(
 			FindNearestWaypoint(groupEntity, position, true)
 		);
 
-		if (waypoint)
-			waypoint.ApplyScenarioSettings();
+		if (!waypoint)
+			return;
+
+		waypoint.ApplyScenarioSettings();
+		waypoint.SetOrderBuilding(building, locked);
+		ClearPending(ResolveGroup(groupEntity));
 	}
 
-	static void ApplyLatestGarrison(IEntity groupEntity, vector position)
+	static void ApplyLatestGarrison(
+		IEntity groupEntity,
+		vector position,
+		BaseBuilding building = null,
+		bool locked = false)
 	{
 		KK_GarrisonBuildingWaypoint waypoint =
 			KK_GarrisonBuildingWaypoint.Cast(
 				FindNearestWaypoint(groupEntity, position, false)
 			);
 
-		if (waypoint)
-			waypoint.ApplyScenarioSettings();
+		if (!waypoint)
+			return;
+
+		waypoint.ApplyScenarioSettings();
+		waypoint.SetOrderBuilding(building, locked);
+		ClearPending(ResolveGroup(groupEntity));
 	}
 
 	protected static AIWaypoint FindNearestWaypoint(
@@ -1397,6 +1453,27 @@ class KK_CQBOrders
 		if (!group)
 			return null;
 
+		AIWaypoint nearest = FindNearestOn(
+			group,
+			position,
+			clearWaypoint
+		);
+
+		if (nearest)
+			return nearest;
+
+		SCR_AIGroup slave = group.GetSlave();
+		if (!slave || slave == group)
+			return null;
+
+		return FindNearestOn(slave, position, clearWaypoint);
+	}
+
+	protected static AIWaypoint FindNearestOn(
+		notnull SCR_AIGroup group,
+		vector position,
+		bool clearWaypoint)
+	{
 		array<AIWaypoint> waypoints = {};
 		group.GetWaypoints(waypoints);
 

@@ -1,8 +1,16 @@
+class KK_PendingBuildingOrder
+{
+	BaseBuilding m_Building;
+	bool m_bLocked;
+}
+
 class KK_BuildingResolver
 {
 	protected static vector s_QueryOrigin;
 	protected static ref array<BaseBuilding> s_aCandidates = {};
 	protected static ref array<float> s_aDistances = {};
+	protected static ref map<IEntity, ref KK_PendingBuildingOrder> s_mPendingOrders =
+		new map<IEntity, ref KK_PendingBuildingOrder>();
 
 	static array<BaseBuilding> FindOccupiableBuildings(
 		vector origin,
@@ -80,6 +88,203 @@ class KK_BuildingResolver
 			);
 
 		return center;
+	}
+
+	// A hit piece uses its building when the order point is on that building.
+	// A point inside a building uses that one. Open ground uses the nearest.
+	static BaseBuilding ResolveOrderBuilding(
+		IEntity hitEntity,
+		vector position,
+		out bool locked,
+		float radius = 75.0)
+	{
+		locked = false;
+
+		BaseBuilding aimed = ResolveBuildingRoot(hitEntity);
+		if (aimed && BoundsContain(aimed, position, 2.0))
+		{
+			locked = true;
+			LogOrderBuilding("aimed piece", aimed);
+			return aimed;
+		}
+
+		array<BaseBuilding> buildings =
+			FindOccupiableBuildings(position, radius);
+
+		BaseBuilding containing =
+			SelectContainingBuilding(buildings, position, 0);
+
+		if (!containing)
+		{
+			containing = SelectContainingBuilding(
+				buildings,
+				position,
+				1.0
+			);
+		}
+
+		if (containing)
+		{
+			locked = true;
+			LogOrderBuilding("position inside", containing);
+			return containing;
+		}
+
+		if (buildings.IsEmpty())
+			return null;
+
+		LogOrderBuilding("nearest", buildings[0]);
+		return buildings[0];
+	}
+
+	static vector ResolveOrderPosition(
+		IEntity hitEntity,
+		vector position,
+		out BaseBuilding building,
+		out bool locked,
+		float radius = 75.0)
+	{
+		building = ResolveOrderBuilding(
+			hitEntity,
+			position,
+			locked,
+			radius
+		);
+
+		if (!building)
+			return position;
+
+		return SCR_EntityHelper.GetEntityCenterWorld(building);
+	}
+
+	// The activity can start while the command is still spawning the waypoint.
+	static void SetPendingOrder(
+		IEntity group,
+		BaseBuilding building,
+		bool locked)
+	{
+		if (!group)
+			return;
+
+		KK_PendingBuildingOrder pending = new KK_PendingBuildingOrder();
+		pending.m_Building = building;
+		pending.m_bLocked = locked && building;
+		s_mPendingOrders.Set(group, pending);
+	}
+
+	static bool TakePendingOrder(
+		IEntity group,
+		out BaseBuilding building,
+		out bool locked)
+	{
+		building = null;
+		locked = false;
+
+		if (!group || !s_mPendingOrders.Contains(group))
+			return false;
+
+		KK_PendingBuildingOrder pending = s_mPendingOrders.Get(group);
+		s_mPendingOrders.Remove(group);
+
+		if (!pending)
+			return false;
+
+		building = pending.m_Building;
+		locked = pending.m_bLocked && building;
+		return true;
+	}
+
+	static void ClearPendingOrder(IEntity group)
+	{
+		if (!group)
+			return;
+
+		if (s_mPendingOrders.Contains(group))
+			s_mPendingOrders.Remove(group);
+	}
+
+	static void FillOrderCandidates(
+		notnull array<BaseBuilding> candidates,
+		BaseBuilding lockedBuilding,
+		bool locked,
+		vector origin,
+		float radius)
+	{
+		if (locked && lockedBuilding)
+		{
+			candidates.Insert(lockedBuilding);
+			return;
+		}
+
+		array<BaseBuilding> found =
+			FindOccupiableBuildings(origin, radius);
+
+		foreach (BaseBuilding candidate : found)
+		{
+			candidates.Insert(candidate);
+		}
+	}
+
+	protected static BaseBuilding SelectContainingBuilding(
+		array<BaseBuilding> buildings,
+		vector position,
+		float pad)
+	{
+		BaseBuilding best;
+		float bestVolume = -1;
+
+		foreach (BaseBuilding building : buildings)
+		{
+			if (!building)
+				continue;
+
+			if (!BoundsContain(building, position, pad))
+				continue;
+
+			vector size = SCR_EntityHelper.GetEntitySize(building);
+			float volume = size[0] * size[1] * size[2];
+
+			if (best && volume >= bestVolume)
+				continue;
+
+			best = building;
+			bestVolume = volume;
+		}
+
+		return best;
+	}
+
+	protected static bool BoundsContain(
+		notnull BaseBuilding building,
+		vector worldPosition,
+		float pad)
+	{
+		vector mins;
+		vector maxs;
+		building.GetBounds(mins, maxs);
+
+		vector local = building.CoordToLocal(worldPosition);
+
+		return local[0] >= mins[0] - pad &&
+			local[0] <= maxs[0] + pad &&
+			local[1] >= mins[1] - pad &&
+			local[1] <= maxs[1] + pad &&
+			local[2] >= mins[2] - pad &&
+			local[2] <= maxs[2] + pad;
+	}
+
+	protected static void LogOrderBuilding(
+		string reason,
+		BaseBuilding building)
+	{
+		if (!SCR_BaseGameMode.KK_LogEnabled())
+			return;
+
+		PrintFormat(
+			"KK: Order building (%1) is %2",
+			reason,
+			building
+		);
 	}
 
 	protected static bool OnEntityFound(IEntity entity)

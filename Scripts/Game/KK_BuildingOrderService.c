@@ -40,7 +40,10 @@ class KK_BuildingOrderService
 		return true;
 	}
 
-	static bool AssignGarrison(notnull SCR_AIGroup group, vector position)
+	static bool AssignGarrison(
+		notnull SCR_AIGroup group,
+		vector position,
+		BaseBuilding building = null)
 	{
 		const ResourceName garrisonPrefab =
 			"{6A6969C011223344}Prefabs/AI/Waypoints/KK_AIWaypoint_GarrisonBuilding.et";
@@ -71,6 +74,9 @@ class KK_BuildingOrderService
 		}
 
 		waypoint.ApplyScenarioSettings();
+		if (building)
+			waypoint.SetOrderBuilding(building, true);
+
 		group.AddWaypointAt(waypoint, 0);
 
 		if (SCR_BaseGameMode.KK_LogEnabled())

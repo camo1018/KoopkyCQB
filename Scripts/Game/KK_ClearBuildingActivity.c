@@ -96,6 +96,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		}
 	
 		m_Plan = new KK_BuildingInteriorPlan();
+		ClaimPendingBuilding();
 	
 		SetPriority(
 			SCR_AIActionBase.PRIORITY_LEVEL_GAMEMASTER
@@ -194,20 +195,55 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		return GetPriority();
 	}
 
+	protected void ClaimPendingBuilding()
+	{
+		if (!m_Group || !m_ClearWaypoint)
+			return;
+
+		BaseBuilding building;
+		bool locked;
+		if (!KK_BuildingResolver.TakePendingOrder(m_Group, building, locked))
+			return;
+
+		m_ClearWaypoint.SetOrderBuilding(building, locked);
+	}
+
+	// Planning can begin before the aimed building is stored on the waypoint.
+	protected void AlignLockedBuilding()
+	{
+		if (!m_ClearWaypoint || m_bPlanReady)
+			return;
+
+		if (!m_ClearWaypoint.IsOrderBuildingLocked())
+			return;
+
+		BaseBuilding lockedBuilding = m_ClearWaypoint.GetOrderBuilding();
+		if (
+			m_aBuildingCandidates.Count() == 1 &&
+			m_aBuildingCandidates[0] == lockedBuilding
+		)
+			return;
+
+		m_aBuildingCandidates.Clear();
+		m_Building = null;
+		m_iBuildingCandidateIndex = 0;
+		m_iNavmeshLoadAttempts = 0;
+	}
+
 	protected void UpdatePlanning()
 	{
+		AlignLockedBuilding();
+
 		if (m_aBuildingCandidates.IsEmpty())
 		{
-			array<BaseBuilding> found =
-				KK_BuildingResolver.FindOccupiableBuildings(
-					m_ClearWaypoint.GetOrigin(),
-					m_ClearWaypoint.GetBuildingSearchRadius()
-				);
-
-			foreach (BaseBuilding candidate : found)
-			{
-				m_aBuildingCandidates.Insert(candidate);
-			}
+			// The aimed piece stays on that building. A ground click can still move on.
+			KK_BuildingResolver.FillOrderCandidates(
+				m_aBuildingCandidates,
+				m_ClearWaypoint.GetOrderBuilding(),
+				m_ClearWaypoint.IsOrderBuildingLocked(),
+				m_ClearWaypoint.GetOrigin(),
+				m_ClearWaypoint.GetBuildingSearchRadius()
+			);
 
 			m_iBuildingCandidateIndex = 0;
 		}
@@ -2884,7 +2920,11 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 		if (assignGarrison && group && !hasNextWaypoint && garrisonAfterClear)
 		{
-			KK_BuildingOrderService.AssignGarrison(group, garrisonPosition);
+			KK_BuildingOrderService.AssignGarrison(
+				group,
+				garrisonPosition,
+				building
+			);
 		}
 		else if (hasNextWaypoint)
 		{
