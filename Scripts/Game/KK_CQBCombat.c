@@ -273,6 +273,9 @@ class KK_GarrisonHold
 		new map<IEntity, int>();
 	protected static const float RELOAD_RETRY_MS = 1500;
 	protected static const float TOPOFF_START_MS = 750;
+	// An empty reload outlasts both of those. IsReloading() drops between
+	// stages, and a second order in that gap plays the animation again.
+	protected static const float EMPTY_RELOAD_MS = 4500;
 	protected static const float RELOAD_COVER_RADIUS = 0.8;
 	protected static const float RELOAD_NODE_RADIUS = 0.2;
 	protected static const float RELOAD_NODE_THERE = 1.5;
@@ -684,6 +687,11 @@ class KK_GarrisonHold
 			return;
 		}
 
+		// The order already went out. Another one while the gun is still
+		// empty restarts the magazine change.
+		if (IsEmptyReload(body))
+			return;
+
 		if (HoldingThrowable(body))
 			return;
 
@@ -776,7 +784,9 @@ class KK_GarrisonHold
 	}
 
 	// The building shot keeps the trigger down. That has to stay off until a
-	// dry gun has a magazine again, or the reload never starts.
+	// dry gun has a magazine again, or the reload never starts. The flag
+	// also has to outlast the animation: IsReloading() is false between
+	// stages, and the gun is still empty then.
 	protected static bool IsEmptyReload(IEntity body)
 	{
 		if (!body || !s_EmptyReload.Contains(body))
@@ -786,14 +796,15 @@ class KK_GarrisonHold
 		if (controller && controller.IsReloading())
 			return true;
 
-		float now = 0;
-		BaseWorld world = GetGame().GetWorld();
-		if (world)
-			now = world.GetWorldTime();
+		if (!GunIsDry(body))
+		{
+			s_EmptyReload.RemoveItem(body);
+			return false;
+		}
 
 		if (
 			s_ReloadAt.Contains(body) &&
-			now - s_ReloadAt.Get(body) < TOPOFF_START_MS
+			WorldTime() - s_ReloadAt.Get(body) < EMPTY_RELOAD_MS
 		)
 		{
 			return true;
