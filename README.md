@@ -25,7 +25,7 @@ A finished clear garrisons that building when nothing else is queued and **Garri
 
 ## Garrison
 
-Puts the squad on posts inside the building. They sprint toward the building and run once they are inside. On the way in, a bound runs and shoots. Inside, with **Fight the nearest enemy in the building** on, an enemy in the building stops him until that enemy is gone, and only then does he run on. A closed door holds him, and he can shoot while he waits. At the post, he holds and fights from there.
+Puts the squad on posts inside the building. They sprint toward the building and run once they are inside. On the way in, a bound runs and shoots. Inside, with **Custom CQB AI** on, an enemy in the building stops him until that enemy is gone, and only then does he run on. A closed door holds him, and he can shoot while he waits. At the post, he holds and fights from there.
 
 A post only counts if the soldier is on that floor. A sampled interior post allows a wider drift (the garrison hold radius, 5 m). A placed window, door, or post uses the tighter placed-waypoint hold radius (1 m).
 
@@ -49,7 +49,7 @@ A soldier who leaves his post is pulled back on an interval. He rotates to anoth
 
 While a soldier is clearing or garrisoning, **Recognition speed** replaces his normal speed, then returns when the order ends. 1 is normal. **Stay sharp under fire** keeps suppression from slowing recognition, and the first shot does not wait.
 
-**Fight the nearest enemy in the building** is on. Inside the building, a clearing or garrison soldier fires himself at the nearest enemy he can see, instead of waiting on the normal attack. **Shot check** is how often he looks, in milliseconds, from 50 to 100. It defaults to 75. **Shot delay** is how long that clear sight has to last before the round, in seconds. 0 fires on the next check. If only a step to his left or right can see the enemy, he leans that way and shoots from the peek.
+**Custom CQB AI** is on. It replaces the normal attack inside the building while soldiers are clearing or garrisoning. A soldier fires himself at the nearest enemy he can see. **Shot check** is how often he looks, in milliseconds, from 50 to 100. It defaults to 75. **Shot delay** is how long that clear sight has to last before the round, in seconds. 0 fires on the next check. If only a step to his left or right can see the enemy, he leans that way and shoots from the peek.
 
 ## Interior
 
