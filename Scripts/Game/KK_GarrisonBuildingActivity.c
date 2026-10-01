@@ -1,6 +1,8 @@
 class KK_GarrisonAgentAssignment
 {
 	AIAgent m_Agent;
+	// Kept after a knockout. The agent drops the body, and the speed lock is on it.
+	IEntity m_Body;
 	ref KK_InteriorTarget m_Target;
 	float m_fStartedAt;
 	float m_fLastOrderAt;
@@ -36,6 +38,7 @@ class KK_GarrisonAgentAssignment
 		vector startPosition)
 	{
 		m_Agent = agent;
+		m_Body = agent.GetControlledEntity();
 		m_Target = target;
 		m_fStartedAt = startedAt;
 		m_fLastOrderAt = startedAt;
@@ -293,14 +296,39 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			KK_GarrisonAgentAssignment assignment =
 				m_aAssignments[i];
 
-			if (
-				!assignment ||
-				!assignment.m_Agent ||
-				!assignment.m_Agent.GetControlledEntity()
-			)
+			if (!assignment || !assignment.m_Agent)
 			{
 				ReleaseAssignment(i, false);
+				i--;
+				continue;
 			}
+
+			IEntity body = assignment.m_Agent.GetControlledEntity();
+			if (body)
+				assignment.m_Body = body;
+			else
+				body = assignment.m_Body;
+
+			// Knocked out, the agent drops the body. Keep the hold so a
+			// cancel can still clear the speed lock, and so he resumes
+			// if he wakes under this garrison.
+			if (
+				!assignment.m_Agent.GetControlledEntity() &&
+				KK_GarrisonHold.IsDown(body)
+			)
+			{
+				// The travel clock keeps running while he is down. Without
+				// this he is dropped the moment he wakes.
+				float now = GetGame().GetWorld().GetWorldTime();
+				assignment.m_fStartedAt = now;
+				assignment.m_fStillSince = now;
+				assignment.m_fLastOrderAt = now;
+				i--;
+				continue;
+			}
+
+			if (!assignment.m_Agent.GetControlledEntity())
+				ReleaseAssignment(i, false);
 
 			i--;
 		}
@@ -2034,37 +2062,42 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 	{
 		foreach (KK_GarrisonAgentAssignment assignment : m_aAssignments)
 		{
-			if (!assignment || !assignment.m_Agent)
+			if (!assignment)
 				continue;
 
-			KK_GarrisonHold.SetPinned(
-				assignment.m_Agent.GetControlledEntity(),
-				false
-			);
-			KK_GarrisonHold.SetTraveling(
-				assignment.m_Agent.GetControlledEntity(),
-				false
-			);
-			KK_GarrisonHold.ClearApproachGoal(
-				assignment.m_Agent.GetControlledEntity()
-			);
-			KK_GarrisonHold.SetIgnoringTargets(
-				assignment.m_Agent.GetControlledEntity(),
-				false
-			);
-			KK_GarrisonHold.SetDoorFiring(
-				assignment.m_Agent.GetControlledEntity(),
-				false
-			);
-			KK_GarrisonHold.SetMoveFire(
-				assignment.m_Agent.GetControlledEntity(),
-				false
-			);
-			KK_GarrisonHold.SetGarrisonBuilding(
-				assignment.m_Agent.GetControlledEntity(),
-				null
-			);
+			ReleaseSoldierHold(assignment);
 		}
+	}
+
+	// The body remembered at the post. GetControlledEntity is null while he is down.
+	protected IEntity AssignmentBody(KK_GarrisonAgentAssignment assignment)
+	{
+		if (!assignment)
+			return null;
+
+		IEntity body;
+		if (assignment.m_Agent)
+			body = assignment.m_Agent.GetControlledEntity();
+
+		if (body)
+			assignment.m_Body = body;
+
+		return assignment.m_Body;
+	}
+
+	protected void ReleaseSoldierHold(KK_GarrisonAgentAssignment assignment)
+	{
+		IEntity body = AssignmentBody(assignment);
+		if (!body)
+			return;
+
+		KK_GarrisonHold.SetPinned(body, false);
+		KK_GarrisonHold.SetTraveling(body, false);
+		KK_GarrisonHold.ClearApproachGoal(body);
+		KK_GarrisonHold.SetIgnoringTargets(body, false);
+		KK_GarrisonHold.SetDoorFiring(body, false);
+		KK_GarrisonHold.SetMoveFire(body, false);
+		KK_GarrisonHold.SetGarrisonBuilding(body, null);
 	}
 
 	protected void ReleaseAssignment(
@@ -2080,35 +2113,10 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			return;
 		}
 
+		ReleaseSoldierHold(assignment);
+
 		if (assignment.m_Agent)
 		{
-			KK_GarrisonHold.SetPinned(
-				assignment.m_Agent.GetControlledEntity(),
-				false
-			);
-			KK_GarrisonHold.SetTraveling(
-				assignment.m_Agent.GetControlledEntity(),
-				false
-			);
-			KK_GarrisonHold.ClearApproachGoal(
-				assignment.m_Agent.GetControlledEntity()
-			);
-			KK_GarrisonHold.SetIgnoringTargets(
-				assignment.m_Agent.GetControlledEntity(),
-				false
-			);
-			KK_GarrisonHold.SetDoorFiring(
-				assignment.m_Agent.GetControlledEntity(),
-				false
-			);
-			KK_GarrisonHold.SetMoveFire(
-				assignment.m_Agent.GetControlledEntity(),
-				false
-			);
-			KK_GarrisonHold.SetGarrisonBuilding(
-				assignment.m_Agent.GetControlledEntity(),
-				null
-			);
 			assignment.m_bFacingApplied = false;
 
 			KK_PerceptionBoost.Restore(
@@ -2200,6 +2208,8 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			{
 				continue;
 			}
+
+			ReleaseSoldierHold(assignment);
 
 			if (assignment.m_Agent)
 			{

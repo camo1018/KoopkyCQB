@@ -193,6 +193,9 @@ modded class SCR_AICombatComponent
 class KK_GarrisonHold
 {
 	protected static ref set<IEntity> s_Pinned = new set<IEntity>();
+	// Unlocked while unconscious. The speed override does not stick until he is up.
+	protected static ref array<IEntity> s_SpeedRelease = {};
+	protected static bool s_bSpeedReleaseTicking;
 	protected static ref set<IEntity> s_Traveling = new set<IEntity>();
 	protected static ref set<IEntity> s_IgnoringTargets = new set<IEntity>();
 	protected static ref set<IEntity> s_DoorFiring = new set<IEntity>();
@@ -313,6 +316,19 @@ class KK_GarrisonHold
 	static bool IsPinned(IEntity soldier)
 	{
 		return soldier && s_Pinned.Contains(soldier);
+	}
+
+	// Unconscious, still alive. Dead is handled by the caller that drops the hold.
+	static bool IsDown(IEntity soldier)
+	{
+		CharacterControllerComponent controller = Controller(soldier);
+		if (!controller || controller.IsDead())
+			return false;
+
+		if (controller.IsUnconscious())
+			return true;
+
+		return controller.GetLifeState() == ECharacterLifeState.INCAPACITATED;
 	}
 
 	// On the way to a post, combat must not steer them off the route.
@@ -3454,13 +3470,30 @@ class KK_GarrisonHold
 	}
 
 	// Attack movement ignores the post order. Zero walk speed leaves aiming alone.
+	// A release while he is down does not stick, so it is applied again once he is up.
 	protected static void ApplyFootLock(IEntity soldier, bool locked)
 	{
-		CharacterControllerComponent controller =
-			CharacterControllerComponent.Cast(
-				soldier.FindComponent(CharacterControllerComponent)
-			);
+		if (!soldier)
+			return;
 
+		int releaseIndex = s_SpeedRelease.Find(soldier);
+		if (locked)
+		{
+			if (releaseIndex >= 0)
+				s_SpeedRelease.Remove(releaseIndex);
+		}
+		else if (IsDown(soldier) && releaseIndex < 0)
+		{
+			s_SpeedRelease.Insert(soldier);
+			EnsureSpeedReleaseTick();
+		}
+
+		WriteFootLock(soldier, locked);
+	}
+
+	protected static void WriteFootLock(IEntity soldier, bool locked)
+	{
+		CharacterControllerComponent controller = Controller(soldier);
 		if (controller)
 		{
 			if (locked)
@@ -3476,6 +3509,56 @@ class KK_GarrisonHold
 
 		if (movement && locked)
 			movement.SetMovementTypeWanted(EMovementType.IDLE);
+	}
+
+	protected static void EnsureSpeedReleaseTick()
+	{
+		if (s_bSpeedReleaseTicking || s_SpeedRelease.Count() == 0 || !GetGame())
+			return;
+
+		s_bSpeedReleaseTicking = true;
+		GetGame().GetCallqueue().CallLater(SpeedReleaseTick, 250, false);
+	}
+
+	static void SpeedReleaseTick()
+	{
+		s_bSpeedReleaseTicking = false;
+		if (!GetGame())
+			return;
+
+		array<IEntity> pending = {};
+		foreach (IEntity soldier : s_SpeedRelease)
+			pending.Insert(soldier);
+
+		foreach (IEntity soldier : pending)
+		{
+			int releaseIndex = s_SpeedRelease.Find(soldier);
+			if (!soldier || s_Pinned.Contains(soldier))
+			{
+				if (releaseIndex >= 0)
+					s_SpeedRelease.Remove(releaseIndex);
+				continue;
+			}
+
+			WriteFootLock(soldier, false);
+			if (IsDown(soldier))
+				continue;
+
+			// The hold left idle speed. A new order issued while he was down
+			// did not replace it, so he can walk again once he is up.
+			AICharacterMovementComponent movement =
+				AICharacterMovementComponent.Cast(
+					soldier.FindComponent(AICharacterMovementComponent)
+				);
+			if (movement)
+				movement.SetMovementTypeWanted(EMovementType.RUN);
+
+			if (releaseIndex >= 0)
+				s_SpeedRelease.Remove(releaseIndex);
+		}
+
+		if (s_SpeedRelease.Count() > 0)
+			EnsureSpeedReleaseTick();
 	}
 
 	protected static void CancelCombatMove(IEntity soldier)
