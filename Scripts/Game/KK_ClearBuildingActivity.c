@@ -13,6 +13,7 @@ class KK_InteriorAgentAssignment
 	bool m_bFacingApplied;
 	bool m_bCombatOwnsWeapon;
 	bool m_bReloadMove;
+	bool m_bHadContact;
 	vector m_vReloadGoal;
 	ref array<vector> m_aRouteGoals = {};
 	int m_iRouteIndex;
@@ -61,6 +62,17 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 	// Agent key, world time gun ammo was first seen. -1 is still empty.
 	protected ref map<AIAgent, float> m_mAmmoReleased =
+		new map<AIAgent, float>();
+
+	// Last spare node that was still a real hold. The nearest open point
+	// flips between two nearby nodes as the squad center wobbles.
+	protected ref map<AIAgent, ref KK_InteriorTarget> m_mSparePost =
+		new map<AIAgent, ref KK_InteriorTarget>();
+
+	protected ref map<AIAgent, vector> m_mLastMoveGoal =
+		new map<AIAgent, vector>();
+
+	protected ref map<AIAgent, float> m_mLastMoveAt =
 		new map<AIAgent, float>();
 
 	protected ref array<ref Shape> m_aDebugShapes = {};
@@ -449,19 +461,27 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					timerDelta = 0;
 				assignment.m_fLastTimerUpdate = currentTime;
 
-				// Leftover alert after the enemy is down is not a firefight.
-				// A living target still pauses the clocks, even between sightings.
-				bool holdForFight =
-					IsEngagingEnemy(assignment.m_Agent) &&
-					!HoldsDownedTarget(assignment.m_Agent);
+				// Alert after the body is gone is not a firefight. A living
+				// target still pauses the clocks, including a frame where
+				// the wall breaks the trace. When that contact ends, the
+				// node gets a fresh travel budget.
+				bool contact = InContact(assignment.m_Agent);
 
-				if (holdForFight)
+				if (assignment.m_bHadContact && !contact)
+				{
+					assignment.m_fStillSince = currentTime;
+					assignment.m_fStartedAt = currentTime;
+				}
+
+				assignment.m_bHadContact = contact;
+
+				if (contact)
 				{
 					assignment.m_fStillSince = currentTime;
 					assignment.m_fStartedAt += timerDelta;
 					assignment.m_bFacingApplied = false;
 				}
-				else if (IsEngagingEnemy(assignment.m_Agent))
+				else
 				{
 					assignment.m_bFacingApplied = false;
 				}
@@ -531,6 +551,11 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				}
 				assignment.m_bReloadMove = reloadMove;
 
+				if (!reloadMove && !contact)
+					KK_GarrisonHold.ReleaseLatentCombat(
+						assignment.m_Agent.GetControlledEntity()
+					);
+
 				if (!reloadMove)
 				{
 				vector moveGoal = AssignmentMoveGoal(assignment);
@@ -551,6 +576,10 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					assignment.m_fStillSince = currentTime;
 					assignment.m_fStartedAt = currentTime;
 					moveGoal = AssignmentMoveGoal(assignment);
+					assignment.m_fBestDistance = vector.Distance(
+						unitPosition,
+						moveGoal
+					);
 					onFinalGoal = KK_AuthoredRouteHelper.IsOnFinalGoal(
 						assignment.m_aRouteGoals,
 						assignment.m_iRouteIndex
@@ -583,7 +612,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					assignment.m_fStartedAt = currentTime;
 
 					if (
-						IsEngagingEnemy(assignment.m_Agent) ||
+						contact ||
 						KK_GarrisonHold.FightingInside(
 							assignment.m_Agent.GetControlledEntity()
 						)
@@ -612,6 +641,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				{
 					assignment.m_fBestDistance = distanceToTarget;
 					assignment.m_fStillSince = currentTime;
+					assignment.m_fStartedAt = currentTime;
 				}
 
 				if (
@@ -668,7 +698,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 						);
 					}
 
-					if (!holdForFight)
+					if (!contact)
 						assignment.m_fStartedAt += timerDelta;
 				}
 
@@ -689,11 +719,14 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					);
 				}
 
+				float stuckMs = m_ClearWaypoint.GetStuckTimeout() * 1000.0;
+				float travelMs = m_ClearWaypoint.GetMovementTimeout() * 1000.0;
+
 				if (
 					!holdingSpare &&
 					!passageHold &&
-					currentTime - assignment.m_fStillSince >=
-					m_ClearWaypoint.GetStuckTimeout() * 1000.0
+					stuckMs > 0 &&
+					currentTime - assignment.m_fStillSince >= stuckMs
 				)
 				{
 					if (SCR_BaseGameMode.KK_LogEnabled())
@@ -711,8 +744,8 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				else if (
 					!holdingSpare &&
 					!passageHold &&
-					currentTime - assignment.m_fStartedAt >=
-					m_ClearWaypoint.GetMovementTimeout() * 1000.0
+					travelMs > 0 &&
+					currentTime - assignment.m_fStartedAt >= travelMs
 				)
 				{
 					if (SCR_BaseGameMode.KK_LogEnabled())
@@ -732,11 +765,8 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					!holdingSpare &&
 					currentTime - assignment.m_fLastOrderAt >=
 						KK_AgentMove.REISSUE_INTERVAL_MS &&
-					(
-						IsEngagingEnemy(assignment.m_Agent) ||
-						currentTime - assignment.m_fStillSince >=
-							KK_AgentMove.REISSUE_INTERVAL_MS
-					)
+					currentTime - assignment.m_fStillSince >=
+						KK_AgentMove.REISSUE_INTERVAL_MS
 				)
 				{
 					assignment.m_fLastOrderAt = currentTime;
@@ -892,7 +922,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			if (!spare || !spare.GetControlledEntity())
 				continue;
 
-			AssignSpare(spare, post, currentTime);
+			AssignSpare(spare, StableSparePost(spare, post), currentTime);
 		}
 	}
 
@@ -1603,13 +1633,22 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				!assignment ||
 				assignment.m_bClearsPoint ||
 				!assignment.m_Agent ||
-				!assignment.m_Agent.GetControlledEntity() ||
-				assignment.m_Target == post
+				!assignment.m_Agent.GetControlledEntity()
 			)
 			{
 				continue;
 			}
 
+			if (
+				assignment.m_Target == post ||
+				SparePostAcceptable(assignment.m_Target, post)
+			)
+			{
+				m_mSparePost.Set(assignment.m_Agent, assignment.m_Target);
+				continue;
+			}
+
+			m_mSparePost.Set(assignment.m_Agent, post);
 			RetargetAssignment(assignment, post, currentTime);
 		}
 	}
@@ -1781,7 +1820,13 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		KK_PerceptionBoost.Apply(agent, m_mPerceptionFactors);
 		IssueMoveOrder(agent, AssignmentMoveGoal(assignment));
 
-		if (SCR_BaseGameMode.KK_LogEnabled())
+		KK_InteriorTarget previousPost;
+		bool samePost =
+			m_mSparePost.Find(agent, previousPost) &&
+			previousPost == target;
+		m_mSparePost.Set(agent, target);
+
+		if (!samePost && SCR_BaseGameMode.KK_LogEnabled())
 			PrintFormat(
 				"KK: Unit %1 spare target %2 floor=%3 cluster=%4",
 				agent,
@@ -1789,6 +1834,44 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				target.m_iFloor,
 				target.m_iCluster
 			);
+	}
+
+	// Keep the node he already has when the newly chosen one is only the
+	// other side of a wobbling squad center.
+	protected KK_InteriorTarget StableSparePost(
+		notnull AIAgent agent,
+		KK_InteriorTarget desired)
+	{
+		KK_InteriorTarget held;
+		if (!m_mSparePost.Find(agent, held) || !SparePostAcceptable(held, desired))
+			return desired;
+
+		return held;
+	}
+
+	protected bool SparePostAcceptable(
+		KK_InteriorTarget held,
+		KK_InteriorTarget desired)
+	{
+		if (
+			!held ||
+			held.IsFinished() ||
+			held.m_eState == KK_EInteriorTargetState.DEFERRED
+		)
+		{
+			return false;
+		}
+
+		if (!desired || held == desired)
+			return true;
+
+		if (held.m_iFloor != desired.m_iFloor)
+			return false;
+
+		if (held.m_iCluster == desired.m_iCluster)
+			return true;
+
+		return vector.Distance(held.m_vPosition, desired.m_vPosition) <= 6;
 	}
 
 	protected void RetargetAssignment(
@@ -2119,6 +2202,30 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		vector position,
 		EMovementType movementType = EMovementType.RUN)
 	{
+		float now = 0;
+		if (GetGame() && GetGame().GetWorld())
+			now = GetGame().GetWorld().GetWorldTime();
+
+		vector previousGoal;
+		float previousAt;
+		bool sameGoal =
+			m_mLastMoveGoal.Find(agent, previousGoal) &&
+			vector.Distance(previousGoal, position) < 0.75;
+		bool recent =
+			m_mLastMoveAt.Find(agent, previousAt) &&
+			now - previousAt < KK_AgentMove.REISSUE_INTERVAL_MS;
+
+		// Rebuilding the spare every pass was broadcasting a new path to the
+		// same point and the soldier stuttered instead of walking it.
+		if (sameGoal && recent)
+		{
+			KK_AgentMove.SetWantedSpeed(agent, movementType);
+			return;
+		}
+
+		m_mLastMoveGoal.Set(agent, position);
+		m_mLastMoveAt.Set(agent, now);
+
 		float priority = KK_AgentMove.PRIORITY_LEVEL;
 		// Attack stays selected on an unconscious body and outranks the
 		// route order. Step over it once that body can no longer fight.
@@ -2207,6 +2314,29 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			SetWeaponRaised(agent, false);
 			OrderWeaponRaised(agent, false);
 		}
+	}
+
+	// Someone he can see, or a living body the threat system is still on.
+	// Alert after that body is gone does not count. That was steering the
+	// route after the fight.
+	protected bool InContact(notnull AIAgent agent)
+	{
+		if (HasLivingTarget(agent))
+			return true;
+
+		if (!IsEngagingEnemy(agent))
+			return false;
+
+		return HasFightableTarget(agent);
+	}
+
+	protected bool HasFightableTarget(notnull AIAgent agent)
+	{
+		BaseTarget target = CurrentTarget(agent);
+		if (!target)
+			return false;
+
+		return KK_GarrisonHold.IsFightable(target.GetTargetEntity());
 	}
 
 	protected bool IsEngagingEnemy(notnull AIAgent agent)
@@ -2559,7 +2689,16 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				assignment.m_Agent,
 				m_mPerceptionFactors
 			);
-			CancelAgentOrder(assignment.m_Agent);
+
+			bool spareStillOpen =
+				!assignment.m_bClearsPoint &&
+				assignment.m_Target &&
+				!assignment.m_Target.IsFinished() &&
+				assignment.m_Target.m_eState !=
+					KK_EInteriorTargetState.DEFERRED;
+
+			if (!spareStillOpen)
+				CancelAgentOrder(assignment.m_Agent);
 		}
 
 		int removeIndex = m_aAssignments.Find(assignment);

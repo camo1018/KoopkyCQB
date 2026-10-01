@@ -27,6 +27,8 @@ class KK_GarrisonAgentAssignment
 	float m_fFireUntil;
 	float m_fBoundUntil;
 	float m_fSteadyUntil;
+	float m_fBestDistance;
+	bool m_bHadContact;
 	EMovementType m_eApproachSpeed;
 	ref array<vector> m_aRouteGoals = {};
 	int m_iRouteIndex;
@@ -45,6 +47,7 @@ class KK_GarrisonAgentAssignment
 		m_fStillSince = startedAt;
 		m_fLastTimerUpdate = startedAt;
 		m_vStillPosition = startPosition;
+		m_fBestDistance = vector.Distance(startPosition, target.m_vPosition);
 		m_eApproachSpeed = EMovementType.SPRINT;
 	}
 }
@@ -483,6 +486,11 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 					assignment.m_fLastOrderAt = currentTime;
 					assignment.m_fStillSince = currentTime;
 					assignment.m_fStartedAt = currentTime;
+					moveGoal = AssignmentMoveGoal(assignment);
+					assignment.m_fBestDistance = vector.Distance(
+						unitPosition,
+						moveGoal
+					);
 					advancedRoute = true;
 					IssueMoveOrder(assignment, assignment.m_bRotating);
 				}
@@ -511,7 +519,19 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				timerDelta = 0;
 			assignment.m_fLastTimerUpdate = currentTime;
 
-			bool attacking = IsEngagingEnemy(assignment.m_Agent);
+			bool attacking = InContact(assignment.m_Agent);
+
+			if (assignment.m_bHadContact && !attacking)
+			{
+				assignment.m_fStartedAt = currentTime;
+				assignment.m_fStillSince = currentTime;
+				assignment.m_fBestDistance = vector.Distance(
+					unitPosition,
+					moveGoal
+				);
+			}
+
+			assignment.m_bHadContact = attacking;
 
 			// The move stays under the attack. In contact he shoots, then runs
 			// one leg of the route, and repeats until he is on the post.
@@ -631,6 +651,8 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 					KK_GarrisonHold.FightingInside(controlledEntity);
 				if (attacking || indoorFight)
 					assignment.m_bFacingApplied = false;
+				else
+					KK_GarrisonHold.ReleaseLatentCombat(controlledEntity);
 
 				if (
 					!attacking &&
@@ -787,11 +809,22 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				assignment.m_vStillPosition = unitPosition;
 				assignment.m_fStillSince = currentTime;
 			}
-			else if (
+
+			float goalDistance = vector.Distance(unitPosition, moveGoal);
+			if (goalDistance + 1.0 < assignment.m_fBestDistance)
+			{
+				assignment.m_fBestDistance = goalDistance;
+				assignment.m_fStartedAt = currentTime;
+				assignment.m_fStillSince = currentTime;
+			}
+
+			float stuckMs = m_GarrisonWaypoint.GetStuckTimeout() * 1000.0;
+
+			if (
 				!passageHold &&
 				!fightStepping &&
-				currentTime - assignment.m_fStillSince >=
-				m_GarrisonWaypoint.GetStuckTimeout() * 1000.0
+				stuckMs > 0 &&
+				currentTime - assignment.m_fStillSince >= stuckMs
 			)
 			{
 				if (SCR_BaseGameMode.KK_LogEnabled())
@@ -809,6 +842,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 			if (
 				!passageHold &&
+				timeoutMs > 0 &&
 				currentTime - assignment.m_fStartedAt >=
 				timeoutMs
 			)
@@ -1493,6 +1527,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			assignment.m_fSteadyUntil = 0;
 			KK_GarrisonHold.ClearApproachGoal(controlledEntity);
 			KK_GarrisonHold.SetDoorFiring(controlledEntity, false);
+			KK_GarrisonHold.ReleaseLatentCombat(controlledEntity);
 			return;
 		}
 
@@ -1650,6 +1685,34 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			agent.GetControlledEntity(),
 			target
 		);
+	}
+
+	// Visible enemy, or a living one the threat system is still on. Alert
+	// after that body is gone does not keep the combat strafe.
+	protected bool InContact(notnull AIAgent agent)
+	{
+		if (HasVisibleTarget(agent))
+			return true;
+
+		if (!IsEngagingEnemy(agent))
+			return false;
+
+		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
+		if (!soldier || !soldier.m_UtilityComponent)
+			return false;
+
+		SCR_AICombatComponent combat =
+			soldier.m_UtilityComponent.m_CombatComponent;
+
+		if (!combat)
+			return false;
+
+		BaseTarget target = combat.GetCurrentTarget();
+		if (!target)
+			return false;
+
+		IEntity enemy = target.GetTargetEntity();
+		return enemy && KK_GarrisonHold.IsFightable(enemy);
 	}
 
 	protected bool IsEngagingEnemy(notnull AIAgent agent)
@@ -1991,7 +2054,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		if (controlledEntity)
 		{
 			// A sprint order drops the weapon and then blocks the shot.
-			if (IsEngagingEnemy(assignment.m_Agent))
+			if (InContact(assignment.m_Agent))
 				speed = EMovementType.RUN;
 			else
 				speed = GetApproachSpeed(controlledEntity.GetOrigin());

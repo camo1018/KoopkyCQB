@@ -109,23 +109,34 @@ modded class SCR_AICombatComponent
 		if (!KK_GarrisonHold.UseRoomCombat() || !KK_GarrisonHold.HasBuilding(GetOwner()))
 			return;
 
-		// The attack keeps the spot it already fired at. A clear line to that
-		// point is not a body, so the remembered aim has to be dropped.
+		// A lost body is not a target. A living one who is behind a wall this
+		// frame still is. Dropping him here made the route and the leftover
+		// threat fight over the same soldier, and the aim point was his feet.
 		BaseTarget selected = m_SelectedTarget;
-		if (selected && !KK_GarrisonHold.SeesTarget(GetOwner(), selected))
+		if (selected && !KK_GarrisonHold.IsLivingTarget(selected))
 		{
 			KK_ClearTarget();
 			m_SelectedTargetVisible = false;
 			outCurrentTarget = null;
 			outSelectedTargetChanged = false;
 			KK_GarrisonHold.DropRememberedAim(GetOwner());
+			m_SelectedTargetDestinationPos =
+				KK_GarrisonHold.LevelAimPoint(GetOwner());
 			selected = null;
+		}
+		else if (selected && !KK_GarrisonHold.SeesTarget(GetOwner(), selected))
+		{
+			m_SelectedTargetVisible = false;
+			KK_GarrisonHold.DropRememberedAim(GetOwner());
+			m_SelectedTargetDestinationPos =
+				KK_GarrisonHold.LevelAimPoint(GetOwner());
 		}
 		else if (selected)
 		{
 			IEntity seenBody = selected.GetTargetEntity();
 			if (seenBody)
-				m_SelectedTargetDestinationPos = seenBody.GetOrigin();
+				m_SelectedTargetDestinationPos =
+					KK_GarrisonHold.ShotAimPoint(seenBody);
 		}
 
 		PerceptionComponent perception = PerceptionComponent.Cast(
@@ -151,7 +162,8 @@ modded class SCR_AICombatComponent
 		// the move.
 		m_SelectedTarget = preferred;
 		m_SelectedTargetVisible = true;
-		m_SelectedTargetDestinationPos = preferredEntity.GetOrigin();
+		m_SelectedTargetDestinationPos =
+			KK_GarrisonHold.ShotAimPoint(preferredEntity);
 		outCurrentTarget = preferred;
 		outSelectedTargetChanged = false;
 	}
@@ -430,6 +442,18 @@ class KK_GarrisonHold
 		return SeesTarget(body, utility.m_CombatComponent.GetCurrentTarget());
 	}
 
+	// Eyes, or a level point ahead of him. The feet read as aiming at the floor.
+	static vector LevelAimPoint(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return vector.Zero;
+
+		vector transform[4];
+		body.GetWorldTransform(transform);
+		return body.GetOrigin() + Vector(0, 1.6, 0) + (transform[2] * 8);
+	}
+
 	// The look and the trigger stay on the last burst after the body is gone.
 	static void DropRememberedAim(IEntity soldier)
 	{
@@ -443,6 +467,25 @@ class KK_GarrisonHold
 
 		SCR_AIUtilityComponent utility = UtilityOf(body);
 		CancelLook(utility, body);
+	}
+
+	// Threat stays up after the body is gone. That leftover strafe and the
+	// look at the last point are what make the next move wander.
+	static void ReleaseLatentCombat(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		if (HasVisibleEnemy(body) || s_ShotLive.Contains(body))
+			return;
+
+		if (SprintBeforeReload(body) || s_ReloadBash.Contains(body))
+			return;
+
+		DropRememberedAim(body);
+		CancelCombatMove(body);
+		ClearApproachGoal(body);
 	}
 
 	// On the way to a post, combat must not steer them off the route.
@@ -1543,7 +1586,11 @@ class KK_GarrisonHold
 		if (!soldier || !soldier.m_UtilityComponent || !soldier.m_UtilityComponent.m_LookAction)
 			return;
 
-		soldier.m_UtilityComponent.m_LookAction.LookAt(enemy, 100, 5);
+		soldier.m_UtilityComponent.m_LookAction.LookAt(
+			ShotAimPoint(enemy),
+			100,
+			5
+		);
 	}
 
 	protected static IEntity BashTarget(IEntity body, float reach)
@@ -2728,7 +2775,7 @@ class KK_GarrisonHold
 		if (s_ShotLook.Contains(body))
 		{
 			IEntity shot = s_ShotLook.Get(body);
-			if (shot && PositionInside(building, shot.GetOrigin()))
+			if (shot && IsLiving(shot) && PositionInside(building, shot.GetOrigin()))
 				return true;
 		}
 
@@ -2815,7 +2862,9 @@ class KK_GarrisonHold
 			ClearAim(body);
 			RememberLean(body, 0);
 			CommandWeapon(body, FeelsThreatened(utility), false);
-			ReleaseLook(utility, body);
+			// ReleaseLook only drops a look this gun started. The attack
+			// look at the last point on the floor has to go too.
+			CancelLook(utility, body);
 			return;
 		}
 
@@ -2824,7 +2873,11 @@ class KK_GarrisonHold
 			enemy = s_ShotLook.Get(body);
 
 		if (enemy && !IsLiving(enemy))
-			enemy = null;
+		{
+			ClearShot(body);
+			CancelLook(utility, body);
+			return;
+		}
 
 		float lean = 0;
 		if (s_ShotLean.Contains(body))
@@ -2847,7 +2900,7 @@ class KK_GarrisonHold
 			SetFireWanted(body, false);
 
 		if (!canShoot || !enemy)
-			ReleaseLook(utility, body);
+			CancelLook(utility, body);
 		else
 			AimLook(utility, body, enemy);
 	}
