@@ -412,17 +412,26 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					timerDelta = 0;
 				assignment.m_fLastTimerUpdate = currentTime;
 
-				if (IsEngagingEnemy(assignment.m_Agent))
+				// Leftover alert after the enemy is down is not a firefight.
+				// A living target still pauses the clocks, even between sightings.
+				bool holdForFight =
+					IsEngagingEnemy(assignment.m_Agent) &&
+					!HoldsDownedTarget(assignment.m_Agent);
+
+				if (holdForFight)
 				{
 					assignment.m_fStillSince = currentTime;
 					assignment.m_fStartedAt += timerDelta;
-
+					assignment.m_bFacingApplied = false;
+				}
+				else if (IsEngagingEnemy(assignment.m_Agent))
+				{
 					assignment.m_bFacingApplied = false;
 				}
 
 				if (
 					KK_Passage.Enabled() &&
-					IsEngagingEnemy(assignment.m_Agent)
+					HasLivingTarget(assignment.m_Agent)
 				)
 				{
 					if (!assignment.m_bCombatOwnsWeapon)
@@ -622,7 +631,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 						);
 					}
 
-					if (!IsEngagingEnemy(assignment.m_Agent))
+					if (!holdForFight)
 						assignment.m_fStartedAt += timerDelta;
 				}
 
@@ -2073,17 +2082,23 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		vector position,
 		EMovementType movementType = EMovementType.RUN)
 	{
+		float priority = KK_AgentMove.PRIORITY_LEVEL;
+		// Attack stays selected on an unconscious body and outranks the
+		// route order. Step over it once that body can no longer fight.
+		if (HoldsDownedTarget(agent))
+			priority = KK_AgentMove.EnterBuildingPriorityLevel();
+
 		KK_AgentMove.Issue(
 			this,
 			m_Group,
 			agent,
 			position,
 			m_mSoloHandlers,
-			KK_AgentMove.PRIORITY_LEVEL,
+			priority,
 			movementType
 		);
 
-		if (KK_Passage.Enabled() && IsEngagingEnemy(agent))
+		if (KK_Passage.Enabled() && HasLivingTarget(agent))
 			return;
 
 		SetWeaponRaised(agent, true);
@@ -2170,6 +2185,52 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		EAIThreatState state = threat.GetState();
 		return state == EAIThreatState.ALERTED ||
 			state == EAIThreatState.THREATENED;
+	}
+
+	protected BaseTarget CurrentTarget(notnull AIAgent agent)
+	{
+		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
+		if (!soldier || !soldier.m_UtilityComponent)
+			return null;
+
+		SCR_AICombatComponent combat =
+			soldier.m_UtilityComponent.m_CombatComponent;
+
+		if (!combat)
+			return null;
+
+		return combat.GetCurrentTarget();
+	}
+
+	// The selected enemy is still up and can be seen from here.
+	protected bool HasLivingTarget(notnull AIAgent agent)
+	{
+		BaseTarget target = CurrentTarget(agent);
+		if (!target)
+			return false;
+
+		IEntity enemy = target.GetTargetEntity();
+		if (!enemy || !KK_GarrisonHold.IsFightable(enemy))
+			return false;
+
+		return KK_GarrisonHold.SeesTarget(
+			agent.GetControlledEntity(),
+			target
+		);
+	}
+
+	// Attack is still holding a body that is dead or down.
+	protected bool HoldsDownedTarget(notnull AIAgent agent)
+	{
+		BaseTarget target = CurrentTarget(agent);
+		if (!target)
+			return false;
+
+		IEntity enemy = target.GetTargetEntity();
+		if (!enemy)
+			return false;
+
+		return !KK_GarrisonHold.IsFightable(enemy);
 	}
 
 	protected void CancelAgentOrder(notnull AIAgent agent)

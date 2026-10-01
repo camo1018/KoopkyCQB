@@ -1606,6 +1606,10 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		if (!target)
 			return false;
 
+		IEntity enemy = target.GetTargetEntity();
+		if (enemy && !KK_GarrisonHold.IsFightable(enemy))
+			return false;
+
 		return KK_GarrisonHold.SeesTarget(
 			agent.GetControlledEntity(),
 			target

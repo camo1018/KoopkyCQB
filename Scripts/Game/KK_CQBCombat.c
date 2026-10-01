@@ -380,6 +380,12 @@ class KK_GarrisonHold
 		return controller.GetLifeState() == ECharacterLifeState.INCAPACITATED;
 	}
 
+	// Alive and on his feet. A downed enemy is not a reason to hold the route.
+	static bool IsFightable(IEntity character)
+	{
+		return IsLiving(character);
+	}
+
 	// On the way to a post, combat must not steer them off the route.
 	// Speed stays free so they can still sprint. A foot lock would stop the run.
 	static void SetTraveling(IEntity soldier, bool traveling)
