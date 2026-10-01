@@ -70,6 +70,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 	protected bool m_bPlanReady;
 	protected bool m_bFinished;
 	protected bool m_bCancelled;
+	protected bool m_bRetain;
 	protected int m_iDeferPassesUsed;
 
 	protected float m_fLastPlanningAttempt;
@@ -2986,20 +2987,114 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			group.CompleteWaypoint(waypoint);
 	}
 
+	// Drops this activity without completing its waypoint, so a restart
+	// can build a new one for the squad as it is now.
+	void Supersede()
+	{
+		if (m_bCancelled || m_bFinished)
+			return;
+
+		m_bFinished = true;
+		SendCancelMessagesToAllAgents();
+		ReleaseOrderBuildings();
+		KK_PerceptionBoost.RestoreAll(m_mPerceptionFactors);
+		m_aAssignments.Clear();
+		m_mAmmoReleased.Clear();
+		LowerWeapons();
+		ClearDebug();
+		SetActionState(EAIActionState.FAILED);
+		SetRemoveAction(true);
+	}
+
+	// True while this order should keep running. Joining soldiers restart
+	// the group activity and the waypoint tree; that is not a cancel.
+	bool IsLive()
+	{
+		if (m_bCancelled || m_bFinished || !m_ClearWaypoint)
+			return false;
+
+		EAIActionState state = GetActionState();
+		return state != EAIActionState.FAILED &&
+			state != EAIActionState.COMPLETED;
+	}
+
+	protected bool WaypointStillAssigned()
+	{
+		if (!m_Group || !m_ClearWaypoint)
+			return false;
+
+		array<AIWaypoint> waypoints = {};
+		m_Group.GetWaypoints(waypoints);
+
+		foreach (AIWaypoint waypoint : waypoints)
+		{
+			if (waypoint == m_ClearWaypoint)
+				return true;
+		}
+
+		return false;
+	}
+
+	protected void RetainAfterRestart()
+	{
+		m_bRetain = true;
+		SetActionState(EAIActionState.EVALUATED);
+		SetRemoveAction(false);
+
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			Print("KK: Clear Building kept running after the group activity restarted");
+	}
+
+	override void OnSetActionState(EAIActionState state)
+	{
+		super.OnSetActionState(state);
+
+		if (!m_bRetain || m_bCancelled || m_bFinished)
+			return;
+
+		if (
+			state != EAIActionState.FAILED &&
+			state != EAIActionState.COMPLETED
+		)
+		{
+			return;
+		}
+
+		m_bRetain = false;
+		SetActionState(EAIActionState.EVALUATED);
+		SetRemoveAction(false);
+	}
+
 	override void OnActionDeselected()
 	{
 		super.OnActionDeselected();
 
-		if (!m_bFinished)
-			CancelClear();
+		if (m_bFinished || m_bCancelled)
+			return;
+
+		if (WaypointStillAssigned())
+		{
+			RetainAfterRestart();
+			return;
+		}
+
+		CancelClear();
 	}
 
 	override void OnActionFailed()
 	{
 		super.OnActionFailed();
 
-		if (!m_bFinished)
-			CancelClear();
+		if (m_bFinished || m_bCancelled)
+			return;
+
+		if (WaypointStillAssigned())
+		{
+			RetainAfterRestart();
+			return;
+		}
+
+		CancelClear();
 	}
 
 	override string GetActionDebugInfo()

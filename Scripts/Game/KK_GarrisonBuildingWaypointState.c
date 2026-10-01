@@ -21,8 +21,14 @@ class KK_GarrisonBuildingWaypointState : SCR_AIWaypointState
 
 	protected void StartGarrisonActivity()
 	{
-		if (m_Activity)
+		// A joining soldier restarts the waypoint tree. The order already
+		// running has to stay. A failed one is dropped without completing
+		// the waypoint, then started again for the squad as it is now.
+		if (m_Activity && m_Activity.IsLive())
 			return;
+
+		if (m_Activity)
+			m_Activity.Supersede();
 
 		KK_GarrisonBuildingWaypoint waypoint =
 			KK_GarrisonBuildingWaypoint.Cast(m_Waypoint);
