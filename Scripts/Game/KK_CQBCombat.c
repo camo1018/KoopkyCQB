@@ -228,6 +228,8 @@ class KK_GarrisonHold
 	protected static const float ROOM_SCAN_RADIUS = 35;
 	protected static const int SHOT_CANDIDATES = 8;
 	protected static const float LEAN_OFFSET = 0.4;
+	// Origin is the feet. A look at that point from arm's length points the rifle down.
+	protected static const float SHOT_AIM_HEIGHT = 1.5;
 	protected static ref map<IEntity, float> s_ShotLean = new map<IEntity, float>();
 	protected static ref map<IEntity, IEntity> s_AimTarget = new map<IEntity, IEntity>();
 	protected static ref map<IEntity, float> s_AimSince = new map<IEntity, float>();
@@ -486,13 +488,13 @@ class KK_GarrisonHold
 
 		if (lookAt)
 		{
-			utility.m_LookAction.LookAt(lookAt, 100, 3);
+			AimLook(utility, body, lookAt);
 			return;
 		}
 
 		BaseTarget shot = ShotTarget(body);
 		if (shot)
-			utility.m_LookAction.LookAt(shot.GetLastSeenPosition(), 100, 3);
+			LookAtAim(utility, ShotAimPoint(shot.GetLastSeenPosition()), 3);
 	}
 
 	static bool CombatOwnsWeapon(IEntity soldier)
@@ -2375,8 +2377,8 @@ class KK_GarrisonHold
 		else
 		{
 			BaseTarget shot = ShotTarget(body);
-			if (shot && utility.m_LookAction)
-				utility.m_LookAction.LookAt(shot.GetLastSeenPosition(), 100, 5);
+			if (shot)
+				LookAtAim(utility, ShotAimPoint(shot.GetLastSeenPosition()), 5);
 		}
 	}
 
@@ -3052,8 +3054,9 @@ class KK_GarrisonHold
 		GetGame().GetCallqueue().CallLater(LeanPump, 0, false);
 	}
 
-	// A fresh LookAt on every check restarts the turn. Issue it when the
-	// person changes, and cancel it once when that look is over.
+	// Sent on every shot check. Each call restarts the turn. The point is
+	// the eyes. Looking at the entity uses the bounds center, and from
+	// arm's length that sits under the muzzle.
 	protected static void AimLook(
 		SCR_AIUtilityComponent utility,
 		IEntity body,
@@ -3062,11 +3065,37 @@ class KK_GarrisonHold
 		if (!utility || !utility.m_LookAction || !body || !enemy)
 			return;
 
-		if (s_LookEntity.Contains(body) && s_LookEntity.Get(body) == enemy)
+		s_LookEntity.Set(body, enemy);
+		utility.m_LookAction.LookAt(ShotAimPoint(enemy), 100, 5);
+	}
+
+	// Last place he was seen is on the ground. Lift it or a close shot looks down.
+	protected static void LookAtAim(
+		SCR_AIUtilityComponent utility,
+		vector aim,
+		float duration)
+	{
+		if (!utility || !utility.m_LookAction)
 			return;
 
-		s_LookEntity.Set(body, enemy);
-		utility.m_LookAction.LookAt(enemy, 100, 5);
+		utility.m_LookAction.LookAt(aim, 100, duration);
+	}
+
+	static vector ShotAimPoint(IEntity enemy)
+	{
+		if (!enemy)
+			return vector.Zero;
+
+		ChimeraCharacter character = ChimeraCharacter.Cast(enemy);
+		if (character)
+			return character.EyePosition();
+
+		return ShotAimPoint(enemy.GetOrigin());
+	}
+
+	static vector ShotAimPoint(vector feet)
+	{
+		return feet + Vector(0, SHOT_AIM_HEIGHT, 0);
 	}
 
 	protected static void ReleaseLook(SCR_AIUtilityComponent utility, IEntity body)
@@ -3577,9 +3606,9 @@ modded class SCR_AICombatMoveLogicBase
 					{
 						IEntity targetEntity = target.GetTargetEntity();
 						if (targetEntity)
-							aimPos = targetEntity.GetOrigin();
+							aimPos = KK_GarrisonHold.ShotAimPoint(targetEntity);
 						else
-							aimPos = target.GetLastSeenPosition();
+							aimPos = KK_GarrisonHold.ShotAimPoint(target.GetLastSeenPosition());
 					}
 				}
 
