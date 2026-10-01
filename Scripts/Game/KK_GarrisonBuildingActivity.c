@@ -1643,8 +1643,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		if (!target)
 			return false;
 
-		IEntity enemy = target.GetTargetEntity();
-		if (enemy && !KK_GarrisonHold.IsFightable(enemy))
+		if (!KK_GarrisonHold.IsLivingTarget(target))
 			return false;
 
 		return KK_GarrisonHold.SeesTarget(
@@ -1685,10 +1684,10 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			return fallback;
 
 		IEntity targetEntity = target.GetTargetEntity();
-		if (targetEntity)
+		if (targetEntity && KK_GarrisonHold.IsFightable(targetEntity))
 			return targetEntity.GetOrigin();
 
-		return target.GetLastSeenPosition();
+		return fallback;
 	}
 
 	protected void CollectPassageSoldiers(

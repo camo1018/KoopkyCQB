@@ -109,16 +109,39 @@ modded class SCR_AICombatComponent
 		if (!KK_GarrisonHold.UseRoomCombat() || !KK_GarrisonHold.HasBuilding(GetOwner()))
 			return;
 
+		// The attack keeps the spot it already fired at. A clear line to that
+		// point is not a body, so the remembered aim has to be dropped.
+		BaseTarget selected = m_SelectedTarget;
+		if (selected && !KK_GarrisonHold.SeesTarget(GetOwner(), selected))
+		{
+			KK_ClearTarget();
+			m_SelectedTargetVisible = false;
+			outCurrentTarget = null;
+			outSelectedTargetChanged = false;
+			KK_GarrisonHold.DropRememberedAim(GetOwner());
+			selected = null;
+		}
+		else if (selected)
+		{
+			IEntity seenBody = selected.GetTargetEntity();
+			if (seenBody)
+				m_SelectedTargetDestinationPos = seenBody.GetOrigin();
+		}
+
 		PerceptionComponent perception = PerceptionComponent.Cast(
 			GetOwner().FindComponent(PerceptionComponent)
 		);
-		KK_GarrisonHold.RefreshShot(GetOwner(), perception, m_SelectedTarget);
+		KK_GarrisonHold.RefreshShot(GetOwner(), perception, selected);
 
 		BaseTarget preferred = KK_GarrisonHold.ShotTarget(GetOwner());
 		if (!preferred || preferred == m_SelectedTarget)
 			return;
 
 		if (!KK_GarrisonHold.ShotStillVisible(GetOwner()))
+			return;
+
+		IEntity preferredEntity = preferred.GetTargetEntity();
+		if (!preferredEntity || !KK_GarrisonHold.IsFightable(preferredEntity))
 			return;
 
 		// The selector stays on one enemy. In the building, the nearest one
@@ -128,11 +151,7 @@ modded class SCR_AICombatComponent
 		// the move.
 		m_SelectedTarget = preferred;
 		m_SelectedTargetVisible = true;
-		IEntity preferredEntity = preferred.GetTargetEntity();
-		if (preferredEntity)
-			m_SelectedTargetDestinationPos = preferredEntity.GetOrigin();
-		else
-			m_SelectedTargetDestinationPos = preferred.GetLastSeenPosition();
+		m_SelectedTargetDestinationPos = preferredEntity.GetOrigin();
 		outCurrentTarget = preferred;
 		outSelectedTargetChanged = false;
 	}
@@ -386,6 +405,46 @@ class KK_GarrisonHold
 		return IsLiving(character);
 	}
 
+	// A contact with no body is a last-seen point. That point stays "visible"
+	// in open air, and the attack keeps firing at it.
+	static bool IsLivingTarget(BaseTarget target)
+	{
+		if (!target)
+			return false;
+
+		return IsFightable(target.GetTargetEntity());
+	}
+
+	// True only while a living enemy is actually in sight. The attack
+	// otherwise keeps the last place a burst was fired.
+	static bool HasVisibleEnemy(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return false;
+
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (!utility || !utility.m_CombatComponent)
+			return false;
+
+		return SeesTarget(body, utility.m_CombatComponent.GetCurrentTarget());
+	}
+
+	// The look and the trigger stay on the last burst after the body is gone.
+	static void DropRememberedAim(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		SetFireWanted(body, false);
+		s_MoveFiring.RemoveItem(body);
+		ClearAim(body);
+
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		CancelLook(utility, body);
+	}
+
 	// On the way to a post, combat must not steer them off the route.
 	// Speed stays free so they can still sprint. A foot lock would stop the run.
 	static void SetTraveling(IEntity soldier, bool traveling)
@@ -540,7 +599,11 @@ class KK_GarrisonHold
 		// Threat keeps the gun up. He fires only when a sightline reaches
 		// someone. The picked enemy is checked again, so a wall that he
 		// walks behind still blocks the shot.
-		bool visible = ShotStillVisible(body);
+		IEntity lookAt = null;
+		if (body && s_ShotLook.Contains(body))
+			lookAt = s_ShotLook.Get(body);
+
+		bool visible = lookAt && ShotStillVisible(body);
 		bool raise = visible || FeelsThreatened(utility);
 		bool wasFiring = body && s_MoveFiring.Contains(body);
 		CommandWeapon(body, raise, visible);
@@ -553,22 +616,10 @@ class KK_GarrisonHold
 			return;
 		}
 
-		if (!utility.m_LookAction)
+		if (!utility.m_LookAction || !lookAt)
 			return;
 
-		IEntity lookAt = null;
-		if (body && s_ShotLook.Contains(body))
-			lookAt = s_ShotLook.Get(body);
-
-		if (lookAt)
-		{
-			AimLook(utility, body, lookAt);
-			return;
-		}
-
-		BaseTarget shot = ShotTarget(body);
-		if (shot)
-			LookAtAim(utility, ShotAimPoint(shot.GetLastSeenPosition()), 3);
+		AimLook(utility, body, lookAt);
 	}
 
 	static bool CombatOwnsWeapon(IEntity soldier)
@@ -2690,10 +2741,10 @@ class KK_GarrisonHold
 			return false;
 
 		IEntity enemy = target.GetTargetEntity();
-		if (enemy)
-			return PositionInside(building, enemy.GetOrigin());
+		if (!enemy || !IsLiving(enemy))
+			return false;
 
-		return PositionInside(building, target.GetLastSeenPosition());
+		return PositionInside(building, enemy.GetOrigin());
 	}
 
 	// Inside the order's building, this soldier's gun is ours. The attack
@@ -2772,6 +2823,9 @@ class KK_GarrisonHold
 		if (s_ShotLook.Contains(body))
 			enemy = s_ShotLook.Get(body);
 
+		if (enemy && !IsLiving(enemy))
+			enemy = null;
+
 		float lean = 0;
 		if (s_ShotLean.Contains(body))
 			lean = s_ShotLean.Get(body);
@@ -2792,16 +2846,10 @@ class KK_GarrisonHold
 		if (!fire)
 			SetFireWanted(body, false);
 
-		if (!canShoot)
+		if (!canShoot || !enemy)
 			ReleaseLook(utility, body);
-		else if (enemy)
-			AimLook(utility, body, enemy);
 		else
-		{
-			BaseTarget shot = ShotTarget(body);
-			if (shot)
-				LookAtAim(utility, ShotAimPoint(shot.GetLastSeenPosition()), 5);
-		}
+			AimLook(utility, body, enemy);
 	}
 
 	static void SetGarrisonBuilding(IEntity soldier, IEntity building)
@@ -3045,20 +3093,15 @@ class KK_GarrisonHold
 			return;
 
 		IEntity enemy = selected.GetTargetEntity();
-		if (enemy && !IsLiving(enemy))
+		if (!enemy || !IsLiving(enemy))
 			return;
 
 		s_ShotLive.Insert(body);
 		s_ShotBase.Set(body, selected);
-		if (enemy)
-		{
-			s_ShotLook.Set(body, enemy);
-			float lean;
-			CanEngage(body, enemy, lean);
-			s_ShotLean.Set(body, lean);
-		}
-		else
-			s_ShotLean.Set(body, 0);
+		s_ShotLook.Set(body, enemy);
+		float lean;
+		CanEngage(body, enemy, lean);
+		s_ShotLean.Set(body, lean);
 	}
 
 	protected static void UpdateRoomFire(IEntity body)
@@ -3259,7 +3302,7 @@ class KK_GarrisonHold
 	protected static bool IsLiving(IEntity character)
 	{
 		CharacterControllerComponent controller = Controller(character);
-		if (!controller || controller.IsUnconscious())
+		if (!controller || controller.IsDead() || controller.IsUnconscious())
 			return false;
 
 		return controller.GetLifeState() == ECharacterLifeState.ALIVE;
@@ -3491,18 +3534,6 @@ class KK_GarrisonHold
 		utility.m_LookAction.LookAt(ShotAimPoint(enemy), 100, 5);
 	}
 
-	// Last place he was seen is on the ground. Lift it or a close shot looks down.
-	protected static void LookAtAim(
-		SCR_AIUtilityComponent utility,
-		vector aim,
-		float duration)
-	{
-		if (!utility || !utility.m_LookAction)
-			return;
-
-		utility.m_LookAction.LookAt(aim, 100, duration);
-	}
-
 	static vector ShotAimPoint(IEntity enemy)
 	{
 		if (!enemy)
@@ -3567,15 +3598,15 @@ class KK_GarrisonHold
 			return false;
 
 		IEntity enemy = target.GetTargetEntity();
-		if (enemy)
-			return CanSeeEntity(body, enemy);
+		if (!enemy || !IsLiving(enemy))
+			return false;
 
-		return CanSeePoint(body, target.GetLastSeenPosition());
+		return CanSeeEntity(body, enemy);
 	}
 
 	protected static bool CanSeeEntity(IEntity body, IEntity enemy)
 	{
-		if (!enemy)
+		if (!enemy || !IsLiving(enemy))
 			return false;
 
 		return CanSeePoint(body, enemy.GetOrigin());
@@ -3980,6 +4011,23 @@ modded class SCR_AIAttackBehavior
 			agentEntity = m_Utility.GetOwner();
 		}
 
+		// A remembered burst is not a target. The attack would keep firing
+		// at that spot after the body is gone.
+		bool onOrder =
+			KK_GarrisonHold.UseRoomCombat() &&
+			(
+				KK_GarrisonHold.HasBuilding(character) ||
+				KK_GarrisonHold.HasBuilding(agentEntity)
+			);
+		if (
+			onOrder &&
+			!KK_GarrisonHold.HasVisibleEnemy(character) &&
+			!KK_GarrisonHold.HasVisibleEnemy(agentEntity)
+		)
+		{
+			return 0;
+		}
+
 		// Out of ammo, or a reload under pressure. Leave the behavior so the
 		// move to another cluster can run.
 		if (
@@ -4091,13 +4139,11 @@ modded class SCR_AICombatMoveLogicBase
 				if (m_CombatComp)
 				{
 					BaseTarget target = m_CombatComp.GetCurrentTarget();
-					if (target)
+					if (target && KK_GarrisonHold.IsLivingTarget(target))
 					{
 						IEntity targetEntity = target.GetTargetEntity();
 						if (targetEntity)
 							aimPos = KK_GarrisonHold.ShotAimPoint(targetEntity);
-						else
-							aimPos = KK_GarrisonHold.ShotAimPoint(target.GetLastSeenPosition());
 					}
 				}
 
