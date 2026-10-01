@@ -313,6 +313,8 @@ class KK_GarrisonHold
 	protected static const float LEAN_OFFSET = 0.4;
 	// Origin is the feet. A look at that point from arm's length points the rifle down.
 	protected static const float SHOT_AIM_HEIGHT = 1.5;
+	// Long enough that a fight does not reissue the look and restart the turn.
+	protected static const float SHOT_LOOK_DURATION = 30;
 	protected static ref map<IEntity, float> s_ShotLean = new map<IEntity, float>();
 	protected static ref map<IEntity, IEntity> s_AimTarget = new map<IEntity, IEntity>();
 	protected static ref map<IEntity, float> s_AimSince = new map<IEntity, float>();
@@ -1586,10 +1588,10 @@ class KK_GarrisonHold
 		if (!soldier || !soldier.m_UtilityComponent || !soldier.m_UtilityComponent.m_LookAction)
 			return;
 
-		soldier.m_UtilityComponent.m_LookAction.LookAt(
+		soldier.m_UtilityComponent.m_LookAction.KK_Track(
 			ShotAimPoint(enemy),
 			100,
-			5
+			SHOT_LOOK_DURATION
 		);
 	}
 
@@ -2808,6 +2810,34 @@ class KK_GarrisonHold
 		return PositionInside(s_Buildings.Get(body), body.GetOrigin());
 	}
 
+	// Below zero means this shot is not ours. Otherwise 0 is a quiet contact
+	// and 1 is threatened, or a target that is endangering him right now.
+	static float AimThreat(IEntity soldier)
+	{
+		if (!OwnsShot(soldier))
+			return -1;
+
+		IEntity body = CharacterBody(soldier);
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (!utility || !utility.m_ThreatSystem)
+			return 0;
+
+		float threat = utility.m_ThreatSystem.GetThreatMeasure();
+		if (threat < 0)
+			threat = 0;
+		if (threat > 1)
+			threat = 1;
+
+		if (!utility.m_CombatComponent)
+			return threat;
+
+		BaseTarget current = utility.m_CombatComponent.GetCurrentTarget();
+		if (current && current.IsEndangering())
+			return 1;
+
+		return threat;
+	}
+
 	static void ApplyRoomShot(SCR_AIUtilityComponent utility)
 	{
 		if (!utility)
@@ -3572,9 +3602,10 @@ class KK_GarrisonHold
 		GetGame().GetCallqueue().CallLater(LeanPump, 0, false);
 	}
 
-	// Sent on every shot check. Each call restarts the turn. The point is
-	// the eyes. Looking at the entity uses the bounds center, and from
-	// arm's length that sits under the muzzle.
+	// The point is his eyes. Looking at the entity uses the bounds center,
+	// and from arm's length that sits under the muzzle. A new enemy starts
+	// the turn. The same enemy only moves that point, or each shot check
+	// restarts the turn and the rifle never arrives. The shot does not wait.
 	protected static void AimLook(
 		SCR_AIUtilityComponent utility,
 		IEntity body,
@@ -3583,8 +3614,20 @@ class KK_GarrisonHold
 		if (!utility || !utility.m_LookAction || !body || !enemy)
 			return;
 
+		vector point = ShotAimPoint(enemy);
+		bool same =
+			s_LookEntity.Contains(body) &&
+			s_LookEntity.Get(body) == enemy;
+
 		s_LookEntity.Set(body, enemy);
-		utility.m_LookAction.LookAt(ShotAimPoint(enemy), 100, 5);
+
+		if (!same)
+		{
+			utility.m_LookAction.LookAt(point, 100, SHOT_LOOK_DURATION);
+			return;
+		}
+
+		utility.m_LookAction.KK_Track(point, 100, SHOT_LOOK_DURATION);
 	}
 
 	static vector ShotAimPoint(IEntity enemy)
@@ -4497,6 +4540,28 @@ modded class SCR_AISetWeaponRaised
 
 modded class SCR_AILookAction
 {
+	// LookAt restarts a turn that has not finished. A shot check does that
+	// every pass, so the rifle never arrives on the target. Move the point
+	// and leave a restart that already started this look.
+	void KK_Track(vector pos, float priority, float duration)
+	{
+		if (SprintIgnoring() || SprintingToCover())
+			return;
+
+		if (pos == vector.Zero)
+			return;
+
+		if (m_vPosition == vector.Zero || priority < m_fPriority)
+		{
+			LookAt(pos, priority, duration);
+			return;
+		}
+
+		m_vPosition = pos;
+		m_fPriority = priority;
+		m_fDuration = duration;
+	}
+
 	override void LookAt(vector pos, float priority, float duration = 0.8)
 	{
 		if (SprintIgnoring() || SprintingToCover())
@@ -4529,5 +4594,50 @@ modded class SCR_AILookAction
 				KK_GarrisonHold.SprintBeforeReload(m_Utility.m_OwnerEntity) ||
 				KK_GarrisonHold.SprintBeforeReload(m_Utility.GetOwner())
 			);
+	}
+}
+
+// Close range accepts ten degrees of miss, so the rifle stops short of the
+// target. A greater threat pulls that onto him. The shot timer is unchanged.
+modded class SCR_AIGetAimErrorOffset
+{
+	override float GetRandomFactor(EAISkill skill, float mu)
+	{
+		float factor = super.GetRandomFactor(skill, mu);
+		float threat = RoomThreat();
+		if (threat < 0)
+			return factor;
+
+		return factor * Math.Lerp(0.5, 0, threat);
+	}
+
+	override float GetTolerance(
+		IEntity observer,
+		IEntity target,
+		float angularSize,
+		float distance,
+		EWeaponType weaponType)
+	{
+		float tolerance = super.GetTolerance(
+			observer,
+			target,
+			angularSize,
+			distance,
+			weaponType
+		);
+
+		float threat = KK_GarrisonHold.AimThreat(observer);
+		if (threat < 0)
+			return tolerance;
+
+		return Math.Min(tolerance, Math.Lerp(3, 0.6, threat));
+	}
+
+	protected float RoomThreat()
+	{
+		if (!m_CombatComponent)
+			return -1;
+
+		return KK_GarrisonHold.AimThreat(m_CombatComponent.GetOwner());
 	}
 }
