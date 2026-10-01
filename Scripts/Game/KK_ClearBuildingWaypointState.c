@@ -29,10 +29,11 @@ class KK_ClearBuildingWaypointState : SCR_AIWaypointState
 
 		if (!waypoint)
 		{
-			Print(
-				"KK: Clear Building waypoint has invalid type",
-				LogLevel.ERROR
-			);
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				Print(
+					"KK: Clear Building waypoint has invalid type",
+					LogLevel.ERROR
+				);
 			return;
 		}
 

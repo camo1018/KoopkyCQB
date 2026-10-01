@@ -115,10 +115,11 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			return;
 		}
 	
-		PrintFormat(
-			"KK: Clear Building activity selected at %1",
-			m_ClearWaypoint.GetOrigin()
-		);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat(
+				"KK: Clear Building activity selected at %1",
+				m_ClearWaypoint.GetOrigin()
+			);
 	}
 	
 	override float CustomEvaluate()
@@ -223,10 +224,11 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				m_Building =
 					m_aBuildingCandidates[m_iBuildingCandidateIndex];
 
-				PrintFormat(
-					"KK: Clear Building selected %1",
-					m_Building
-				);
+				if (SCR_BaseGameMode.KK_LogEnabled())
+					PrintFormat(
+						"KK: Clear Building selected %1",
+						m_Building
+					);
 			}
 
 			if (!m_Plan.EnsureNavmeshLoaded(
@@ -241,10 +243,11 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				if (m_iNavmeshLoadAttempts < 2)
 					return;
 
-				PrintFormat(
-					"KK: Navmesh not available for %1, trying next building",
-					m_Building
-				);
+				if (SCR_BaseGameMode.KK_LogEnabled())
+					PrintFormat(
+						"KK: Navmesh not available for %1, trying next building",
+						m_Building
+					);
 
 				m_Building = null;
 				m_iBuildingCandidateIndex++;
@@ -269,10 +272,11 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				break;
 			}
 
-			PrintFormat(
-				"KK: No interior navmesh samples in %1, trying next building",
-				m_Building
-			);
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				PrintFormat(
+					"KK: No interior navmesh samples in %1, trying next building",
+					m_Building
+				);
 
 			m_Building = null;
 			m_iBuildingCandidateIndex++;
@@ -280,10 +284,11 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 		m_bPlanReady = true;
 
-		PrintFormat(
-			"KK: Clear Building plan ready with %1 targets",
-			m_Plan.GetTargets().Count()
-		);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat(
+				"KK: Clear Building plan ready with %1 targets",
+				m_Plan.GetTargets().Count()
+			);
 
 		float readyTime = GetGame().GetWorld().GetWorldTime();
 		MarkSeenTargets(readyTime);
@@ -627,11 +632,12 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					m_ClearWaypoint.GetStuckTimeout() * 1000.0
 				)
 				{
-					PrintFormat(
-						"KK: Unit stood still for %1s heading to interior target %2",
-						m_ClearWaypoint.GetStuckTimeout(),
-						assignment.m_Target.m_vPosition
-					);
+					if (SCR_BaseGameMode.KK_LogEnabled())
+						PrintFormat(
+							"KK: Unit stood still for %1s heading to interior target %2",
+							m_ClearWaypoint.GetStuckTimeout(),
+							assignment.m_Target.m_vPosition
+						);
 
 					if (assignment.m_bClearsPoint)
 						FinishAssignment(i, false);
@@ -645,10 +651,11 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					m_ClearWaypoint.GetMovementTimeout() * 1000.0
 				)
 				{
-					PrintFormat(
-						"KK: Unit movement timed out at interior target %1",
-						assignment.m_Target.m_vPosition
-					);
+					if (SCR_BaseGameMode.KK_LogEnabled())
+						PrintFormat(
+							"KK: Unit movement timed out at interior target %1",
+							assignment.m_Target.m_vPosition
+						);
 
 					if (assignment.m_bClearsPoint)
 						FinishAssignment(i, false);
@@ -1670,15 +1677,16 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		KK_PerceptionBoost.Apply(agent, m_mPerceptionFactors);
 		IssueMoveOrder(agent, AssignmentMoveGoal(assignment));
 
-		PrintFormat(
-			"KK: Unit %1 %2 target %3 floor=%4 cluster=%5 attempt=%6",
-			agent,
-			role,
-			target.m_vPosition,
-			target.m_iFloor,
-			target.m_iCluster,
-			target.m_iRetries + 1
-		);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat(
+				"KK: Unit %1 %2 target %3 floor=%4 cluster=%5 attempt=%6",
+				agent,
+				role,
+				target.m_vPosition,
+				target.m_iFloor,
+				target.m_iCluster,
+				target.m_iRetries + 1
+			);
 	}
 
 	protected void AssignSpare(
@@ -1708,13 +1716,14 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		KK_PerceptionBoost.Apply(agent, m_mPerceptionFactors);
 		IssueMoveOrder(agent, AssignmentMoveGoal(assignment));
 
-		PrintFormat(
-			"KK: Unit %1 spare target %2 floor=%3 cluster=%4",
-			agent,
-			target.m_vPosition,
-			target.m_iFloor,
-			target.m_iCluster
-		);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat(
+				"KK: Unit %1 spare target %2 floor=%3 cluster=%4",
+				agent,
+				target.m_vPosition,
+				target.m_iFloor,
+				target.m_iCluster
+			);
 	}
 
 	protected void RetargetAssignment(
@@ -1746,13 +1755,14 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		assignment.m_iRouteIndex = 0;
 		IssueMoveOrder(assignment.m_Agent, AssignmentMoveGoal(assignment));
 
-		PrintFormat(
-			"KK: Unit %1 spare retarget %2 floor=%3 cluster=%4",
-			assignment.m_Agent,
-			target.m_vPosition,
-			target.m_iFloor,
-			target.m_iCluster
-		);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat(
+				"KK: Unit %1 spare retarget %2 floor=%3 cluster=%4",
+				assignment.m_Agent,
+				target.m_vPosition,
+				target.m_iFloor,
+				target.m_iCluster
+			);
 	}
 
 	protected vector SquadAnchor()
@@ -2211,10 +2221,11 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			target.m_eState =
 				KK_EInteriorTargetState.VISITED;
 
-			PrintFormat(
-				"KK: Interior target seen %1",
-				target.m_vPosition
-			);
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				PrintFormat(
+					"KK: Interior target seen %1",
+					target.m_vPosition
+				);
 		}
 	}
 
@@ -2441,10 +2452,11 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			target.m_eState =
 				KK_EInteriorTargetState.VISITED;
 	
-			PrintFormat(
-				"KK: Interior target visited %1",
-				target.m_vPosition
-			);
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				PrintFormat(
+					"KK: Interior target visited %1",
+					target.m_vPosition
+				);
 		}
 		else
 		{
@@ -2473,10 +2485,11 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				target.m_eState =
 					KK_EInteriorTargetState.UNREACHABLE;
 
-				PrintFormat(
-					"KK: Interior target marked unreachable %1",
-					target.m_vPosition
-				);
+				if (SCR_BaseGameMode.KK_LogEnabled())
+					PrintFormat(
+						"KK: Interior target marked unreachable %1",
+						target.m_vPosition
+					);
 
 				if (m_ClearWaypoint.GetFailClusterOnUnreachable())
 					FailRestOfCluster(target);
@@ -2492,12 +2505,13 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 	{
 		failedTarget.m_eState = KK_EInteriorTargetState.DEFERRED;
 
-		PrintFormat(
-			"KK: Interior target deferred %1 floor=%2 cluster=%3",
-			failedTarget.m_vPosition,
-			failedTarget.m_iFloor,
-			failedTarget.m_iCluster
-		);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat(
+				"KK: Interior target deferred %1 floor=%2 cluster=%3",
+				failedTarget.m_vPosition,
+				failedTarget.m_iFloor,
+				failedTarget.m_iCluster
+			);
 	}
 
 	protected void DeferRestOfCluster(notnull KK_InteriorTarget failedTarget)
@@ -2554,12 +2568,13 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			m_aAssignments.Remove(i);
 		}
 
-		PrintFormat(
-			"KK: Floor %1 cluster %2 deferred with the failed node, held %3 other nodes",
-			failedTarget.m_iFloor,
-			failedTarget.m_iCluster,
-			deferredCount
-		);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat(
+				"KK: Floor %1 cluster %2 deferred with the failed node, held %3 other nodes",
+				failedTarget.m_iFloor,
+				failedTarget.m_iCluster,
+				deferredCount
+			);
 	}
 
 	protected bool ReleaseDeferredTargets()
@@ -2578,21 +2593,23 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			int released = m_Plan.ReleaseDeferred();
 			m_iDeferPassesUsed++;
 
-			PrintFormat(
-				"KK: Clear retrying %1 deferred nodes, pass %2",
-				released,
-				m_iDeferPassesUsed
-			);
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				PrintFormat(
+					"KK: Clear retrying %1 deferred nodes, pass %2",
+					released,
+					m_iDeferPassesUsed
+				);
 
 			return true;
 		}
 
 		int dropped = m_Plan.FinalizeDeferred();
 
-		PrintFormat(
-			"KK: Clear dropped %1 deferred nodes",
-			dropped
-		);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat(
+				"KK: Clear dropped %1 deferred nodes",
+				dropped
+			);
 
 		return false;
 	}
@@ -2652,12 +2669,13 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			m_aAssignments.Remove(i);
 		}
 
-		PrintFormat(
-			"KK: Floor %1 cluster %2 failed with the unreachable node, dropped %3 other nodes",
-			failedTarget.m_iFloor,
-			failedTarget.m_iCluster,
-			failedCount
-		);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat(
+				"KK: Floor %1 cluster %2 failed with the unreachable node, dropped %3 other nodes",
+				failedTarget.m_iFloor,
+				failedTarget.m_iCluster,
+				failedCount
+			);
 	}
 
 	protected void ReleaseOrderBuildings()
@@ -2688,7 +2706,8 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		LowerWeapons();
 		ClearDebug();
 
-		Print("KK: Clear Building activity cancelled");
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			Print("KK: Clear Building activity cancelled");
 
 		SCR_AIGroup group = m_Group;
 		KK_ClearBuildingWaypoint waypoint = m_ClearWaypoint;
@@ -2713,10 +2732,11 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		LowerWeapons();
 		ClearDebug();
 	
-		PrintFormat(
-			"KK: Clear Building completed for %1",
-			m_Building
-		);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat(
+				"KK: Clear Building completed for %1",
+				m_Building
+			);
 	
 		SCR_AIGroup group = m_Group;
 		KK_ClearBuildingWaypoint waypoint = m_ClearWaypoint;
@@ -2750,7 +2770,8 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		}
 		else if (hasNextWaypoint)
 		{
-			Print("KK: Clear finished with another waypoint queued, skipping garrison");
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				Print("KK: Clear finished with another waypoint queued, skipping garrison");
 		}
 	}
 
@@ -2832,10 +2853,11 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		LowerWeapons();
 		ClearDebug();
 	
-		PrintFormat(
-			"KK: Clear Building aborted: %1",
-			reason
-		);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat(
+				"KK: Clear Building aborted: %1",
+				reason
+			);
 	
 		SCR_AIGroup group = m_Group;
 		KK_ClearBuildingWaypoint waypoint = m_ClearWaypoint;

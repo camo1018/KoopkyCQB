@@ -191,10 +191,11 @@ class KK_AgentMove
 
 		soloHandlers.Set(agent, createdHandler);
 
-		PrintFormat(
-			"KK: Unit %1 split from the formation so it can move on its own",
-			agent
-		);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat(
+				"KK: Unit %1 split from the formation so it can move on its own",
+				agent
+			);
 	}
 
 	protected static void ReleaseHandler(

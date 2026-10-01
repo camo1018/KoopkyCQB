@@ -37,11 +37,12 @@ class KK_BuildingResolver
 
 		if (results.IsEmpty())
 		{
-			PrintFormat(
-				"KK: No building found within %1 metres of %2",
-				radius,
-				origin
-			);
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				PrintFormat(
+					"KK: No building found within %1 metres of %2",
+					radius,
+					origin
+				);
 		}
 
 		return results;
@@ -70,12 +71,13 @@ class KK_BuildingResolver
 
 		vector center = SCR_EntityHelper.GetEntityCenterWorld(building);
 
-		PrintFormat(
-			"KK: Nearest building to %1 is %2 at %3",
-			origin,
-			building,
-			center
-		);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat(
+				"KK: Nearest building to %1 is %2 at %3",
+				origin,
+				building,
+				center
+			);
 
 		return center;
 	}

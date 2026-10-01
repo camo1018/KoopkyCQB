@@ -748,7 +748,7 @@ class KK_Passage
 
 		if (!SwingClear(opening, soldiers))
 		{
-			if (!opening.m_bLoggedHold)
+			if (!opening.m_bLoggedHold && SCR_BaseGameMode.KK_LogEnabled())
 			{
 				opening.m_bLoggedHold = true;
 				PrintFormat(
@@ -786,11 +786,12 @@ class KK_Passage
 				continue;
 
 			leaf.m_Door.UseDoorAction(user);
-			PrintFormat(
-				"KK: Opening door %1 for %2",
-				leaf.m_Entity,
-				user
-			);
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				PrintFormat(
+					"KK: Opening door %1 for %2",
+					leaf.m_Entity,
+					user
+				);
 		}
 
 		opening.m_bOpenCalled = true;
@@ -1001,15 +1002,18 @@ class KK_Passage
 			float toward = vector.Dot(moved.Normalized(), leaf.m_vSwing);
 			leaf.m_bSwingsOut = toward > 0;
 
-			string direction = "in";
-			if (leaf.m_bSwingsOut)
-				direction = "out";
+			if (SCR_BaseGameMode.KK_LogEnabled())
+			{
+				string direction = "in";
+				if (leaf.m_bSwingsOut)
+					direction = "out";
 
-			PrintFormat(
-				"KK: Door %1 swings %2",
-				leaf.m_Entity,
-				direction
-			);
+				PrintFormat(
+					"KK: Door %1 swings %2",
+					leaf.m_Entity,
+					direction
+				);
+			}
 		}
 	}
 
@@ -1405,10 +1409,11 @@ class KK_Passage
 		if (!started)
 			return;
 
-		PrintFormat(
-			"KK: %1 passing through",
-			soldier.m_Agent.GetControlledEntity()
-		);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat(
+				"KK: %1 passing through",
+				soldier.m_Agent.GetControlledEntity()
+			);
 	}
 
 	// A door order already in the map stays. Otherwise send the soldier
@@ -1804,11 +1809,12 @@ class KK_Passage
 				aside.Insert(blocker.m_Agent);
 				goingThrough.Insert(mover.m_Agent);
 
-				PrintFormat(
-					"KK: %1 stepping aside for %2",
-					blocker.m_Agent.GetControlledEntity(),
-					mover.m_Agent.GetControlledEntity()
-				);
+				if (SCR_BaseGameMode.KK_LogEnabled())
+					PrintFormat(
+						"KK: %1 stepping aside for %2",
+						blocker.m_Agent.GetControlledEntity(),
+						mover.m_Agent.GetControlledEntity()
+					);
 			}
 		}
 	}

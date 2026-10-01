@@ -461,13 +461,14 @@ bool EnsureNavmeshLoaded(
 		vector maxs;
 		ExpandBoundsToEntitySize(building, mins, maxs);
 
-		PrintFormat(
-			"KK: Generating interior plan bounds=%1 to %2 horizontalSpacing=%3 verticalSpacing=%4",
-			mins,
-			maxs,
-			horizontalSpacing,
-			verticalSpacing
-		);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat(
+				"KK: Generating interior plan bounds=%1 to %2 horizontalSpacing=%3 verticalSpacing=%4",
+				mins,
+				maxs,
+				horizontalSpacing,
+				verticalSpacing
+			);
 
 		const float HORIZONTAL_MARGIN = 0.6;
 		const float VERTICAL_MARGIN = 0.25;
@@ -479,10 +480,11 @@ bool EnsureNavmeshLoaded(
 
 		if (!navmesh)
 		{
-			Print(
-				"KK: Group pathfinding has no navmesh component",
-				LogLevel.ERROR
-			);
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				Print(
+					"KK: Group pathfinding has no navmesh component",
+					LogLevel.ERROR
+				);
 			return false;
 		}
 
@@ -553,12 +555,13 @@ bool EnsureNavmeshLoaded(
 				rejectedCount
 			);
 
-			PrintFormat(
-				"KK: Prefab sample cache hit for %1 accepted=%2 authoredHolds=%3",
-				prefabName,
-				cacheAccepted,
-				authoredHoldCount
-			);
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				PrintFormat(
+					"KK: Prefab sample cache hit for %1 accepted=%2 authoredHolds=%3",
+					prefabName,
+					cacheAccepted,
+					authoredHoldCount
+				);
 		}
 		else
 		{
@@ -633,12 +636,13 @@ bool EnsureNavmeshLoaded(
 					localX += horizontalSpacing;
 				}
 
-				PrintFormat(
-					"KK: Sample layer localY=%1 tested=%2 accepted=%3",
-					localY,
-					layerTested,
-					layerAccepted
-				);
+				if (SCR_BaseGameMode.KK_LogEnabled())
+					PrintFormat(
+						"KK: Sample layer localY=%1 tested=%2 accepted=%3",
+						localY,
+						layerTested,
+						layerAccepted
+					);
 
 				localY += verticalSpacing;
 			}
@@ -649,10 +653,11 @@ bool EnsureNavmeshLoaded(
 
 		if (m_aTargets.IsEmpty())
 		{
-			PrintFormat(
-				"KK: No interior navmesh positions found in %1",
-				building
-			);
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				PrintFormat(
+					"KK: No interior navmesh positions found in %1",
+					building
+				);
 
 			return false;
 		}
@@ -682,10 +687,11 @@ bool EnsureNavmeshLoaded(
 
 		if (m_aTargets.IsEmpty())
 		{
-			PrintFormat(
-				"KK: All interior targets forbidden for %1",
-				building
-			);
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				PrintFormat(
+					"KK: All interior targets forbidden for %1",
+					building
+				);
 
 			return false;
 		}
@@ -701,10 +707,11 @@ bool EnsureNavmeshLoaded(
 
 		if (filterUnreachableIslands && !KeepReachableIsland(group))
 		{
-			PrintFormat(
-				"KK: No reachable interior island from squad in %1",
-				building
-			);
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				PrintFormat(
+					"KK: No reachable interior island from squad in %1",
+					building
+				);
 
 			return false;
 		}
@@ -720,50 +727,53 @@ bool EnsureNavmeshLoaded(
 
 		ApplyAuthoredOpeningOverrides(building, prefabSet);
 
-		float minLocalY = 10000.0;
-		float maxLocalY = -10000.0;
-		int floor0Count;
-		int floor1Count;
-		int floor2PlusCount;
-
-		foreach (KK_InteriorTarget summaryTarget : m_aTargets)
+		if (SCR_BaseGameMode.KK_LogEnabled())
 		{
-			minLocalY = Math.Min(
+			float minLocalY = 10000.0;
+			float maxLocalY = -10000.0;
+			int floor0Count;
+			int floor1Count;
+			int floor2PlusCount;
+
+			foreach (KK_InteriorTarget summaryTarget : m_aTargets)
+			{
+				minLocalY = Math.Min(
+					minLocalY,
+					summaryTarget.m_vLocalPosition[1]
+				);
+
+				maxLocalY = Math.Max(
+					maxLocalY,
+					summaryTarget.m_vLocalPosition[1]
+				);
+
+				if (summaryTarget.m_iFloor <= 0)
+					floor0Count++;
+				else if (summaryTarget.m_iFloor == 1)
+					floor1Count++;
+				else
+					floor2PlusCount++;
+			}
+
+			PrintFormat(
+				"KK: Interior plan for %1 tested=%2 accepted=%3 rejected=%4 clusters=%5 cache=%6",
+				building,
+				testedCount,
+				projectedCount,
+				rejectedCount,
+				m_aClusters.Count(),
+				usedCache
+			);
+
+			PrintFormat(
+				"KK: Floor counts 0=%1 1=%2 2+=%3 localY=%4 to %5",
+				floor0Count,
+				floor1Count,
+				floor2PlusCount,
 				minLocalY,
-				summaryTarget.m_vLocalPosition[1]
+				maxLocalY
 			);
-
-			maxLocalY = Math.Max(
-				maxLocalY,
-				summaryTarget.m_vLocalPosition[1]
-			);
-
-			if (summaryTarget.m_iFloor <= 0)
-				floor0Count++;
-			else if (summaryTarget.m_iFloor == 1)
-				floor1Count++;
-			else
-				floor2PlusCount++;
 		}
-
-		PrintFormat(
-			"KK: Interior plan for %1 tested=%2 accepted=%3 rejected=%4 clusters=%5 cache=%6",
-			building,
-			testedCount,
-			projectedCount,
-			rejectedCount,
-			m_aClusters.Count(),
-			usedCache
-		);
-
-		PrintFormat(
-			"KK: Floor counts 0=%1 1=%2 2+=%3 localY=%4 to %5",
-			floor0Count,
-			floor1Count,
-			floor2PlusCount,
-			minLocalY,
-			maxLocalY
-		);
 
 		return true;
 	}	
@@ -1047,10 +1057,11 @@ bool EnsureNavmeshLoaded(
 			}
 		}
 
-		PrintFormat(
-			"KK: Forbidden floors dropped targets, kept %1",
-			m_aTargets.Count()
-		);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat(
+				"KK: Forbidden floors dropped targets, kept %1",
+				m_aTargets.Count()
+			);
 	}
 
 	protected void DropRoofNodes(BaseWorld world, notnull IEntity building)
@@ -1104,11 +1115,12 @@ bool EnsureNavmeshLoaded(
 			}
 		}
 
-		PrintFormat(
-			"KK: Roof drop removed %1 targets, kept %2",
-			dropped,
-			m_aTargets.Count()
-		);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat(
+				"KK: Roof drop removed %1 targets, kept %2",
+				dropped,
+				m_aTargets.Count()
+			);
 	}
 
 	protected void PrepareAuthoredGraph(
@@ -1381,7 +1393,8 @@ bool EnsureNavmeshLoaded(
 		if (MaterialIsNatural(material))
 			return KK_ESurfaceVerdict.NATURAL;
 
-		NoteTerrainMaterial(material, SurfaceSignal(m_SurfaceTrace.SurfaceProps));
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			NoteTerrainMaterial(material, SurfaceSignal(m_SurfaceTrace.SurfaceProps));
 
 		if (HasBuildingOverhead(world, building, position))
 			return KK_ESurfaceVerdict.COVERED;
@@ -1526,6 +1539,9 @@ bool EnsureNavmeshLoaded(
 
 	protected void PrintSurfaceFilter()
 	{
+		if (!SCR_BaseGameMode.KK_LogEnabled())
+			return;
+
 		PrintFormat(
 			"KK: Surface filter building=%1 coveredTerrain=%2 natural=%3 open=%4",
 			m_iSurfaceBuilding,
@@ -1552,20 +1568,23 @@ bool EnsureNavmeshLoaded(
 		if (targetCount == 0)
 			return false;
 
-		float minY = 10000.0;
-		float maxY = -10000.0;
-		foreach (KK_InteriorTarget spanTarget : m_aTargets)
+		if (SCR_BaseGameMode.KK_LogEnabled())
 		{
-			minY = Math.Min(minY, spanTarget.m_vPosition[1]);
-			maxY = Math.Max(maxY, spanTarget.m_vPosition[1]);
-		}
+			float minY = 10000.0;
+			float maxY = -10000.0;
+			foreach (KK_InteriorTarget spanTarget : m_aTargets)
+			{
+				minY = Math.Min(minY, spanTarget.m_vPosition[1]);
+				maxY = Math.Max(maxY, spanTarget.m_vPosition[1]);
+			}
 
-		PrintFormat(
-			"KK: Island filter considering %1 targets worldY=%2 to %3",
-			targetCount,
-			minY,
-			maxY
-		);
+			PrintFormat(
+				"KK: Island filter considering %1 targets worldY=%2 to %3",
+				targetCount,
+				minY,
+				maxY
+			);
+		}
 
 		vector seedPosition = group.GetCenterOfMass();
 		array<AIAgent> agents = {};
@@ -1693,14 +1712,15 @@ bool EnsureNavmeshLoaded(
 				kept.Insert(m_aTargets[keptIndex]);
 		}
 
-		PrintFormat(
-			"KK: Reachable island kept %1 of %2 targets from seed distance %3 storeyExpanded=%4 otherStoreyDropped=%5",
-			kept.Count(),
-			targetCount,
-			nearestDistance,
-			storeyExpanded,
-			otherStoreyKept
-		);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat(
+				"KK: Reachable island kept %1 of %2 targets from seed distance %3 storeyExpanded=%4 otherStoreyDropped=%5",
+				kept.Count(),
+				targetCount,
+				nearestDistance,
+				storeyExpanded,
+				otherStoreyKept
+			);
 
 		if (kept.IsEmpty())
 			return false;
@@ -1805,7 +1825,8 @@ bool EnsureNavmeshLoaded(
 				target.m_iFloor = 0;
 			}
 	
-			Print("KK: No dense floor bands found, all targets floor 0");
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				Print("KK: No dense floor bands found, all targets floor 0");
 			return;
 		}
 	
@@ -1850,11 +1871,12 @@ bool EnsureNavmeshLoaded(
 			target.m_iFloor = nearestFloor;
 		}
 	
-		PrintFormat(
-			"KK: Floor representatives=%1 from dense bands=%2",
-			floorElevations.Count(),
-			denseElevations.Count()
-		);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat(
+				"KK: Floor representatives=%1 from dense bands=%2",
+				floorElevations.Count(),
+				denseElevations.Count()
+			);
 	}	
 
 	protected void BuildClusters(float clusterRadius)
@@ -2143,25 +2165,28 @@ bool EnsureNavmeshLoaded(
 
 		KeepClosestOpening(edgeMargin);
 
-		int doorCount;
-		int windowCount;
-
-		foreach (KK_InteriorTarget counted : m_aTargets)
+		if (SCR_BaseGameMode.KK_LogEnabled())
 		{
-			if (!counted)
-				continue;
+			int doorCount;
+			int windowCount;
 
-			if (counted.m_eOpening == KK_EInteriorOpening.DOOR)
-				doorCount++;
-			else if (counted.m_eOpening == KK_EInteriorOpening.WINDOW)
-				windowCount++;
+			foreach (KK_InteriorTarget counted : m_aTargets)
+			{
+				if (!counted)
+					continue;
+
+				if (counted.m_eOpening == KK_EInteriorOpening.DOOR)
+					doorCount++;
+				else if (counted.m_eOpening == KK_EInteriorOpening.WINDOW)
+					windowCount++;
+			}
+
+			PrintFormat(
+				"KK: Opening marks doors=%1 windows=%2",
+				doorCount,
+				windowCount
+			);
 		}
-
-		PrintFormat(
-			"KK: Opening marks doors=%1 windows=%2",
-			doorCount,
-			windowCount
-		);
 	}
 
 	protected void FloorFootprint(

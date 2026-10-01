@@ -20,7 +20,8 @@ class KK_BuildingOrderService
 		SCR_DefendWaypoint waypoint = SCR_DefendWaypoint.Cast(waypointEntity);
 		if (!waypoint)
 		{
-			Print("KK: Failed to spawn defend waypoint", LogLevel.ERROR);
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				Print("KK: Failed to spawn defend waypoint", LogLevel.ERROR);
 			return false;
 		}
 
@@ -29,11 +30,12 @@ class KK_BuildingOrderService
 
 		group.AddWaypointAt(waypoint, 0);
 
-		PrintFormat(
-			"KK: Assigned garrison prototype to %1 at %2",
-			group,
-			position
-		);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat(
+				"KK: Assigned garrison prototype to %1 at %2",
+				group,
+				position
+			);
 
 		return true;
 	}
@@ -59,7 +61,8 @@ class KK_BuildingOrderService
 
 		if (!waypoint)
 		{
-			Print("KK: Failed to spawn garrison waypoint", LogLevel.ERROR);
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				Print("KK: Failed to spawn garrison waypoint", LogLevel.ERROR);
 
 			if (waypointEntity)
 				SCR_EntityHelper.DeleteEntityAndChildren(waypointEntity);
@@ -70,11 +73,12 @@ class KK_BuildingOrderService
 		waypoint.ApplyScenarioSettings();
 		group.AddWaypointAt(waypoint, 0);
 
-		PrintFormat(
-			"KK: Garrison assigned to %1 at %2 after clear",
-			group,
-			position
-		);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat(
+				"KK: Garrison assigned to %1 at %2 after clear",
+				group,
+				position
+			);
 
 		return true;
 	}

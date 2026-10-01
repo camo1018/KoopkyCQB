@@ -891,7 +891,10 @@ class KK_BuildingWaypointLibrary
 
 		string path = PrefabFilePath(prefabSet.m_sPrefabName);
 		if (!context.SaveToFile(path))
-			Print("KK: Failed to write " + path, LogLevel.ERROR);
+		{
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				Print("KK: Failed to write " + path, LogLevel.ERROR);
+		}
 	}
 
 	protected static string PrefabFilePath(string prefabName)
@@ -1077,7 +1080,8 @@ class KK_BuildingWaypointLibrary
 			LoadSetFile(path);
 		}
 
-		PrintFormat("KK: Loaded waypoint library with %1 prefabs", s_mSets.Count());
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat("KK: Loaded waypoint library with %1 prefabs", s_mSets.Count());
 	}
 
 	protected static void LoadLegacyLibrary()
@@ -1088,7 +1092,8 @@ class KK_BuildingWaypointLibrary
 		SCR_JsonLoadContext context = new SCR_JsonLoadContext();
 		if (!context.LoadFromFile(LEGACY_LIBRARY_PATH))
 		{
-			Print("KK: Failed to load " + LEGACY_LIBRARY_PATH, LogLevel.ERROR);
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				Print("KK: Failed to load " + LEGACY_LIBRARY_PATH, LogLevel.ERROR);
 			return;
 		}
 
@@ -1110,12 +1115,13 @@ class KK_BuildingWaypointLibrary
 		}
 
 		context.EndArray();
-		PrintFormat(
-			"KK: Moved waypoint library from %1 into %2 (%3 prefabs)",
-			LEGACY_LIBRARY_PATH,
-			WAYPOINTS_DIR,
-			s_mSets.Count()
-		);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat(
+				"KK: Moved waypoint library from %1 into %2 (%3 prefabs)",
+				LEGACY_LIBRARY_PATH,
+				WAYPOINTS_DIR,
+				s_mSets.Count()
+			);
 		SaveToDisk();
 	}
 
@@ -1124,7 +1130,8 @@ class KK_BuildingWaypointLibrary
 		SCR_JsonLoadContext context = new SCR_JsonLoadContext();
 		if (!context.LoadFromFile(path))
 		{
-			Print("KK: Failed to load " + path, LogLevel.ERROR);
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				Print("KK: Failed to load " + path, LogLevel.ERROR);
 			return;
 		}
 

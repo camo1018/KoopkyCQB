@@ -174,6 +174,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 14: return mode.KK_GetRoomCombat();
 			case 15: return mode.KK_GetReloadCover();
 			case 16: return mode.KK_GetReloadSprint();
+			case 17: return mode.KK_GetDebugLog();
 		}
 
 		return mode.KK_GetGarrisonAfterClear();
@@ -198,6 +199,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 14: mode.KK_SetRoomCombat(value); break;
 			case 15: mode.KK_SetReloadCover(value); break;
 			case 16: mode.KK_SetReloadSprint(value); break;
+			case 17: mode.KK_SetDebugLog(value); break;
 			default: mode.KK_SetGarrisonAfterClear(value); break;
 		}
 	}
@@ -365,6 +367,8 @@ class KK_CQBAttrDoorSearchInterval : KK_CQBFloatEditorAttribute {}
 class KK_CQBAttrDoorSearchDistance : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrDebugDraw : KK_CQBBoolEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrDebugLog : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrWaypointAuthoring : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]

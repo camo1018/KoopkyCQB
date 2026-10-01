@@ -29,10 +29,11 @@ class KK_GarrisonBuildingWaypointState : SCR_AIWaypointState
 
 		if (!waypoint)
 		{
-			Print(
-				"KK: Garrison waypoint has invalid type",
-				LogLevel.ERROR
-			);
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				Print(
+					"KK: Garrison waypoint has invalid type",
+					LogLevel.ERROR
+				);
 			return;
 		}
 

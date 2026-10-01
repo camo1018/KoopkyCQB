@@ -161,6 +161,9 @@ modded class SCR_BaseGameMode
 	[Attribute("0", UIWidgets.CheckBox, "Draw interior points while playing from Workbench", category: "Koopky CQB/Debug")]
 	protected bool m_bKK_DebugDraw;
 
+	[Attribute("0", UIWidgets.CheckBox, "Write KK log lines. Off skips those calls.", category: "Koopky CQB/Debug")]
+	protected bool m_bKK_DebugLog;
+
 	[Attribute("0", UIWidgets.CheckBox, "Show the waypoint authoring page on the commanding radial", category: "Koopky CQB/Debug")]
 	protected bool m_bKK_WaypointAuthoring;
 
@@ -171,6 +174,7 @@ modded class SCR_BaseGameMode
 	protected static const string KK_LEGACY_CONFIG_PATH = "$profile:KoopkyCQB_config.json";
 	protected bool m_bKK_ConfigLoaded;
 	protected string m_sKK_DefaultConfig;
+	protected static bool s_bKK_DebugLog;
 
 	override void OnGameModeStart()
 	{
@@ -184,6 +188,7 @@ modded class SCR_BaseGameMode
 			return;
 
 		KK_CaptureDefaults();
+		s_bKK_DebugLog = m_bKK_DebugLog;
 
 		if (!Replication.IsServer())
 		{
@@ -223,12 +228,14 @@ modded class SCR_BaseGameMode
 		SCR_JsonLoadContext context = new SCR_JsonLoadContext();
 		if (!context.ImportFromString(m_sKK_DefaultConfig))
 		{
-			Print("KK: Failed to restore default config", LogLevel.ERROR);
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				Print("KK: Failed to restore default config", LogLevel.ERROR);
 			return;
 		}
 
 		KK_ApplyConfig(context);
-		Print("KK: Restored default scenario values");
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			Print("KK: Restored default scenario values");
 	}
 
 	void KK_ImportConfig()
@@ -236,12 +243,14 @@ modded class SCR_BaseGameMode
 		SCR_JsonLoadContext context = new SCR_JsonLoadContext();
 		if (!context.LoadFromFile(KK_CONFIG_PATH))
 		{
-			Print("KK: Failed to load " + KK_CONFIG_PATH, LogLevel.ERROR);
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				Print("KK: Failed to load " + KK_CONFIG_PATH, LogLevel.ERROR);
 			return;
 		}
 
 		KK_ApplyConfig(context);
-		Print("KK: Imported config from " + KK_CONFIG_PATH);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			Print("KK: Imported config from " + KK_CONFIG_PATH);
 	}
 
 	protected void KK_ApplyConfig(notnull SCR_JsonLoadContext context)
@@ -319,8 +328,11 @@ modded class SCR_BaseGameMode
 		if (context.StartObject("Debug"))
 		{
 			KK_ReadBool(context, "DebugDraw", m_bKK_DebugDraw);
+			KK_ReadBool(context, "DebugLog", m_bKK_DebugLog);
 			context.EndObject();
 		}
+
+		s_bKK_DebugLog = m_bKK_DebugLog;
 
 		if (context.StartObject("Authoring"))
 		{
@@ -329,7 +341,8 @@ modded class SCR_BaseGameMode
 			context.EndObject();
 		}
 
-		Print("KK: AI navigation improvements " + KK_NavModeLabel());
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			Print("KK: AI navigation improvements " + KK_NavModeLabel());
 	}
 
 	protected void KK_ReadAuthoringFlag()
@@ -340,6 +353,14 @@ modded class SCR_BaseGameMode
 		SCR_JsonLoadContext context = new SCR_JsonLoadContext();
 		if (!context.LoadFromFile(KK_CONFIG_PATH))
 			return;
+
+		if (context.StartObject("Debug"))
+		{
+			KK_ReadBool(context, "DebugLog", m_bKK_DebugLog);
+			context.EndObject();
+		}
+
+		s_bKK_DebugLog = m_bKK_DebugLog;
 
 		if (!context.StartObject("Authoring"))
 			return;
@@ -397,9 +418,14 @@ modded class SCR_BaseGameMode
 		KK_WriteConfigValues(context);
 
 		if (!context.SaveToFile(KK_CONFIG_PATH))
-			Print("KK: Failed to write " + KK_CONFIG_PATH, LogLevel.ERROR);
-		else
+		{
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				Print("KK: Failed to write " + KK_CONFIG_PATH, LogLevel.ERROR);
+		}
+		else if (SCR_BaseGameMode.KK_LogEnabled())
+		{
 			Print("KK: Wrote config to " + KK_CONFIG_PATH);
+		}
 	}
 
 	protected void KK_WriteConfigValues(notnull SCR_JsonSaveContext context)
@@ -466,6 +492,7 @@ modded class SCR_BaseGameMode
 
 		context.StartObject("Debug");
 		context.WriteValue("DebugDraw", m_bKK_DebugDraw);
+		context.WriteValue("DebugLog", m_bKK_DebugLog);
 		context.EndObject();
 
 		context.StartObject("Authoring");
@@ -722,6 +749,17 @@ modded class SCR_BaseGameMode
 		return m_bKK_DebugDraw;
 	}
 
+	bool KK_GetDebugLog()
+	{
+		return m_bKK_DebugLog;
+	}
+
+	// False skips Print, so the message is not built.
+	static bool KK_LogEnabled()
+	{
+		return s_bKK_DebugLog;
+	}
+
 	bool KK_GetWaypointAuthoring()
 	{
 		return m_bKK_WaypointAuthoring;
@@ -853,6 +891,11 @@ modded class SCR_BaseGameMode
 	void KK_SetDoorSearchInterval(float value) { m_fKK_DoorSearchInterval = value; }
 	void KK_SetDoorSearchDistance(float value) { m_fKK_DoorSearchDistance = value; }
 	void KK_SetDebugDraw(bool value) { m_bKK_DebugDraw = value; }
+	void KK_SetDebugLog(bool value)
+	{
+		m_bKK_DebugLog = value;
+		s_bKK_DebugLog = value;
+	}
 	void KK_SetWaypointAuthoring(bool value) { m_bKK_WaypointAuthoring = value; }
 	void KK_SetSampleAttempts(int value) { m_iKK_SampleAttempts = Math.Max(value, 1); }
 }
@@ -879,7 +922,7 @@ class KK_SquadCollision
 	{
 		if (!Enabled())
 		{
-			if (!s_bLoggedOff)
+			if (!s_bLoggedOff && SCR_BaseGameMode.KK_LogEnabled())
 			{
 				s_bLoggedOff = true;
 				Print("KK: Pass through characters is off");
@@ -1096,7 +1139,7 @@ class KK_SquadCollision
 
 		saved.m_iAppliedMask = physics.GetInteractionLayer();
 
-		if (saved.m_bLogged)
+		if (saved.m_bLogged || !SCR_BaseGameMode.KK_LogEnabled())
 			return;
 
 		saved.m_bLogged = true;

@@ -122,10 +122,11 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			return;
 		}
 
-		PrintFormat(
-			"KK: Garrison activity selected at %1",
-			m_GarrisonWaypoint.GetOrigin()
-		);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat(
+				"KK: Garrison activity selected at %1",
+				m_GarrisonWaypoint.GetOrigin()
+			);
 	}
 
 	override float CustomEvaluate()
@@ -211,10 +212,11 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				m_Building =
 					m_aBuildingCandidates[m_iBuildingCandidateIndex];
 
-				PrintFormat(
-					"KK: Garrison selected %1",
-					m_Building
-				);
+				if (SCR_BaseGameMode.KK_LogEnabled())
+					PrintFormat(
+						"KK: Garrison selected %1",
+						m_Building
+					);
 			}
 
 			if (!m_Plan.EnsureNavmeshLoaded(
@@ -229,10 +231,11 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				if (m_iNavmeshLoadAttempts < 2)
 					return;
 
-				PrintFormat(
-					"KK: Navmesh not available for %1, trying next building",
-					m_Building
-				);
+				if (SCR_BaseGameMode.KK_LogEnabled())
+					PrintFormat(
+						"KK: Navmesh not available for %1, trying next building",
+						m_Building
+					);
 
 				m_Building = null;
 				m_iBuildingCandidateIndex++;
@@ -258,10 +261,11 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				break;
 			}
 
-			PrintFormat(
-				"KK: No interior navmesh samples in %1, trying next building",
-				m_Building
-			);
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				PrintFormat(
+					"KK: No interior navmesh samples in %1, trying next building",
+					m_Building
+				);
 
 			m_Building = null;
 			m_iBuildingCandidateIndex++;
@@ -269,10 +273,11 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 		m_bPlanReady = true;
 
-		PrintFormat(
-			"KK: Garrison plan ready with %1 targets",
-			m_Plan.GetTargets().Count()
-		);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat(
+				"KK: Garrison plan ready with %1 targets",
+				m_Plan.GetTargets().Count()
+			);
 
 		FillAvailableAssignments(
 			GetGame().GetWorld().GetWorldTime()
@@ -700,10 +705,11 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				m_GarrisonWaypoint.GetStuckTimeout() * 1000.0
 			)
 			{
-				PrintFormat(
-					"KK: Garrison unit stood still, sending him to %1",
-					assignment.m_Target.m_vPosition
-				);
+				if (SCR_BaseGameMode.KK_LogEnabled())
+					PrintFormat(
+						"KK: Garrison unit stood still, sending him to %1",
+						assignment.m_Target.m_vPosition
+					);
 
 				assignment.m_fStillSince = currentTime;
 				assignment.m_fStartedAt = currentTime;
@@ -718,10 +724,11 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				timeoutMs
 			)
 			{
-				PrintFormat(
-					"KK: Garrison hold timed out at %1",
-					assignment.m_Target.m_vPosition
-				);
+				if (SCR_BaseGameMode.KK_LogEnabled())
+					PrintFormat(
+						"KK: Garrison hold timed out at %1",
+						assignment.m_Target.m_vPosition
+					);
 
 				ReleaseAssignment(i, true);
 				i--;
@@ -805,14 +812,15 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			);
 			IssueMoveOrder(assignment);
 
-			PrintFormat(
-				"KK: Garrison unit %1 holding %2 floor=%3 cluster=%4 opening=%5",
-				agent,
-				target.m_vPosition,
-				target.m_iFloor,
-				target.m_iCluster,
-				target.m_eOpening
-			);
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				PrintFormat(
+					"KK: Garrison unit %1 holding %2 floor=%3 cluster=%4 opening=%5",
+					agent,
+					target.m_vPosition,
+					target.m_iFloor,
+					target.m_iCluster,
+					target.m_eOpening
+				);
 		}
 	}
 
@@ -908,12 +916,13 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		assignment.m_iRouteIndex = 0;
 		IssueMoveOrder(assignment, true);
 
-		PrintFormat(
-			"KK: Garrison unit %1 rotating to %2 floor=%3",
-			assignment.m_Agent,
-			next.m_vPosition,
-			next.m_iFloor
-		);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat(
+				"KK: Garrison unit %1 rotating to %2 floor=%3",
+				assignment.m_Agent,
+				next.m_vPosition,
+				next.m_iFloor
+			);
 
 		return true;
 	}
@@ -2128,10 +2137,11 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 					assignment.m_Target.m_eState =
 						KK_EInteriorTargetState.UNREACHABLE;
 
-					PrintFormat(
-						"KK: Garrison hold marked unreachable %1",
-						assignment.m_Target.m_vPosition
-					);
+					if (SCR_BaseGameMode.KK_LogEnabled())
+						PrintFormat(
+							"KK: Garrison hold marked unreachable %1",
+							assignment.m_Target.m_vPosition
+						);
 
 					if (m_GarrisonWaypoint.GetFailClusterOnUnreachable())
 						FailRestOfCluster(assignment.m_Target);
@@ -2203,12 +2213,13 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			m_aAssignments.Remove(i);
 		}
 
-		PrintFormat(
-			"KK: Floor %1 cluster %2 failed with the unreachable node, dropped %3 other nodes",
-			failedTarget.m_iFloor,
-			failedTarget.m_iCluster,
-			failedCount
-		);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat(
+				"KK: Floor %1 cluster %2 failed with the unreachable node, dropped %3 other nodes",
+				failedTarget.m_iFloor,
+				failedTarget.m_iCluster,
+				failedCount
+			);
 	}
 
 	void CancelGarrison()
@@ -2224,7 +2235,8 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		m_aAssignments.Clear();
 		ClearDebug();
 
-		Print("KK: Garrison activity cancelled");
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			Print("KK: Garrison activity cancelled");
 
 		SCR_AIGroup group = m_Group;
 		KK_GarrisonBuildingWaypoint waypoint = m_GarrisonWaypoint;
@@ -2248,10 +2260,11 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		m_aAssignments.Clear();
 		ClearDebug();
 
-		PrintFormat(
-			"KK: Garrison aborted: %1",
-			reason
-		);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat(
+				"KK: Garrison aborted: %1",
+				reason
+			);
 
 		SCR_AIGroup group = m_Group;
 		KK_GarrisonBuildingWaypoint waypoint = m_GarrisonWaypoint;

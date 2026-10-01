@@ -1293,9 +1293,12 @@ class KK_GarrisonHold
 		return mode.KK_GetReloadSprint();
 	}
 
-	// One line when the reload decision changes. Workbench console: "KK reload".
+	// One line when the reload decision changes, if debug log is on.
 	static void LogReload(IEntity soldier, string choice)
 	{
+		if (!SCR_BaseGameMode.KK_LogEnabled())
+			return;
+
 		IEntity body = CharacterBody(soldier);
 		if (!body)
 			return;
@@ -1373,7 +1376,8 @@ class KK_GarrisonHold
 			return;
 
 		s_ReloadNote.Set(body, note);
-		PrintFormat("KK reload %1 %2", body, note);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat("KK reload %1 %2", body, note);
 	}
 
 	static string ReloadSkipReason(IEntity soldier)

@@ -95,11 +95,12 @@ class KK_DoorAssist
 			openedDoor = s_DoorEntity;
 			called = true;
 
-			PrintFormat(
-				"KK: Opening door %1 for %2",
-				s_DoorEntity,
-				agent
-			);
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				PrintFormat(
+					"KK: Opening door %1 for %2",
+					s_DoorEntity,
+					agent
+				);
 		}
 
 		return called || s_Door.IsOpening();

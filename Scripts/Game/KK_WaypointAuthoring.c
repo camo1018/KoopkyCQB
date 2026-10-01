@@ -86,7 +86,8 @@ class KK_WaypointAuthoring
 
 	static void Notify(string text)
 	{
-		Print("KK: " + text);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			Print("KK: " + text);
 		SCR_HintManagerComponent.ShowCustomHint(text, "Waypoints", 4);
 	}
 
@@ -637,7 +638,8 @@ class KK_WaypointAuthoring
 
 		if (!s_ServerSampleBuilding)
 		{
-			Print("KK: Server could not find the locked building", LogLevel.WARNING);
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				Print("KK: Server could not find the locked building", LogLevel.WARNING);
 			FinishServerSample(false);
 			return;
 		}
@@ -661,14 +663,15 @@ class KK_WaypointAuthoring
 
 		if (!group || !pathfinding)
 		{
-			Print(
-				string.Format(
-					"KK: Server squad has no pathfinding for sampling groupId=%1 group=%2",
-					s_iServerGroupId,
-					group
-				),
-				LogLevel.WARNING
-			);
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				Print(
+					string.Format(
+						"KK: Server squad has no pathfinding for sampling groupId=%1 group=%2",
+						s_iServerGroupId,
+						group
+					),
+					LogLevel.WARNING
+				);
 			FinishServerSample(false);
 			return;
 		}
@@ -727,11 +730,12 @@ class KK_WaypointAuthoring
 			return;
 		}
 
-		PrintFormat(
-			"KK: Server samples failed for %1 tilesLoaded=%2",
-			s_ServerSampleBuilding,
-			tilesLoaded
-		);
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat(
+				"KK: Server samples failed for %1 tilesLoaded=%2",
+				s_ServerSampleBuilding,
+				tilesLoaded
+			);
 		FinishServerSample(false);
 	}
 
