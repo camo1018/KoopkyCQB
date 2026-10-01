@@ -2023,6 +2023,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		{
 			KK_GarrisonHold.ClearReloadDash(body);
 			KK_GarrisonHold.SetPinned(body, true);
+			KK_GarrisonHold.ConsiderTopOff(body);
 			assignment.m_fStillSince = currentTime;
 			assignment.m_fStartedAt = currentTime;
 			return true;

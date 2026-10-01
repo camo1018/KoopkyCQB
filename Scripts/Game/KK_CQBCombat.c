@@ -273,8 +273,8 @@ class KK_GarrisonHold
 	protected static const float TOPOFF_START_MS = 750;
 	protected static const float RELOAD_COVER_RADIUS = 0.8;
 	protected static const float RELOAD_NODE_RADIUS = 0.2;
-	protected static const float RELOAD_NODE_NAVMESH = 0.5;
-	protected static const float RELOAD_NODE_STALL_MS = 1000;
+	protected static const float RELOAD_NODE_THERE = 1.5;
+	protected static const float RELOAD_NODE_ARRIVE = 3;
 	// Center to center. He only swings when he has run into the other body.
 	// A couple of meters is still a lunge, and he should keep going to cover.
 	protected static const float RELOAD_BASH_RANGE = 1.25;
@@ -662,13 +662,17 @@ class KK_GarrisonHold
 			controller.IsDead() ||
 			controller.IsUnconscious() ||
 			controller.IsChangingItem() ||
-			controller.IsSprinting() ||
 			controller.IsMeleeAttack() ||
 			controller.IsUsingItem()
 		)
 		{
 			return;
 		}
+
+		// Arrival leaves the sprint flag up. That must not add another wait
+		// once he is already planted on the node.
+		if (controller.IsSprinting() && !s_ReloadCover.Contains(body))
+			return;
 
 		if (controller.IsReloading())
 		{
@@ -692,9 +696,11 @@ class KK_GarrisonHold
 		}
 
 		IEntity spare = FullerMagazine(body);
-		s_ReloadAt.Set(body, now);
 		if (!spare)
+		{
+			s_ReloadAt.Set(body, now);
 			return;
+		}
 
 		BaseMagazineComponent loaded = LoadedMagazine(body);
 		bool forceDetach = loaded && loaded.GetAmmoCount() > 0;
@@ -702,6 +708,7 @@ class KK_GarrisonHold
 		s_MoveFiring.RemoveItem(body);
 		if (controller.ReloadWeaponWith(spare, forceDetach))
 		{
+			s_ReloadAt.Set(body, now);
 			LogReload(body, "start-reload");
 			if (dry)
 				s_EmptyReload.Insert(body);
@@ -892,15 +899,24 @@ class KK_GarrisonHold
 
 	// Pressured, and a reload is due or already playing. He keeps moving
 	// until sight breaks or a squadmate is reached. The sprint experiment
-	// sends an empty gun to a hidden node before the reload starts.
+	// sends an empty gun to a hidden node before the reload starts. Once
+	// that reload is playing, a visible threat still breaks sight.
 	static bool MustDashToReload(IEntity soldier)
 	{
 		IEntity body = CharacterBody(soldier);
-		if (!body || !ReloadCoverEnabled() || s_ReloadCover.Contains(body))
+		if (!body || !ReloadCoverEnabled())
 			return false;
 
 		if (s_ReloadBash.Contains(body))
 			return false;
+
+		if (s_ReloadCover.Contains(body))
+		{
+			if (!BreakSightWhileReloading(body))
+				return false;
+
+			s_ReloadCover.RemoveItem(body);
+		}
 
 		// A hidden node is already chosen. He finishes that move, then reloads.
 		if (CommittedSprintNode(body))
@@ -920,6 +936,20 @@ class KK_GarrisonHold
 			return false;
 
 		return FullerMagazine(body) != null;
+	}
+
+	// The node only holds him until the magazine change starts. A line of
+	// sight during that reload is the normal break-sight run.
+	protected static bool BreakSightWhileReloading(IEntity body)
+	{
+		if (!body || !SeesPressure(body))
+			return false;
+
+		CharacterControllerComponent controller = Controller(body);
+		if (controller && controller.IsReloading())
+			return true;
+
+		return IsEmptyReload(body);
 	}
 
 	// Experimental. Empty gun, the target he would still shoot is visible,
@@ -1406,8 +1436,8 @@ class KK_GarrisonHold
 		s_SprintDistAt.Remove(body);
 	}
 
-	// Stopped making ground. Close to the node, the mesh will not get him
-	// any nearer, so the reload can start. Far away, the same pause gives up.
+	// On the node, or stopped beside it. The reload starts now. A sprint
+	// that never gets close still gives up on the dash clock.
 	static bool SprintNodeStuck(IEntity soldier)
 	{
 		IEntity body = CharacterBody(soldier);
@@ -1415,6 +1445,21 @@ class KK_GarrisonHold
 			return false;
 
 		float dist = vector.Distance(body.GetOrigin(), s_ReloadDash.Get(body));
+		if (dist <= RELOAD_NODE_THERE)
+			return true;
+
+		bool stopped = true;
+		Physics physics = body.GetPhysics();
+		if (physics)
+		{
+			vector velocity = physics.GetVelocity();
+			velocity[1] = 0;
+			stopped = velocity.Length() < 0.35;
+		}
+
+		if (stopped && dist <= RELOAD_NODE_ARRIVE)
+			return true;
+
 		float now = WorldTime();
 		bool improved =
 			!s_SprintDist.Contains(body) ||
@@ -1433,11 +1478,7 @@ class KK_GarrisonHold
 			return false;
 		}
 
-		float idle = now - s_SprintDistAt.Get(body);
-		if (dist <= RELOAD_NODE_NAVMESH && idle >= RELOAD_NODE_STALL_MS)
-			return true;
-
-		return idle >= RELOAD_DASH_MS;
+		return now - s_SprintDistAt.Get(body) >= RELOAD_DASH_MS;
 	}
 
 	static bool ReloadDashExpired(IEntity soldier)

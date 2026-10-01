@@ -575,6 +575,8 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				}
 
 				KK_GarrisonHold.SetPinned(controlledEntity, true);
+				if (KK_GarrisonHold.ShouldHoldToReload(controlledEntity, true))
+					KK_GarrisonHold.ConsiderTopOff(controlledEntity);
 				assignment.m_bBounding = false;
 				assignment.m_bHeldDoor = false;
 				assignment.m_fFireUntil = 0;
@@ -1818,6 +1820,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		{
 			KK_GarrisonHold.ClearReloadDash(controlledEntity);
 			KK_GarrisonHold.SetPinned(controlledEntity, true);
+			KK_GarrisonHold.ConsiderTopOff(controlledEntity);
 			assignment.m_bBounding = false;
 			assignment.m_fFireUntil = 0;
 			assignment.m_fSteadyUntil = 0;
