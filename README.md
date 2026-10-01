@@ -51,6 +51,8 @@ While a soldier is clearing or garrisoning, **Recognition speed** replaces his n
 
 **Custom CQB AI** is on. It replaces the normal attack inside the building while soldiers are clearing or garrisoning. A soldier fires himself at the nearest enemy he can see. **Shot check** is how often he looks, in milliseconds, from 50 to 100. It defaults to 75. **Shot delay** is how long that clear sight has to last before the round, in seconds. 0 fires on the next check. If only a step to his left or right can see the enemy, he leans that way and shoots from the peek.
 
+**Sidearm, then release** is on. When the primary has no rounds and no magazine, he switches to another loaded gun and stays on the clear or garrison. Grenades do not count. When no gun has ammo, he leaves that order and the normal AI can rearm him. **Return after rearm** is how many seconds he stays out once gun ammo is back, so a rearm can keep handing him magazines. It defaults to 10. 0 puts him back on the next check. He comes back only while that clear or garrison is still the squad's order. Off keeps him on the order with the rifle down.
+
 ## Interior
 
 Horizontal and vertical spacing set how far apart interior points are. Samples closer than the deduplication distance are dropped. Points within the room size on the same floor count as one room.

@@ -137,6 +137,12 @@ modded class SCR_BaseGameMode
 	[Attribute("0", UIWidgets.CheckBox, "Experimental. With Run while reloading on, an empty gun with the target still visible sprints to the hidden node farthest from the threat, then reloads. Off starts the reload immediately and runs to that node.", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_ReloadSprint;
 
+	[Attribute("1", UIWidgets.CheckBox, "When the primary has no rounds and no magazine, switch to another loaded gun and keep the order. When no gun has ammo, leave the order until gun ammo has been back for the return delay. Grenades do not count. Off keeps him on the order with the rifle down.", category: "Koopky CQB/Combat")]
+	protected bool m_bKK_SidearmThenRelease;
+
+	[Attribute("10", UIWidgets.EditBox, "Seconds to leave a soldier on the normal AI after gun ammo returns, so a rearm can keep handing him magazines. 0 puts him back on the next check. The clear or garrison has to still be active.", category: "Koopky CQB/Combat")]
+	protected float m_fKK_RearmReturn;
+
 	[Attribute("1", UIWidgets.EditBox, "Recognition speed while clearing or garrisoning (×). 1 is normal.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_PerceptionFactor;
 
@@ -315,6 +321,8 @@ modded class SCR_BaseGameMode
 			KK_ReadFloat(context, "OutOfSight", m_fKK_OutOfSight);
 			KK_ReadBool(context, "ReloadCover", m_bKK_ReloadCover);
 			KK_ReadBool(context, "ReloadSprint", m_bKK_ReloadSprint);
+			KK_ReadBool(context, "SidearmThenRelease", m_bKK_SidearmThenRelease);
+			KK_ReadFloat(context, "RearmReturn", m_fKK_RearmReturn);
 			KK_ReadFloat(context, "PerceptionFactor", m_fKK_PerceptionFactor);
 			KK_ReadBool(context, "OpenDoors", m_bKK_OpenDoors);
 			KK_ReadNavMode(context);
@@ -480,6 +488,8 @@ modded class SCR_BaseGameMode
 		context.WriteValue("OutOfSight", m_fKK_OutOfSight);
 		context.WriteValue("ReloadCover", m_bKK_ReloadCover);
 		context.WriteValue("ReloadSprint", m_bKK_ReloadSprint);
+		context.WriteValue("SidearmThenRelease", m_bKK_SidearmThenRelease);
+		context.WriteValue("RearmReturn", m_fKK_RearmReturn);
 		context.WriteValue("PerceptionFactor", m_fKK_PerceptionFactor);
 		context.WriteValue("OpenDoors", m_bKK_OpenDoors);
 		int navMode = KK_GetNavMode();
@@ -709,6 +719,16 @@ modded class SCR_BaseGameMode
 		return m_bKK_ReloadSprint;
 	}
 
+	bool KK_GetSidearmThenRelease()
+	{
+		return m_bKK_SidearmThenRelease;
+	}
+
+	float KK_GetRearmReturn()
+	{
+		return Math.Max(m_fKK_RearmReturn, 0);
+	}
+
 	float KK_GetPerceptionFactor()
 	{
 		return Math.Max(m_fKK_PerceptionFactor, 0);
@@ -836,6 +856,8 @@ modded class SCR_BaseGameMode
 	void KK_SetOutOfSight(float value) { m_fKK_OutOfSight = Math.Max(value, 0); }
 	void KK_SetReloadCover(bool value) { m_bKK_ReloadCover = value; }
 	void KK_SetReloadSprint(bool value) { m_bKK_ReloadSprint = value; }
+	void KK_SetSidearmThenRelease(bool value) { m_bKK_SidearmThenRelease = value; }
+	void KK_SetRearmReturn(float value) { m_fKK_RearmReturn = Math.Max(value, 0); }
 
 	protected float KK_ClampShotInterval(float value)
 	{

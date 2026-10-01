@@ -70,6 +70,10 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 	protected ref map<AIAgent, float> m_mPerceptionFactors =
 		new map<AIAgent, float>();
 
+	// Agent key, world time gun ammo was first seen. -1 is still empty.
+	protected ref map<AIAgent, float> m_mAmmoReleased =
+		new map<AIAgent, float>();
+
 	protected ref array<ref Shape> m_aDebugShapes = {};
 
 	protected bool m_bPlanReady;
@@ -163,6 +167,11 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 		PruneInvalidAssignments();
 		MaintainAssignments(currentTime);
+		KK_GarrisonHold.PollRearmReturn(
+			m_mAmmoReleased,
+			m_Group,
+			currentTime
+		);
 		FillAvailableAssignments(currentTime);
 
 #ifdef WORKBENCH
@@ -394,6 +403,21 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				assignment.m_Agent,
 				m_mPerceptionFactors
 			);
+
+			if (m_Building)
+			{
+				KK_GarrisonHold.SetGarrisonBuilding(
+					controlledEntity,
+					m_Building
+				);
+			}
+
+			if (KK_GarrisonHold.NeedsAmmoRelease(controlledEntity))
+			{
+				ReleaseForAmmo(i);
+				i--;
+				continue;
+			}
 
 			vector unitPosition = controlledEntity.GetOrigin();
 			vector moveGoal = AssignmentMoveGoal(assignment);
@@ -802,7 +826,8 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			if (
 				!agent ||
 				!agent.GetControlledEntity() ||
-				HasAssignment(agent)
+				HasAssignment(agent) ||
+				m_mAmmoReleased.Contains(agent)
 			)
 			{
 				continue;
@@ -2100,6 +2125,26 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		KK_GarrisonHold.SetGarrisonBuilding(body, null);
 	}
 
+	protected void ReleaseForAmmo(int assignmentIndex)
+	{
+		KK_GarrisonAgentAssignment assignment =
+			m_aAssignments[assignmentIndex];
+
+		if (assignment && assignment.m_Agent)
+		{
+			m_mAmmoReleased.Set(assignment.m_Agent, -1);
+			if (SCR_BaseGameMode.KK_LogEnabled())
+			{
+				PrintFormat(
+					"KK: Garrison unit %1 released, no gun ammo",
+					assignment.m_Agent
+				);
+			}
+		}
+
+		ReleaseAssignment(assignmentIndex, false);
+	}
+
 	protected void ReleaseAssignment(
 		int assignmentIndex,
 		bool timedOut)
@@ -2243,6 +2288,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		UnpinAssignments();
 		KK_PerceptionBoost.RestoreAll(m_mPerceptionFactors);
 		m_aAssignments.Clear();
+		m_mAmmoReleased.Clear();
 		ClearDebug();
 
 		if (SCR_BaseGameMode.KK_LogEnabled())
@@ -2268,6 +2314,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		UnpinAssignments();
 		KK_PerceptionBoost.RestoreAll(m_mPerceptionFactors);
 		m_aAssignments.Clear();
+		m_mAmmoReleased.Clear();
 		ClearDebug();
 
 		if (SCR_BaseGameMode.KK_LogEnabled())

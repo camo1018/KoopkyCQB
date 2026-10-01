@@ -73,6 +73,7 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 30: return mode.KK_GetShotInterval();
 			case 31: return mode.KK_GetReloadRemainder() * 100;
 			case 32: return mode.KK_GetOutOfSight();
+			case 33: return mode.KK_GetRearmReturn();
 			case 27: return mode.KK_GetSampleAttempts();
 		}
 
@@ -113,6 +114,7 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 30: mode.KK_SetShotInterval(value); break;
 			case 31: mode.KK_SetReloadRemainder(value); break;
 			case 32: mode.KK_SetOutOfSight(value); break;
+			case 33: mode.KK_SetRearmReturn(value); break;
 			case 27: mode.KK_SetSampleAttempts((int)Math.Round(value)); break;
 			default: mode.KK_SetHorizontalSpacing(value); break;
 		}
@@ -175,6 +177,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 15: return mode.KK_GetReloadCover();
 			case 16: return mode.KK_GetReloadSprint();
 			case 17: return mode.KK_GetDebugLog();
+			case 18: return mode.KK_GetSidearmThenRelease();
 		}
 
 		return mode.KK_GetGarrisonAfterClear();
@@ -200,6 +203,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 15: mode.KK_SetReloadCover(value); break;
 			case 16: mode.KK_SetReloadSprint(value); break;
 			case 17: mode.KK_SetDebugLog(value); break;
+			case 18: mode.KK_SetSidearmThenRelease(value); break;
 			default: mode.KK_SetGarrisonAfterClear(value); break;
 		}
 	}
@@ -283,6 +287,10 @@ class KK_CQBAttrOutOfSight : KK_CQBFloatEditorAttribute {}
 class KK_CQBAttrReloadCover : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrReloadSprint : KK_CQBBoolEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrSidearmThenRelease : KK_CQBBoolEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrRearmReturn : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrPerceptionFactor : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]

@@ -59,6 +59,10 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 	protected ref map<AIAgent, float> m_mPerceptionFactors =
 		new map<AIAgent, float>();
 
+	// Agent key, world time gun ammo was first seen. -1 is still empty.
+	protected ref map<AIAgent, float> m_mAmmoReleased =
+		new map<AIAgent, float>();
+
 	protected ref array<ref Shape> m_aDebugShapes = {};
 	protected ref TraceParam m_SightTrace;
 	protected IEntity m_SightViewer;
@@ -160,6 +164,11 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		// Arrival can put a unit on a node in this pass. Mark what
 		// that position can see before the next move turns them away.
 		MarkSeenTargets(currentTime);
+		KK_GarrisonHold.PollRearmReturn(
+			m_mAmmoReleased,
+			m_Group,
+			currentTime
+		);
 		FillAvailableAssignments(currentTime);
 
 		if (m_aAssignments.IsEmpty() && ReleaseDeferredTargets())
@@ -324,6 +333,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			int countBefore = m_aAssignments.Count();
 			KK_InteriorAgentAssignment assignment =
 				m_aAssignments[i];
+			bool releaseForAmmo = false;
 
 			if (
 				assignment &&
@@ -343,6 +353,10 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 						m_Building
 					);
 				}
+
+				releaseForAmmo = KK_GarrisonHold.NeedsAmmoRelease(
+					assignment.m_Agent.GetControlledEntity()
+				);
 			}
 
 			if (
@@ -352,6 +366,10 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			)
 			{
 				FinishAssignment(i, false);
+			}
+			else if (releaseForAmmo)
+			{
+				ReleaseForAmmo(i);
 			}
 			else if (
 				!assignment.m_bClearsPoint &&
@@ -1592,7 +1610,8 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			if (
 				!agent ||
 				!agent.GetControlledEntity() ||
-				HasAssignment(agent)
+				HasAssignment(agent) ||
+				m_mAmmoReleased.Contains(agent)
 			)
 			{
 				continue;
@@ -2390,6 +2409,41 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		return transform[2];
 	}
 
+	protected void ReleaseForAmmo(int assignmentIndex)
+	{
+		KK_InteriorAgentAssignment assignment =
+			m_aAssignments[assignmentIndex];
+
+		if (assignment && assignment.m_Agent)
+		{
+			IEntity body = assignment.m_Agent.GetControlledEntity();
+			KK_GarrisonHold.SetPinned(body, false);
+			KK_GarrisonHold.SetDoorFiring(body, false);
+			KK_GarrisonHold.SetMoveFire(body, false);
+			KK_GarrisonHold.SetIgnoringTargets(body, false);
+			KK_GarrisonHold.ClearApproachGoal(body);
+			m_mAmmoReleased.Set(assignment.m_Agent, -1);
+			if (SCR_BaseGameMode.KK_LogEnabled())
+			{
+				PrintFormat(
+					"KK: Clear unit %1 released, no gun ammo",
+					assignment.m_Agent
+				);
+			}
+		}
+
+		if (
+			assignment &&
+			assignment.m_Target &&
+			assignment.m_Target.m_eState == KK_EInteriorTargetState.ACTIVE
+		)
+		{
+			assignment.m_Target.m_eState = KK_EInteriorTargetState.PENDING;
+		}
+
+		ReleaseAssignment(assignmentIndex);
+	}
+
 	protected void ReleaseAssignment(int assignmentIndex)
 	{
 		KK_InteriorAgentAssignment assignment =
@@ -2703,6 +2757,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		ReleaseOrderBuildings();
 		KK_PerceptionBoost.RestoreAll(m_mPerceptionFactors);
 		m_aAssignments.Clear();
+		m_mAmmoReleased.Clear();
 		LowerWeapons();
 		ClearDebug();
 
@@ -2729,6 +2784,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		ReleaseOrderBuildings();
 		KK_PerceptionBoost.RestoreAll(m_mPerceptionFactors);
 		m_aAssignments.Clear();
+		m_mAmmoReleased.Clear();
 		LowerWeapons();
 		ClearDebug();
 	
@@ -2850,6 +2906,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		ReleaseOrderBuildings();
 		KK_PerceptionBoost.RestoreAll(m_mPerceptionFactors);
 		m_aAssignments.Clear();
+		m_mAmmoReleased.Clear();
 		LowerWeapons();
 		ClearDebug();
 	

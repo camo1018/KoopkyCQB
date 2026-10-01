@@ -93,7 +93,13 @@ modded class SCR_AICombatComponent
 			outWeaponEvent = false;
 		}
 
-		if (KK_GarrisonHold.ShouldKeepRifle(GetOwner()) && KK_KeepPrimary())
+		if (KK_KeepSidearm())
+		{
+			// The empty rifle must not be published. That swap would put it
+			// back in his hands before the sidearm can fire.
+			outWeaponEvent = false;
+		}
+		else if (KK_GarrisonHold.ShouldKeepRifle(GetOwner()) && KK_KeepPrimary())
 		{
 			// Publishing the frag would equip it. The empty rifle is then
 			// forced back, and the two swaps never finish a reload.
@@ -172,6 +178,49 @@ modded class SCR_AICombatComponent
 		}
 
 		KK_GarrisonHold.ReturnToPrimary(GetOwner());
+		return true;
+	}
+
+	// Primary is empty and another gun has rounds. The selector stays on
+	// that gun, or the empty rifle is equipped again on the next evaluation.
+	protected bool KK_KeepSidearm()
+	{
+		BaseWeaponComponent sidearm = KK_GarrisonHold.ForcedSidearm(GetOwner());
+		if (!sidearm)
+			return false;
+
+		bool changed = m_SelectedWeaponComp != sidearm;
+		if (!changed)
+		{
+			KK_GarrisonHold.SwitchToWeapon(GetOwner(), sidearm);
+			return false;
+		}
+
+		m_SelectedWeaponComp = sidearm;
+		m_iSelectedMuzzle = 0;
+		m_SelectedMagazineComp = null;
+		m_fSelectedWeaponMinDist = 0;
+		m_fSelectedWeaponMaxDist = 800;
+		m_bSelectedWeaponDirectDamage = true;
+
+		EMuzzleType muzzleType = EMuzzleType.MT_BaseMuzzle;
+		array<BaseMuzzleComponent> muzzles = {};
+		sidearm.GetMuzzlesList(muzzles);
+		if (muzzles.Count() > 0 && muzzles[0])
+		{
+			m_SelectedMagazineComp = muzzles[0].GetMagazine();
+			muzzleType = muzzles[0].GetMuzzleType();
+		}
+
+		if (m_ConfigComponent)
+		{
+			m_SelectedWeaponResource = m_ConfigComponent.GetTreeNameForWeaponType(
+				sidearm.GetWeaponType(),
+				muzzleType
+			);
+		}
+
+		KK_GarrisonHold.SwitchToWeapon(GetOwner(), sidearm);
 		return true;
 	}
 
@@ -616,6 +665,283 @@ class KK_GarrisonHold
 		s_PrimarySwitchAt.Set(body, now);
 		controller.SetFireWeaponWanted(false);
 		SCR_AIWeaponHandling.StartWeaponSwitchCharacter(controller, primary);
+	}
+
+	// One request at a time. A repeat while the swap is playing restarts it.
+	static void SwitchToWeapon(IEntity soldier, BaseWeaponComponent weapon)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !weapon)
+			return;
+
+		if (CurrentWeapon(body) == weapon)
+		{
+			s_PrimarySwitchAt.Remove(body);
+			return;
+		}
+
+		CharacterControllerComponent controller = Controller(body);
+		if (!controller || controller.IsChangingItem())
+			return;
+
+		float now = WorldTime();
+		if (
+			s_PrimarySwitchAt.Contains(body) &&
+			now - s_PrimarySwitchAt.Get(body) < PRIMARY_SWITCH_RETRY_MS
+		)
+		{
+			return;
+		}
+
+		s_PrimarySwitchAt.Set(body, now);
+		controller.SetFireWeaponWanted(false);
+		SCR_AIWeaponHandling.StartWeaponSwitchCharacter(controller, weapon);
+	}
+
+	// The slot named primary. Another gun in a different slot is a sidearm.
+	static BaseWeaponComponent PrimarySlotWeapon(IEntity soldier)
+	{
+		BaseWeaponManagerComponent manager = WeaponManager(soldier);
+		if (!manager)
+			return null;
+
+		array<WeaponSlotComponent> slots = {};
+		manager.GetWeaponsSlots(slots);
+		foreach (WeaponSlotComponent slot : slots)
+		{
+			if (!slot || slot.GetWeaponSlotType() != PRIMARY_SLOT)
+				continue;
+
+			BaseWeaponComponent weapon = WeaponInSlot(slot);
+			if (!weapon || IsThrowableType(weapon.GetWeaponType()))
+				return null;
+
+			return weapon;
+		}
+
+		return null;
+	}
+
+	// Rounds in the gun, or in a magazine for it. An empty magazine is zero.
+	static int AvailableAmmo(IEntity soldier, BaseWeaponComponent weapon)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !weapon || IsThrowableType(weapon.GetWeaponType()))
+			return 0;
+
+		array<BaseMuzzleComponent> muzzles = {};
+		weapon.GetMuzzlesList(muzzles);
+		if (muzzles.Count() == 0 || !muzzles[0])
+			return 0;
+
+		BaseMuzzleComponent muzzle = muzzles[0];
+		int ammo = muzzle.GetAmmoCount();
+		if (muzzle.IsDisposable())
+			return ammo;
+
+		IEntity loadedEntity = null;
+		BaseMagazineComponent loaded = muzzle.GetMagazine();
+		if (loaded)
+		{
+			loadedEntity = loaded.GetOwner();
+			if (loaded.GetAmmoCount() > ammo)
+				ammo = loaded.GetAmmoCount();
+		}
+
+		BaseMagazineWell well = muzzle.GetMagazineWell();
+		int spare = MagazineAmmoInInventory(body, well, loadedEntity);
+		if (spare > 0)
+			ammo += spare;
+
+		return ammo;
+	}
+
+	static bool HasGunAmmo(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		BaseWeaponManagerComponent manager = WeaponManager(body);
+		if (!body || !manager)
+			return false;
+
+		array<WeaponSlotComponent> slots = {};
+		manager.GetWeaponsSlots(slots);
+		foreach (WeaponSlotComponent slot : slots)
+		{
+			if (!slot)
+				continue;
+
+			if (AvailableAmmo(body, WeaponInSlot(slot)) > 0)
+				return true;
+		}
+
+		return false;
+	}
+
+	// Another non-throwable gun that still has rounds. The fullest one wins.
+	static BaseWeaponComponent BestSidearm(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		BaseWeaponManagerComponent manager = WeaponManager(body);
+		if (!body || !manager)
+			return null;
+
+		BaseWeaponComponent primary = PrimarySlotWeapon(body);
+		array<WeaponSlotComponent> slots = {};
+		manager.GetWeaponsSlots(slots);
+
+		BaseWeaponComponent best = null;
+		int bestAmmo = 0;
+		foreach (WeaponSlotComponent slot : slots)
+		{
+			if (!slot)
+				continue;
+
+			BaseWeaponComponent weapon = WeaponInSlot(slot);
+			if (!weapon || weapon == primary || IsThrowableType(weapon.GetWeaponType()))
+				continue;
+
+			int ammo = AvailableAmmo(body, weapon);
+			if (ammo <= 0)
+				continue;
+
+			if (best)
+			{
+				if (ammo <= bestAmmo)
+					continue;
+			}
+
+			best = weapon;
+			bestAmmo = ammo;
+		}
+
+		return best;
+	}
+
+	// Primary cannot be fed, and a sidearm can. The selector holds that gun.
+	static BaseWeaponComponent ForcedSidearm(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !SidearmThenReleaseEnabled() || !HasBuilding(body))
+			return null;
+
+		BaseWeaponComponent primary = PrimarySlotWeapon(body);
+		if (!primary || AvailableAmmo(body, primary) > 0)
+			return null;
+
+		return BestSidearm(body);
+	}
+
+	// True when he should leave the clear or garrison. A loaded sidearm keeps
+	// the order, and the hands move to it here.
+	static bool NeedsAmmoRelease(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !SidearmThenReleaseEnabled())
+			return false;
+
+		CharacterControllerComponent controller = Controller(body);
+		if (controller && controller.IsReloading())
+			return false;
+
+		BaseWeaponComponent primary = PrimarySlotWeapon(body);
+		if (!primary)
+			return !HasGunAmmo(body);
+
+		if (AvailableAmmo(body, primary) > 0)
+		{
+			BaseWeaponComponent current = CurrentWeapon(body);
+			if (
+				current &&
+				current != primary &&
+				!IsThrowableType(current.GetWeaponType())
+			)
+			{
+				SwitchToWeapon(body, primary);
+			}
+
+			return false;
+		}
+
+		BaseWeaponComponent sidearm = BestSidearm(body);
+		if (sidearm)
+		{
+			SwitchToWeapon(body, sidearm);
+			return false;
+		}
+
+		return true;
+	}
+
+	// Released men stay out until gun ammo has been back for the wait.
+	// Clearing the map puts them on the next fill. The order calls this
+	// while it is still the active activity.
+	static void PollRearmReturn(
+		map<AIAgent, float> released,
+		SCR_AIGroup group,
+		float currentTime)
+	{
+		if (!released)
+			return;
+
+		if (!SidearmThenReleaseEnabled())
+		{
+			released.Clear();
+			return;
+		}
+
+		if (released.Count() == 0)
+			return;
+
+		array<AIAgent> members = {};
+		if (group)
+			group.GetAgents(members);
+
+		array<AIAgent> waiting = {};
+		for (int i = 0; i < released.Count(); i++)
+			waiting.Insert(released.GetKey(i));
+
+		float delay = RearmReturnMs();
+		foreach (AIAgent agent : waiting)
+		{
+			if (!agent || members.Find(agent) < 0)
+			{
+				released.Remove(agent);
+				continue;
+			}
+
+			IEntity body = agent.GetControlledEntity();
+			CharacterControllerComponent controller = Controller(body);
+			if (!body || !controller || controller.IsDead())
+			{
+				released.Remove(agent);
+				continue;
+			}
+
+			if (!HasGunAmmo(body))
+			{
+				released.Set(agent, -1);
+				continue;
+			}
+
+			float seen = released.Get(agent);
+			if (seen < 0)
+			{
+				released.Set(agent, currentTime);
+				seen = currentTime;
+			}
+
+			if (currentTime - seen < delay)
+				continue;
+
+			released.Remove(agent);
+			if (SCR_BaseGameMode.KK_LogEnabled())
+			{
+				PrintFormat(
+					"KK: Unit %1 has gun ammo again, returning to the order",
+					agent
+				);
+			}
+		}
 	}
 
 	protected static BaseWeaponComponent CurrentWeapon(IEntity soldier)
@@ -1311,6 +1637,25 @@ class KK_GarrisonHold
 			return true;
 
 		return mode.KK_GetReloadCover();
+	}
+
+	protected static bool SidearmThenReleaseEnabled()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return true;
+
+		return mode.KK_GetSidearmThenRelease();
+	}
+
+	protected static float RearmReturnMs()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		float seconds = 10;
+		if (mode)
+			seconds = mode.KK_GetRearmReturn();
+
+		return Math.Max(seconds, 0) * 1000;
 	}
 
 	protected static bool ReloadSprintEnabled()
@@ -2071,6 +2416,45 @@ class KK_GarrisonHold
 		return world.GetWorldTime();
 	}
 
+	protected static int MagazineAmmoInInventory(
+		IEntity body,
+		BaseMagazineWell well,
+		IEntity skip)
+	{
+		if (!body || !well)
+			return 0;
+
+		SCR_InventoryStorageManagerComponent inventory =
+			SCR_InventoryStorageManagerComponent.Cast(
+				body.FindComponent(SCR_InventoryStorageManagerComponent)
+			);
+		if (!inventory)
+			return 0;
+
+		SCR_MagazinePredicate predicate = new SCR_MagazinePredicate();
+		predicate.magWellType = well.Type();
+
+		array<IEntity> found = {};
+		inventory.FindItems(found, predicate, EStoragePurpose.PURPOSE_DEPOSIT);
+
+		int best = 0;
+		foreach (IEntity item : found)
+		{
+			if (!item || item == skip || !inventory.Contains(item))
+				continue;
+
+			BaseMagazineComponent magazine = BaseMagazineComponent.Cast(
+				item.FindComponent(BaseMagazineComponent)
+			);
+			if (!magazine || magazine.GetAmmoCount() <= best)
+				continue;
+
+			best = magazine.GetAmmoCount();
+		}
+
+		return best;
+	}
+
 	protected static IEntity FullerMagazine(IEntity body)
 	{
 		BaseMuzzleComponent muzzle = PrimaryMuzzle(body);
@@ -2164,10 +2548,15 @@ class KK_GarrisonHold
 		if (!body)
 			return;
 
-		// The trigger is a cook on a frag. Get the rifle back before it.
+		// The trigger is a cook on a frag. Get a gun back before it.
 		if (HoldingThrowable(body))
 		{
-			ReturnToPrimary(body);
+			BaseWeaponComponent sidearm = ForcedSidearm(body);
+			if (sidearm)
+				SwitchToWeapon(body, sidearm);
+			else
+				ReturnToPrimary(body);
+
 			raised = false;
 			fire = false;
 		}
