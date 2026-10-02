@@ -110,8 +110,9 @@ modded class SCR_AICombatComponent
 			return;
 
 		// A lost body is not a target. A living one who is behind a wall this
-		// frame still is. Dropping him here made the route and the leftover
-		// threat fight over the same soldier, and the aim point was his feet.
+		// frame still is. The look is dropped so it does not turn against
+		// the hold facing. The destination stays level and ahead of him,
+		// so the base aim is not handed the body's feet.
 		BaseTarget selected = m_SelectedTarget;
 		if (selected && !KK_GarrisonHold.IsLivingTarget(selected))
 		{
@@ -293,6 +294,9 @@ class KK_GarrisonHold
 		new map<IEntity, vector>();
 	protected static ref map<IEntity, IEntity> s_Buildings =
 		new map<IEntity, IEntity>();
+	// On a clear order. Garrison uses the building map too, and a quiet
+	// post is allowed to lower the rifle. A clear is not.
+	protected static ref set<IEntity> s_Clearing = new set<IEntity>();
 	protected static ref map<IEntity, float> s_ShotAt =
 		new map<IEntity, float>();
 	protected static ref map<IEntity, IEntity> s_ShotLook =
@@ -319,6 +323,11 @@ class KK_GarrisonHold
 	protected static const float SHOT_AIM_HEIGHT = 1.5;
 	// Long enough that a fight does not reissue the look and restart the turn.
 	protected static const float SHOT_LOOK_DURATION = 30;
+	// The post facing waits this long after the room gun last looked at him.
+	// A missed trace in that window was turning him back to the post.
+	protected static const float ROOM_LOOK_HOLD_MS = 2000;
+	protected static ref map<IEntity, float> s_RoomLookAt =
+		new map<IEntity, float>();
 	protected static ref map<IEntity, float> s_ShotLean = new map<IEntity, float>();
 	protected static ref map<IEntity, IEntity> s_AimTarget = new map<IEntity, IEntity>();
 	protected static ref map<IEntity, float> s_AimSince = new map<IEntity, float>();
@@ -448,7 +457,7 @@ class KK_GarrisonHold
 		return SeesTarget(body, utility.m_CombatComponent.GetCurrentTarget());
 	}
 
-	// Eyes, or a level point ahead of him. The feet read as aiming at the floor.
+	// A level point ahead of him. The feet read as aiming at the floor.
 	static vector LevelAimPoint(IEntity soldier)
 	{
 		IEntity body = CharacterBody(soldier);
@@ -654,6 +663,11 @@ class KK_GarrisonHold
 
 		bool visible = lookAt && ShotStillVisible(body);
 		bool raise = visible || FeelsThreatened(utility);
+		// A clear keeps the rifle up between shots. The trigger stays on
+		// the sightline. Sprint, bash, an empty gun, and a reload already
+		// refused this.
+		if (ClearWeaponStaysUp(body))
+			raise = true;
 		bool wasFiring = body && s_MoveFiring.Contains(body);
 		CommandWeapon(body, raise, visible);
 
@@ -2693,7 +2707,11 @@ class KK_GarrisonHold
 		bool known = s_MoveWeaponKnown.Contains(body);
 		bool wasRaised = s_MoveWeaponUp.Contains(body);
 		bool holdReload = !fire && IsQuietReload(body);
-		if (!holdReload && (!known || wasRaised != raised))
+		// The remembered stance can say raised after a later node has
+		// already put the rifle down. Read the controller.
+		CharacterControllerComponent live = Controller(body);
+		bool liveRaised = live && live.IsWeaponRaised();
+		if (!holdReload && (!known || wasRaised != raised || liveRaised != raised))
 		{
 			s_MoveWeaponKnown.Insert(body);
 			if (raised)
@@ -2894,9 +2912,12 @@ class KK_GarrisonHold
 		{
 			ClearAim(body);
 			RememberLean(body, 0);
-			CommandWeapon(body, FeelsThreatened(utility), false);
-			// ReleaseLook only drops a look this gun started. The attack
-			// look at the last point on the floor has to go too.
+			bool raised = FeelsThreatened(utility);
+			if (ClearWeaponStaysUp(body))
+				raised = true;
+			CommandWeapon(body, raised, false);
+			// No room target. A base look left running turns against the
+			// hold facing.
 			CancelLook(utility, body);
 			return;
 		}
@@ -2928,16 +2949,98 @@ class KK_GarrisonHold
 		RememberLean(body, command);
 
 		bool fire = AimReady(body, enemy, canShoot);
-		CommandWeapon(body, canShoot || FeelsThreatened(utility), fire);
+		bool raised = canShoot || FeelsThreatened(utility);
+		if (ClearWeaponStaysUp(body))
+			raised = true;
+		CommandWeapon(body, raised, fire);
 		if (!fire)
 			SetFireWanted(body, false);
 
 		// The trace blocks the trigger. While he is alive the rifle stays
-		// on his eyes, instead of a point straight ahead.
+		// on his eyes. With nobody left the look is dropped, so it does
+		// not turn against the hold facing.
 		if (enemy && IsLiving(enemy))
 			AimLook(utility, body, enemy);
 		else
 			CancelLook(utility, body);
+	}
+
+	static void SetClearing(IEntity soldier, bool clearing)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		if (clearing)
+		{
+			s_Clearing.Insert(body);
+			return;
+		}
+
+		if (!s_Clearing.Contains(body))
+			return;
+
+		s_Clearing.RemoveItem(body);
+		// The clear lowered him on the way out. Forget the raise, or the
+		// next order thinks the rifle is still up and never sends it.
+		s_MoveWeaponKnown.RemoveItem(body);
+		s_MoveWeaponUp.RemoveItem(body);
+	}
+
+	static bool IsClearing(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		return body && s_Clearing.Contains(body);
+	}
+
+	// A clear holds the rifle up. These are the lowers that still win:
+	// the approach sprint, the reload sprint, a bash, an empty gun, a
+	// reload already playing, and a frag in hand.
+	static bool ClearWeaponStaysUp(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!IsClearing(body))
+			return false;
+
+		if (IsIgnoringTargets(body))
+			return false;
+
+		if (SprintBeforeReload(body) || IsReloadBashing(body))
+			return false;
+
+		if (CannotShoot(body) || IsQuietReload(body))
+			return false;
+
+		if (HoldingThrowable(body))
+			return false;
+
+		return true;
+	}
+
+	// The raise node runs after the controller. While a clear wants the
+	// rifle up, that node is held off. The controller is touched only
+	// when it is actually down, because repeating the raise restarts it.
+	static bool KeepClearWeaponRaised(IEntity soldier)
+	{
+		if (!ClearWeaponStaysUp(soldier))
+			return false;
+
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return false;
+
+		s_MoveWeaponKnown.Insert(body);
+		s_MoveWeaponUp.Insert(body);
+		if (!WeaponIsRaised(body))
+			SetWeaponRaised(body, true);
+
+		return true;
+	}
+
+	static bool WeaponIsRaised(IEntity soldier)
+	{
+		CharacterControllerComponent controller = Controller(CharacterBody(soldier));
+		return controller && controller.IsWeaponRaised();
 	}
 
 	static void SetGarrisonBuilding(IEntity soldier, IEntity building)
@@ -3619,6 +3722,7 @@ class KK_GarrisonHold
 		if (!utility || !utility.m_LookAction || !body || !enemy)
 			return;
 
+		NoteRoomLook(body);
 		vector point = ShotAimPoint(enemy);
 		bool same =
 			s_LookEntity.Contains(body) &&
@@ -3633,6 +3737,25 @@ class KK_GarrisonHold
 		}
 
 		utility.m_LookAction.KK_Track(point, 100, SHOT_LOOK_DURATION);
+	}
+
+	protected static void NoteRoomLook(IEntity body)
+	{
+		if (!body)
+			return;
+
+		s_RoomLookAt.Set(body, WorldTime());
+	}
+
+	// True while the room gun looked at a living enemy inside the hold window.
+	// The post facing stays off so it does not turn him away from that aim.
+	static bool RoomLookHolding(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !s_RoomLookAt.Contains(body))
+			return false;
+
+		return WorldTime() - s_RoomLookAt.Get(body) < ROOM_LOOK_HOLD_MS;
 	}
 
 	static vector ShotAimPoint(IEntity enemy)
@@ -4468,6 +4591,7 @@ modded class SCR_AIUtilityComponent
 				soldier = GetOwner();
 
 			KK_GarrisonHold.ConsiderTopOff(soldier);
+			KK_GarrisonHold.KeepClearWeaponRaised(soldier);
 		}
 
 		return result;
@@ -4504,6 +4628,13 @@ modded class SCR_AISetWeaponRaised
 			if (roomSoldier)
 				KK_GarrisonHold.ApplyRoomShot(roomSoldier.m_UtilityComponent);
 
+			// ApplyRoomShot can leave the rifle down when nothing is in
+			// sight. The clear puts it back up unless a sprint, a bash,
+			// an empty gun, or a reload owns it.
+			IEntity clearer = body;
+			if (!clearer)
+				clearer = owner;
+			KK_GarrisonHold.KeepClearWeaponRaised(clearer);
 			return ENodeResult.SUCCESS;
 		}
 
@@ -4538,6 +4669,14 @@ modded class SCR_AISetWeaponRaised
 			KK_GarrisonHold.LowerForReloadSprint(owner);
 			return ENodeResult.SUCCESS;
 		}
+
+		// Outside the room shot, the move behavior lowers a weapon that
+		// has no target. A clear still carries it up.
+		IEntity clearer = body;
+		if (!clearer)
+			clearer = owner;
+		if (KK_GarrisonHold.KeepClearWeaponRaised(clearer))
+			return ENodeResult.SUCCESS;
 
 		return super.EOnTaskSimulate(owner, dt);
 	}

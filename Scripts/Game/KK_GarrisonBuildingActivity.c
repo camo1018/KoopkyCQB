@@ -663,12 +663,15 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 				bool indoorFight =
 					KK_GarrisonHold.FightingInside(controlledEntity);
-				if (attacking || indoorFight)
+				bool roomLook =
+					KK_GarrisonHold.RoomLookHolding(controlledEntity);
+				if (attacking || indoorFight || roomLook)
 					assignment.m_bFacingApplied = false;
 
 				if (
 					!attacking &&
 					!indoorFight &&
+					!roomLook &&
 					KK_HoldFacing.HasFacing(assignment.m_Target)
 				)
 				{

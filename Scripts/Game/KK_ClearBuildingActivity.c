@@ -11,7 +11,6 @@ class KK_InteriorAgentAssignment
 	IEntity m_DoorEntity;
 	bool m_bClearsPoint;
 	bool m_bFacingApplied;
-	bool m_bCombatOwnsWeapon;
 	bool m_bWeaponUp;
 	bool m_bRunSet;
 	bool m_bReloadMove;
@@ -408,6 +407,11 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					m_mPerceptionFactors
 				);
 
+				KK_GarrisonHold.SetClearing(
+					assignment.m_Agent.GetControlledEntity(),
+					true
+				);
+
 				if (m_Building)
 				{
 					KK_GarrisonHold.SetGarrisonBuilding(
@@ -517,55 +521,23 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					assignment.m_bFacingApplied = false;
 				}
 
-				if (
-					KK_Passage.Enabled() &&
-					HasLivingTarget(assignment.m_Agent)
-				)
+				// A clear keeps the rifle up. Sprint, a bash, an empty gun, a
+				// reload already playing, and a frag still put it down on
+				// their own. The move behavior clears the raised flag, so
+				// this has to be said again whenever the rifle is down.
+				IEntity weaponBody =
+					assignment.m_Agent.GetControlledEntity();
+				if (!KK_GarrisonHold.ClearWeaponStaysUp(weaponBody))
 				{
-					if (!assignment.m_bCombatOwnsWeapon)
-					{
-						assignment.m_bCombatOwnsWeapon = true;
-						assignment.m_bWeaponUp = false;
-						SetWeaponRaised(assignment.m_Agent, false);
-						OrderWeaponRaised(assignment.m_Agent, false);
-					}
+					assignment.m_bWeaponUp = false;
 				}
-				else if (
-					KK_Passage.Enabled() &&
-					assignment.m_bCombatOwnsWeapon
-				)
+				else
 				{
-					assignment.m_bCombatOwnsWeapon = false;
-					assignment.m_bWeaponUp = true;
-					if (
-						!KK_GarrisonHold.SprintBeforeReload(
-							assignment.m_Agent.GetControlledEntity()
-						) &&
-						!KK_GarrisonHold.IsReloadBashing(
-							assignment.m_Agent.GetControlledEntity()
-						)
-					)
-					{
-						SetWeaponRaised(assignment.m_Agent, true);
+					bool down = !KK_GarrisonHold.WeaponIsRaised(weaponBody);
+					KK_GarrisonHold.KeepClearWeaponRaised(weaponBody);
+					if (down && !assignment.m_bWeaponUp)
 						OrderWeaponRaised(assignment.m_Agent, true);
-						KK_AgentMove.SetWantedSpeed(
-							assignment.m_Agent,
-							EMovementType.RUN
-						);
-					}
-				}
-				else if (
-					!assignment.m_bWeaponUp &&
-					!KK_GarrisonHold.SprintBeforeReload(
-						assignment.m_Agent.GetControlledEntity()
-					) &&
-					!KK_GarrisonHold.IsReloadBashing(
-						assignment.m_Agent.GetControlledEntity()
-					)
-				)
-				{
 					assignment.m_bWeaponUp = true;
-					SetWeaponRaised(assignment.m_Agent, true);
 				}
 
 				vector unitPosition =
@@ -641,11 +613,12 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					assignment.m_fStillSince = currentTime;
 					assignment.m_fStartedAt = currentTime;
 
+					IEntity holder = assignment.m_Agent.GetControlledEntity();
+					bool roomLook = KK_GarrisonHold.RoomLookHolding(holder);
 					if (
 						contact ||
-						KK_GarrisonHold.FightingInside(
-							assignment.m_Agent.GetControlledEntity()
-						)
+						roomLook ||
+						KK_GarrisonHold.FightingInside(holder)
 					)
 					{
 						assignment.m_bFacingApplied = false;
@@ -2297,7 +2270,10 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			movementType
 		);
 
-		if (KK_Passage.Enabled() && HasLivingTarget(agent))
+		// Sprint, bash, an empty gun, a playing reload, and a frag have
+		// their own lower. A raise from this order would cancel it.
+		IEntity body = agent.GetControlledEntity();
+		if (!KK_GarrisonHold.ClearWeaponStaysUp(body))
 			return;
 
 		SetWeaponRaised(agent, true);
@@ -2859,6 +2835,10 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		{
 			assignment.m_bFacingApplied = false;
 
+			KK_GarrisonHold.SetClearing(
+				assignment.m_Agent.GetControlledEntity(),
+				false
+			);
 			KK_GarrisonHold.SetGarrisonBuilding(
 				assignment.m_Agent.GetControlledEntity(),
 				null
@@ -2895,6 +2875,10 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		{
 			assignment.m_bFacingApplied = false;
 
+			KK_GarrisonHold.SetClearing(
+				assignment.m_Agent.GetControlledEntity(),
+				false
+			);
 			KK_GarrisonHold.SetGarrisonBuilding(
 				assignment.m_Agent.GetControlledEntity(),
 				null
@@ -3124,6 +3108,10 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 			if (assignment.m_Agent)
 			{
+				KK_GarrisonHold.SetClearing(
+					assignment.m_Agent.GetControlledEntity(),
+					false
+				);
 				KK_GarrisonHold.SetGarrisonBuilding(
 					assignment.m_Agent.GetControlledEntity(),
 					null
@@ -3154,6 +3142,10 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			if (!assignment || !assignment.m_Agent)
 				continue;
 
+			KK_GarrisonHold.SetClearing(
+				assignment.m_Agent.GetControlledEntity(),
+				false
+			);
 			KK_GarrisonHold.SetGarrisonBuilding(
 				assignment.m_Agent.GetControlledEntity(),
 				null
