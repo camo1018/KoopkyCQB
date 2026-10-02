@@ -126,10 +126,14 @@ modded class SCR_AICombatComponent
 		}
 		else if (selected && !KK_GarrisonHold.SeesTarget(GetOwner(), selected))
 		{
+			// The trace missed, so the shot stays blocked. He is still the
+			// target. A point along our own facing was turning the rifle
+			// down the hall.
 			m_SelectedTargetVisible = false;
-			KK_GarrisonHold.DropRememberedAim(GetOwner());
-			m_SelectedTargetDestinationPos =
-				KK_GarrisonHold.LevelAimPoint(GetOwner());
+			IEntity hiddenBody = selected.GetTargetEntity();
+			if (hiddenBody)
+				m_SelectedTargetDestinationPos =
+					KK_GarrisonHold.ShotAimPoint(hiddenBody);
 		}
 		else if (selected)
 		{
@@ -653,7 +657,7 @@ class KK_GarrisonHold
 		bool wasFiring = body && s_MoveFiring.Contains(body);
 		CommandWeapon(body, raise, visible);
 
-		if (!visible)
+		if (!lookAt || !IsLiving(lookAt))
 		{
 			if (wasFiring && utility.m_LookAction)
 				utility.m_LookAction.Cancel();
@@ -661,9 +665,8 @@ class KK_GarrisonHold
 			return;
 		}
 
-		if (!utility.m_LookAction || !lookAt)
-			return;
-
+		// The trigger is already gated above. While he is alive the face
+		// stays on him, including a trace that a wall just blocked.
 		AimLook(utility, body, lookAt);
 	}
 
@@ -2929,10 +2932,12 @@ class KK_GarrisonHold
 		if (!fire)
 			SetFireWanted(body, false);
 
-		if (!canShoot || !enemy)
-			CancelLook(utility, body);
-		else
+		// The trace blocks the trigger. While he is alive the rifle stays
+		// on his eyes, instead of a point straight ahead.
+		if (enemy && IsLiving(enemy))
 			AimLook(utility, body, enemy);
+		else
+			CancelLook(utility, body);
 	}
 
 	static void SetGarrisonBuilding(IEntity soldier, IEntity building)
