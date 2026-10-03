@@ -1577,16 +1577,13 @@ class KK_CQBOrders
 	}
 
 	// A radial command and a Game Master placement both add a waypoint.
-	// That is a new order, so the clear or garrison already running has
-	// to end. Soldiers still spawning restart the same waypoint instead,
-	// and that path does not come through here.
+	// A move does too. That is a new order, so the clear or garrison
+	// already running has to end. Soldiers still spawning restart the
+	// same waypoint instead, and that path does not come through here.
 	static void RetirePreviousBuildingOrders(
 		notnull SCR_AIGroup group,
 		AIWaypoint incoming)
 	{
-		if (!IsBuildingOrder(incoming))
-			return;
-
 		array<AIWaypoint> waypoints = {};
 		group.GetWaypoints(waypoints);
 

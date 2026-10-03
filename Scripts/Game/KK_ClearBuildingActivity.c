@@ -2272,11 +2272,15 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 		// Sprint, bash, an empty gun, a playing reload, and a frag have
 		// their own lower. A raise from this order would cancel it.
+		// Sending the raise again, on a rifle that is already coming up,
+		// restarts that animation and the step stops.
 		IEntity body = agent.GetControlledEntity();
 		if (!KK_GarrisonHold.ClearWeaponStaysUp(body))
 			return;
 
-		SetWeaponRaised(agent, true);
+		if (!KK_GarrisonHold.RequestClearRaise(body))
+			return;
+
 		OrderWeaponRaised(agent, true);
 	}
 

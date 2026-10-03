@@ -288,6 +288,9 @@ class KK_GarrisonHold
 	protected static ref set<IEntity> s_MoveWeaponUp = new set<IEntity>();
 	protected static ref set<IEntity> s_MoveFiring = new set<IEntity>();
 	protected static ref set<IEntity> s_MoveWeaponKnown = new set<IEntity>();
+	// The raise was requested and the pose has since been up. Until then
+	// another SetWeaponRaised restarts the animation and cuts off the step.
+	protected static ref set<IEntity> s_RaiseSettled = new set<IEntity>();
 	protected static ref TraceParam s_SightTrace;
 	protected static IEntity s_SightViewer;
 	protected static ref map<IEntity, vector> s_ApproachGoals =
@@ -486,6 +489,24 @@ class KK_GarrisonHold
 
 	// Threat stays up after the body is gone. That leftover strafe and the
 	// look at the last point are what make the next move wander.
+	// A remembered contact also keeps him alert, and alert keeps sending
+	// him back to the last place he looked.
+	static void DropStaleAlert(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		if (HasVisibleEnemy(body) || s_ShotLive.Contains(body))
+			return;
+
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (!utility || !utility.m_ThreatSystem)
+			return;
+
+		utility.m_ThreatSystem.KK_DropStaleAlert();
+	}
+
 	static void ReleaseLatentCombat(IEntity soldier)
 	{
 		IEntity body = CharacterBody(soldier);
@@ -2704,23 +2725,9 @@ class KK_GarrisonHold
 
 		// Another raise while the magazine is coming out restarts the reload.
 		// A shot still goes through, so contact cancels a loaded gun's reload.
-		bool known = s_MoveWeaponKnown.Contains(body);
-		bool wasRaised = s_MoveWeaponUp.Contains(body);
 		bool holdReload = !fire && IsQuietReload(body);
-		// The remembered stance can say raised after a later node has
-		// already put the rifle down. Read the controller.
-		CharacterControllerComponent live = Controller(body);
-		bool liveRaised = live && live.IsWeaponRaised();
-		if (!holdReload && (!known || wasRaised != raised || liveRaised != raised))
-		{
-			s_MoveWeaponKnown.Insert(body);
-			if (raised)
-				s_MoveWeaponUp.Insert(body);
-			else
-				s_MoveWeaponUp.RemoveItem(body);
-
-			SetWeaponRaised(body, raised);
-		}
+		if (!holdReload)
+			RequestWeaponStance(body, raised);
 
 		bool wasFiring = s_MoveFiring.Contains(body);
 		if (fire)
@@ -2985,6 +2992,7 @@ class KK_GarrisonHold
 		// next order thinks the rifle is still up and never sends it.
 		s_MoveWeaponKnown.RemoveItem(body);
 		s_MoveWeaponUp.RemoveItem(body);
+		s_RaiseSettled.RemoveItem(body);
 	}
 
 	static bool IsClearing(IEntity soldier)
@@ -3019,7 +3027,8 @@ class KK_GarrisonHold
 
 	// The raise node runs after the controller. While a clear wants the
 	// rifle up, that node is held off. The controller is touched only
-	// when it is actually down, because repeating the raise restarts it.
+	// when the rifle is actually down after having been up, because
+	// repeating the raise restarts it and cuts off the step.
 	static bool KeepClearWeaponRaised(IEntity soldier)
 	{
 		if (!ClearWeaponStaysUp(soldier))
@@ -3029,11 +3038,73 @@ class KK_GarrisonHold
 		if (!body)
 			return false;
 
-		s_MoveWeaponKnown.Insert(body);
-		s_MoveWeaponUp.Insert(body);
-		if (!WeaponIsRaised(body))
-			SetWeaponRaised(body, true);
+		RequestWeaponStance(body, true);
+		return true;
+	}
 
+	// True when a raise or lower still has to be sent. A raise that has
+	// not finished still reports down, and sending it again restarts it.
+	static bool NeedsWeaponStance(IEntity soldier, bool raised)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return false;
+
+		bool known = s_MoveWeaponKnown.Contains(body);
+		bool wasRaised = s_MoveWeaponUp.Contains(body);
+		bool liveRaised = WeaponIsRaised(body);
+		if (raised && liveRaised)
+		{
+			s_RaiseSettled.Insert(body);
+			s_MoveWeaponKnown.Insert(body);
+			s_MoveWeaponUp.Insert(body);
+			return false;
+		}
+
+		if (!known || wasRaised != raised)
+			return true;
+
+		if (liveRaised == raised)
+			return false;
+
+		// Already asked for it up. Wait until that pose has been seen,
+		// then one more raise if a later node put the rifle down.
+		if (raised)
+			return s_RaiseSettled.Contains(body);
+
+		return true;
+	}
+
+	// Sends the stance when it is still due. The clear uses the result
+	// to decide whether a weapon order has to go out with the move.
+	static bool RequestClearRaise(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return false;
+
+		return RequestWeaponStance(body, true);
+	}
+
+	protected static bool RequestWeaponStance(IEntity body, bool raised)
+	{
+		if (!NeedsWeaponStance(body, raised))
+			return false;
+
+		s_MoveWeaponKnown.Insert(body);
+		if (raised)
+		{
+			if (!WeaponIsRaised(body))
+				s_RaiseSettled.RemoveItem(body);
+			s_MoveWeaponUp.Insert(body);
+		}
+		else
+		{
+			s_MoveWeaponUp.RemoveItem(body);
+			s_RaiseSettled.RemoveItem(body);
+		}
+
+		SetWeaponRaised(body, raised);
 		return true;
 	}
 
@@ -3070,6 +3141,8 @@ class KK_GarrisonHold
 			s_CoverChecked.Remove(body);
 			s_CoverHidden.Remove(body);
 			ClearShot(body);
+			ReleaseLatentCombat(body);
+			DropStaleAlert(body);
 			return;
 		}
 
@@ -4349,7 +4422,8 @@ modded class SCR_AICombatMoveLogicBase
 		}
 
 		// A raised threat keeps requesting a short strafe after the enemy
-		// is gone. Cancelling that every evaluation is the shuffle.
+		// is gone. Finishing the node lets that request start again, and
+		// the step-raise-stop is the shuffle. Hold the node instead.
 		bool onOrder =
 			KK_GarrisonHold.UseRoomCombat() &&
 			(
@@ -4359,15 +4433,13 @@ modded class SCR_AICombatMoveLogicBase
 		if (
 			onOrder &&
 			!KK_GarrisonHold.HasVisibleEnemy(body) &&
-			!KK_GarrisonHold.HasVisibleEnemy(owner) &&
-			!KK_GarrisonHold.OwnsShot(body) &&
-			!KK_GarrisonHold.OwnsShot(owner)
+			!KK_GarrisonHold.HasVisibleEnemy(owner)
 		)
 		{
 			if (m_State && m_State.IsExecutingRequest())
 				m_State.CancelRequest();
 
-			return ENodeResult.SUCCESS;
+			return ENodeResult.RUNNING;
 		}
 
 		vector goal;
@@ -4491,6 +4563,16 @@ modded class SCR_AIThreatSystem
 		SetThreatValues(0, 0, 0, 0);
 		m_fThreatTotal = 0;
 		UpdateState();
+	}
+
+	// The body is already gone. Drop the bar and the danger events, or
+	// alert keeps an investigate on the last point inside the building.
+	void KK_DropStaleAlert()
+	{
+		if (m_Agent && m_Agent.GetDangerEventsCount() > 0)
+			m_Agent.ClearDangerEvents(m_Agent.GetDangerEventsCount() + 1);
+
+		KK_IgnoreForSprint();
 	}
 
 	override void Update(SCR_AIUtilityComponent utility, float timeSlice)
