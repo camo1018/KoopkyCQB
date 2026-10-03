@@ -1405,7 +1405,10 @@ class KK_Passage
 		state.m_bPassing = true;
 		if (started)
 			state.m_vPassOrigin = origin;
-		KeepPassMove(soldier, orders, started);
+		// Same-goal force rebuilt the path every time collision dropped.
+		// The walk they already have continues once the bodies no longer
+		// block. A new point still issues through PutOrder.
+		KeepPassMove(soldier, orders, false);
 		if (!started)
 			return;
 

@@ -2248,9 +2248,6 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 		// Rebuilding the spare every pass was broadcasting a new path to the
 		// same point and the soldier stuttered instead of walking it.
-		// A pass-through retry is forced: the first order went out while
-		// the bodies still blocked each other, and dropping this one leaves
-		// him standing on the node.
 		if (!force && sameGoal && recent)
 		{
 			KK_AgentMove.SetWantedSpeed(agent, movementType);
