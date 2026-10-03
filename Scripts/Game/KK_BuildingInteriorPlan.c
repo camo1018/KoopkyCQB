@@ -450,7 +450,9 @@ bool EnsureNavmeshLoaded(
 		float clusterRadius = 4.0,
 		bool filterUnreachableIslands = false,
 		bool filterBuildingSurfaces = true,
-		bool classifyOpenings = false)
+		bool classifyOpenings = false,
+		vector orderStart = "0 0 0",
+		bool startFromOrder = false)
 	{
 		m_Building = building;
 		m_aTargets.Clear();
@@ -726,7 +728,7 @@ bool EnsureNavmeshLoaded(
 		RebuildAuthoredTargetIndex();
 		AssignFloorIndices();
 		BuildClusters(clusterRadius);
-		OrderTargets(group.GetCenterOfMass());
+		OrderTargets(group.GetCenterOfMass(), orderStart, startFromOrder);
 		RebuildAuthoredTargetIndex();
 
 		if (classifyOpenings && usedCache)
@@ -1932,67 +1934,143 @@ bool EnsureNavmeshLoaded(
 		}
 	}
 
-	protected void OrderTargets(vector startPosition)
+	// Without an order position, floors run from the bottom and the
+	// first point on each floor is the one nearest the squad. An order
+	// position finishes the floor under that position first, beginning
+	// at the nearest point, then moves to whichever floor is closest.
+	protected void OrderTargets(
+		vector squadPosition,
+		vector orderPosition,
+		bool startFromOrder)
 	{
 		ref array<ref KK_InteriorTarget> remaining = {};
 		ref array<ref KK_InteriorTarget> ordered = {};
-	
+
 		foreach (KK_InteriorTarget sourceTarget : m_aTargets)
 		{
 			remaining.Insert(sourceTarget);
 		}
-	
-		vector currentPosition = startPosition;
-	
+
+		vector currentPosition = squadPosition;
+		int lockedFloor = -1;
+
+		if (startFromOrder)
+		{
+			currentPosition = orderPosition;
+			lockedFloor = ClosestFloor(remaining, orderPosition);
+
+			if (lockedFloor >= 0 && SCR_BaseGameMode.KK_LogEnabled())
+			{
+				PrintFormat(
+					"KK: Clear starts from the order at %1 on floor %2",
+					orderPosition,
+					lockedFloor
+				);
+			}
+		}
+
 		while (!remaining.IsEmpty())
 		{
-			int floorToVisit = int.MAX;
-	
-			foreach (KK_InteriorTarget floorTarget : remaining)
+			int floorToVisit;
+
+			if (startFromOrder && FloorHasRemaining(remaining, lockedFloor))
 			{
-				if (floorTarget.m_iFloor < floorToVisit)
-					floorToVisit = floorTarget.m_iFloor;
+				floorToVisit = lockedFloor;
 			}
-	
+			else if (startFromOrder)
+			{
+				floorToVisit = ClosestFloor(remaining, currentPosition);
+				lockedFloor = floorToVisit;
+			}
+			else
+			{
+				floorToVisit = int.MAX;
+
+				foreach (KK_InteriorTarget floorTarget : remaining)
+				{
+					if (floorTarget.m_iFloor < floorToVisit)
+						floorToVisit = floorTarget.m_iFloor;
+				}
+			}
+
 			int nearestIndex = -1;
 			float nearestDistance = float.MAX;
-	
+
 			for (int i; i < remaining.Count(); i++)
 			{
 				KK_InteriorTarget target = remaining[i];
-	
+
 				if (target.m_iFloor != floorToVisit)
 					continue;
-	
+
 				float distance = vector.Distance(
 					currentPosition,
 					target.m_vPosition
 				);
-	
+
 				if (distance < nearestDistance)
 				{
 					nearestDistance = distance;
 					nearestIndex = i;
 				}
 			}
-	
+
 			if (nearestIndex < 0)
 				break;
-	
+
 			KK_InteriorTarget selected =
 				remaining[nearestIndex];
-	
+
 			ordered.Insert(selected);
 			currentPosition = selected.m_vPosition;
 			remaining.Remove(nearestIndex);
 		}
-	
+
 		m_aTargets.Clear();
-	
+
 		foreach (KK_InteriorTarget orderedTarget : ordered)
 		{
 			m_aTargets.Insert(orderedTarget);
 		}
+	}
+
+	protected int ClosestFloor(
+		notnull array<ref KK_InteriorTarget> remaining,
+		vector position)
+	{
+		int floor = -1;
+		float nearestDistance = float.MAX;
+
+		foreach (KK_InteriorTarget target : remaining)
+		{
+			if (!target)
+				continue;
+
+			float distance = vector.Distance(position, target.m_vPosition);
+			if (distance >= nearestDistance)
+				continue;
+
+			nearestDistance = distance;
+			floor = target.m_iFloor;
+		}
+
+		return floor;
+	}
+
+	protected bool FloorHasRemaining(
+		notnull array<ref KK_InteriorTarget> remaining,
+		int floor)
+	{
+		if (floor < 0)
+			return false;
+
+		foreach (KK_InteriorTarget target : remaining)
+		{
+			if (target && target.m_iFloor == floor)
+				return true;
+		}
+
+		return false;
 	}
 	
 	KK_InteriorTarget GetNextPendingTarget()

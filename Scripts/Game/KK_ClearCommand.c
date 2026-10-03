@@ -18,7 +18,13 @@ class KK_ClearCommand : SCR_WaypointGroupCommand
 				locked
 			);
 
-		KK_CQBOrders.NoteOrderBuilding(groupEnt, building, locked);
+		KK_CQBOrders.NoteOrderBuilding(
+			groupEnt,
+			building,
+			locked,
+			targetPosition,
+			true
+		);
 
 		bool created = super.Execute(
 			cursorTarget,
@@ -38,7 +44,9 @@ class KK_ClearCommand : SCR_WaypointGroupCommand
 			groupEnt,
 			buildingPosition,
 			building,
-			locked
+			locked,
+			targetPosition,
+			true
 		);
 
 		return true;

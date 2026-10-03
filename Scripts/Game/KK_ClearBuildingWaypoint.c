@@ -46,6 +46,8 @@ class KK_ClearBuildingWaypoint : SCR_AIWaypoint
 	protected BaseBuilding m_OrderBuilding;
 	protected bool m_bOrderBuildingLocked;
 	protected bool m_bReplaced;
+	protected vector m_vOrderAim;
+	protected bool m_bHasOrderAim;
 
 	float GetBuildingSearchRadius()
 	{
@@ -120,6 +122,22 @@ class KK_ClearBuildingWaypoint : SCR_AIWaypoint
 	{
 		m_OrderBuilding = building;
 		m_bOrderBuildingLocked = locked && building;
+	}
+
+	void SetOrderAim(vector aim)
+	{
+		m_vOrderAim = aim;
+		m_bHasOrderAim = true;
+	}
+
+	bool HasOrderAim()
+	{
+		return m_bHasOrderAim;
+	}
+
+	vector GetOrderAim()
+	{
+		return m_vOrderAim;
 	}
 
 	BaseBuilding GetOrderBuilding()

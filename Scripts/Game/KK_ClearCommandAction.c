@@ -33,7 +33,9 @@ class KK_ClearCommandAction : SCR_WaypointBaseCommandAction
 			KK_CQBOrders.NoteOrderBuilding(
 				selected.GetOwner(),
 				building,
-				locked
+				locked,
+				cursorWorldPosition,
+				true
 			);
 		}
 
@@ -54,7 +56,9 @@ class KK_ClearCommandAction : SCR_WaypointBaseCommandAction
 				entity.GetOwner(),
 				buildingPosition,
 				building,
-				locked
+				locked,
+				cursorWorldPosition,
+				true
 			);
 		}
 	}

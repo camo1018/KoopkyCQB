@@ -228,10 +228,14 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 		BaseBuilding building;
 		bool locked;
+		vector orderAim;
+		bool hasOrderAim = KK_BuildingResolver.PeekOrderAim(m_Group, orderAim);
 		if (!KK_BuildingResolver.TakePendingOrder(m_Group, building, locked))
 			return;
 
 		m_ClearWaypoint.SetOrderBuilding(building, locked);
+		if (hasOrderAim)
+			m_ClearWaypoint.SetOrderAim(orderAim);
 	}
 
 	// Planning can begin before the aimed building is stored on the waypoint.
@@ -329,6 +333,9 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 			m_iNavmeshLoadAttempts = 0;
 
+			vector orderStart;
+			bool startFromOrder = OrderStart(orderStart);
+
 			if (m_Plan.Generate(
 				m_Group,
 				m_Pathfinding,
@@ -338,7 +345,10 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				m_ClearWaypoint.GetDeduplicateDistance(),
 				m_ClearWaypoint.GetClusterRadius(),
 				GetFilterUnreachableIslands(),
-				GetFilterBuildingSurfaces()
+				GetFilterBuildingSurfaces(),
+				false,
+				orderStart,
+				startFromOrder
 			))
 			{
 				break;
@@ -824,7 +834,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		array<int> clusters = {};
 		CollectSweepRooms(floors, clusters);
 
-		int floor = LowestUnfinishedFloor();
+		int floor = SweepFloor();
 		if (floor == int.MAX)
 			return;
 
@@ -991,9 +1001,10 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		}
 	}
 
-	protected int LowestUnfinishedFloor()
+	// Targets are stored in visit order. The first floor that still
+	// has work is the one the sweep is on.
+	protected int SweepFloor()
 	{
-		int floor = int.MAX;
 		array<ref KK_InteriorTarget> targets = m_Plan.GetTargets();
 
 		foreach (KK_InteriorTarget target : targets)
@@ -1003,17 +1014,16 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				(
 					target.m_eState != KK_EInteriorTargetState.PENDING &&
 					target.m_eState != KK_EInteriorTargetState.ACTIVE
-				) ||
-				target.m_iFloor >= floor
+				)
 			)
 			{
 				continue;
 			}
 
-			floor = target.m_iFloor;
+			return target.m_iFloor;
 		}
 
-		return floor;
+		return int.MAX;
 	}
 
 	protected int FindActiveRoom(
@@ -3317,6 +3327,36 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			);
 
 		return controller && controller.IsPlayerControlled();
+	}
+
+	// Player squads can begin at the aimed point. An AI squad keeps
+	// the lowest floor nearest its own position.
+	protected bool OrderStart(out vector orderStart)
+	{
+		orderStart = "0 0 0";
+
+		if (
+			!StartFromOrderEnabled() ||
+			!PlayerLeads(m_Group) ||
+			!m_ClearWaypoint
+		)
+			return false;
+
+		if (m_ClearWaypoint.HasOrderAim())
+			orderStart = m_ClearWaypoint.GetOrderAim();
+		else
+			orderStart = m_ClearWaypoint.GetOrigin();
+
+		return true;
+	}
+
+	protected bool StartFromOrderEnabled()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return true;
+
+		return mode.KK_GetStartFromOrder();
 	}
 
 	protected bool GetFilterUnreachableIslands()

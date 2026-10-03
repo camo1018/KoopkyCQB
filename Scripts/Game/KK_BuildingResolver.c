@@ -2,6 +2,8 @@ class KK_PendingBuildingOrder
 {
 	BaseBuilding m_Building;
 	bool m_bLocked;
+	vector m_vOrderAim;
+	bool m_bHasOrderAim;
 }
 
 class KK_BuildingResolver
@@ -161,7 +163,9 @@ class KK_BuildingResolver
 	static void SetPendingOrder(
 		IEntity group,
 		BaseBuilding building,
-		bool locked)
+		bool locked,
+		vector orderAim = "0 0 0",
+		bool hasOrderAim = false)
 	{
 		if (!group)
 			return;
@@ -169,7 +173,24 @@ class KK_BuildingResolver
 		KK_PendingBuildingOrder pending = new KK_PendingBuildingOrder();
 		pending.m_Building = building;
 		pending.m_bLocked = locked && building;
+		pending.m_vOrderAim = orderAim;
+		pending.m_bHasOrderAim = hasOrderAim;
 		s_mPendingOrders.Set(group, pending);
+	}
+
+	static bool PeekOrderAim(IEntity group, out vector orderAim)
+	{
+		orderAim = "0 0 0";
+
+		if (!group || !s_mPendingOrders.Contains(group))
+			return false;
+
+		KK_PendingBuildingOrder pending = s_mPendingOrders.Get(group);
+		if (!pending || !pending.m_bHasOrderAim)
+			return false;
+
+		orderAim = pending.m_vOrderAim;
+		return true;
 	}
 
 	static bool TakePendingOrder(

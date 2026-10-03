@@ -178,6 +178,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 16: return mode.KK_GetReloadSprint();
 			case 17: return mode.KK_GetDebugLog();
 			case 18: return mode.KK_GetSidearmThenRelease();
+			case 19: return mode.KK_GetStartFromOrder();
 		}
 
 		return mode.KK_GetGarrisonAfterClear();
@@ -204,6 +205,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 16: mode.KK_SetReloadSprint(value); break;
 			case 17: mode.KK_SetDebugLog(value); break;
 			case 18: mode.KK_SetSidearmThenRelease(value); break;
+			case 19: mode.KK_SetStartFromOrder(value); break;
 			default: mode.KK_SetGarrisonAfterClear(value); break;
 		}
 	}
@@ -223,6 +225,8 @@ class KK_CQBAttrFilterUnreachableIslands : KK_CQBBoolEditorAttribute {}
 class KK_CQBAttrFilterBuildingSurfaces : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrGarrisonAfterClear : KK_CQBBoolEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrStartFromOrder : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrClearSearchRadius : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]

@@ -38,6 +38,9 @@ modded class SCR_BaseGameMode
 	[Attribute("1", UIWidgets.CheckBox, "Garrison after the last clear", category: "Koopky CQB/Clear")]
 	protected bool m_bKK_GarrisonAfterClear;
 
+	[Attribute("1", UIWidgets.CheckBox, "A player squad starts the clear on the floor and side where the order was placed", category: "Koopky CQB/Clear")]
+	protected bool m_bKK_StartFromOrder;
+
 	[Attribute("3", UIWidgets.ComboBox, "How the squad splits up while clearing", "", ParamEnumArray.FromEnum(KK_EClearSpareMode))]
 	protected KK_EClearSpareMode m_eKK_ClearSpareMode;
 
@@ -275,6 +278,7 @@ modded class SCR_BaseGameMode
 		if (context.StartObject("Clear"))
 		{
 			KK_ReadBool(context, "GarrisonAfterClear", m_bKK_GarrisonAfterClear);
+			KK_ReadBool(context, "StartFromOrder", m_bKK_StartFromOrder);
 			KK_ReadFloat(context, "SearchRadius", m_fKK_ClearSearchRadius);
 			KK_ReadFloat(context, "ArrivalRadius", m_fKK_ClearArrivalRadius);
 			KK_ReadFloat(context, "SightVisitRange", m_fKK_SightVisitRange);
@@ -449,6 +453,7 @@ modded class SCR_BaseGameMode
 
 		context.StartObject("Clear");
 		context.WriteValue("GarrisonAfterClear", m_bKK_GarrisonAfterClear);
+		context.WriteValue("StartFromOrder", m_bKK_StartFromOrder);
 		context.WriteValue("SearchRadius", m_fKK_ClearSearchRadius);
 		context.WriteValue("ArrivalRadius", m_fKK_ClearArrivalRadius);
 		context.WriteValue("SightVisitRange", m_fKK_SightVisitRange);
@@ -549,6 +554,11 @@ modded class SCR_BaseGameMode
 	bool KK_GetGarrisonAfterClear()
 	{
 		return m_bKK_GarrisonAfterClear;
+	}
+
+	bool KK_GetStartFromOrder()
+	{
+		return m_bKK_StartFromOrder;
 	}
 
 	float KK_GetClearSearchRadius()
@@ -797,6 +807,7 @@ modded class SCR_BaseGameMode
 	void KK_SetFilterUnreachableIslands(bool value) { m_bKK_FilterUnreachableIslands = value; }
 	void KK_SetFilterBuildingSurfaces(bool value) { m_bKK_FilterBuildingSurfaces = value; }
 	void KK_SetGarrisonAfterClear(bool value) { m_bKK_GarrisonAfterClear = value; }
+	void KK_SetStartFromOrder(bool value) { m_bKK_StartFromOrder = value; }
 	void KK_SetClearSearchRadius(float value) { m_fKK_ClearSearchRadius = value; }
 	void KK_SetClearArrivalRadius(float value) { m_fKK_ClearArrivalRadius = value; }
 	void KK_SetSightVisitRange(float value) { m_fKK_SightVisitRange = value; }
@@ -1370,9 +1381,17 @@ class KK_CQBOrders
 	static void NoteOrderBuilding(
 		IEntity groupEntity,
 		BaseBuilding building,
-		bool locked)
+		bool locked,
+		vector orderAim = "0 0 0",
+		bool hasOrderAim = false)
 	{
-		NotePending(ResolveGroup(groupEntity), building, locked);
+		NotePending(
+			ResolveGroup(groupEntity),
+			building,
+			locked,
+			orderAim,
+			hasOrderAim
+		);
 	}
 
 	static void ClearNotedOrder(IEntity groupEntity)
@@ -1383,16 +1402,32 @@ class KK_CQBOrders
 	protected static void NotePending(
 		SCR_AIGroup group,
 		BaseBuilding building,
-		bool locked)
+		bool locked,
+		vector orderAim = "0 0 0",
+		bool hasOrderAim = false)
 	{
 		if (!group)
 			return;
 
-		KK_BuildingResolver.SetPendingOrder(group, building, locked);
+		KK_BuildingResolver.SetPendingOrder(
+			group,
+			building,
+			locked,
+			orderAim,
+			hasOrderAim
+		);
 
 		SCR_AIGroup slave = group.GetSlave();
 		if (slave && slave != group)
-			KK_BuildingResolver.SetPendingOrder(slave, building, locked);
+		{
+			KK_BuildingResolver.SetPendingOrder(
+				slave,
+				building,
+				locked,
+				orderAim,
+				hasOrderAim
+			);
+		}
 	}
 
 	protected static void ClearPending(SCR_AIGroup group)
@@ -1411,7 +1446,9 @@ class KK_CQBOrders
 		IEntity groupEntity,
 		vector position,
 		BaseBuilding building = null,
-		bool locked = false)
+		bool locked = false,
+		vector orderAim = "0 0 0",
+		bool hasOrderAim = false)
 	{
 		KK_ClearBuildingWaypoint waypoint = KK_ClearBuildingWaypoint.Cast(
 			FindNearestWaypoint(groupEntity, position, true)
@@ -1422,6 +1459,9 @@ class KK_CQBOrders
 
 		waypoint.ApplyScenarioSettings();
 		waypoint.SetOrderBuilding(building, locked);
+		if (hasOrderAim)
+			waypoint.SetOrderAim(orderAim);
+
 		ClearPending(ResolveGroup(groupEntity));
 	}
 
