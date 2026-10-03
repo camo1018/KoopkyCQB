@@ -1,3 +1,15 @@
+class KK_FormationSplit
+{
+	int m_iHome;
+	int m_iSolo;
+
+	void KK_FormationSplit()
+	{
+		m_iHome = -1;
+		m_iSolo = -1;
+	}
+}
+
 class KK_AgentMove
 {
 	// MoveIndividually scores 58 plus this, so the order lands at 80.
@@ -54,7 +66,7 @@ class KK_AgentMove
 		SCR_AIGroup group,
 		notnull AIAgent agent,
 		vector position,
-		map<AIAgent, int> soloHandlers,
+		map<AIAgent, ref KK_FormationSplit> soloHandlers,
 		float priorityLevel = PRIORITY_LEVEL,
 		EMovementType movementType = EMovementType.RUN)
 	{
@@ -155,15 +167,22 @@ class KK_AgentMove
 
 	static void ReleaseHandlers(
 		SCR_AIGroup group,
-		map<AIAgent, int> soloHandlers)
+		map<AIAgent, ref KK_FormationSplit> soloHandlers)
 	{
 		if (!soloHandlers || soloHandlers.Count() == 0)
 			return;
 
-		for (int i = soloHandlers.Count() - 1; i >= 0; i--)
+		AIGroupMovementComponent movement = MovementOf(group);
+		array<AIAgent> agents = {};
+		for (int i = 0; i < soloHandlers.Count(); i++)
+			agents.Insert(soloHandlers.GetKey(i));
+
+		foreach (AIAgent agent : agents)
 		{
-			int handlerId = soloHandlers.GetElement(i);
-			ReleaseHandler(group, handlerId);
+			if (!agent)
+				continue;
+
+			ReturnToFormation(movement, agent, soloHandlers.Get(agent));
 		}
 
 		soloHandlers.Clear();
@@ -172,16 +191,12 @@ class KK_AgentMove
 	protected static void ClaimSoloHandler(
 		SCR_AIGroup group,
 		notnull AIAgent agent,
-		map<AIAgent, int> soloHandlers)
+		map<AIAgent, ref KK_FormationSplit> soloHandlers)
 	{
 		if (!group || !soloHandlers)
 			return;
 
-		AIGroupMovementComponent movement =
-			AIGroupMovementComponent.Cast(
-				group.FindComponent(AIGroupMovementComponent)
-			);
-
+		AIGroupMovementComponent movement = MovementOf(group);
 		if (!movement)
 			return;
 
@@ -189,27 +204,40 @@ class KK_AgentMove
 		if (currentHandler < 0)
 			return;
 
-		if (soloHandlers.Contains(agent))
+		KK_FormationSplit split;
+		if (soloHandlers.Find(agent, split) && split)
 		{
-			int recordedHandler = soloHandlers.Get(agent);
-			if (currentHandler == recordedHandler)
+			if (currentHandler == split.m_iSolo)
 				return;
 
-			// Combat AI merged him back into the squad formation.
-			ReleaseHandler(group, recordedHandler);
-			soloHandlers.Remove(agent);
+			// Combat AI merged him off the handler this order created.
+			RemoveHandler(movement, split.m_iSolo, split.m_iHome);
+			split.m_iSolo = -1;
 			currentHandler = movement.GetAgentMoveHandlerId(agent);
 			if (currentHandler < 0)
 				return;
-		}
 
-		// Already separated from the formation, so CRX will treat him as a leader.
-		if (movement.GetMoveHandlerAgentCount(currentHandler) <= 1)
+			if (movement.GetMoveHandlerAgentCount(currentHandler) <= 1)
+			{
+				// Still off the squad formation. Remember where he is so
+				// the order can put him back on the one he left.
+				split.m_iSolo = currentHandler;
+				return;
+			}
+		}
+		else if (movement.GetMoveHandlerAgentCount(currentHandler) <= 1)
+		{
+			// Already separated from the formation, so CRX will treat him as a leader.
 			return;
+		}
 
 		int createdHandler = movement.CreateGroupMoveHandler("Column");
 		if (createdHandler <= 0)
 			return;
+
+		int home = currentHandler;
+		if (split)
+			home = split.m_iHome;
 
 		movement.SetMoveHandlerLeader(
 			agent,
@@ -217,7 +245,14 @@ class KK_AgentMove
 			createdHandler
 		);
 
-		soloHandlers.Set(agent, createdHandler);
+		if (!split)
+		{
+			split = new KK_FormationSplit();
+			split.m_iHome = home;
+			soloHandlers.Set(agent, split);
+		}
+
+		split.m_iSolo = createdHandler;
 
 		if (SCR_BaseGameMode.KK_LogEnabled())
 			PrintFormat(
@@ -226,21 +261,46 @@ class KK_AgentMove
 			);
 	}
 
-	protected static void ReleaseHandler(
-		SCR_AIGroup group,
-		int handlerId)
+	protected static void ReturnToFormation(
+		AIGroupMovementComponent movement,
+		notnull AIAgent agent,
+		KK_FormationSplit split)
 	{
-		if (!group || handlerId <= 0)
+		if (!movement || !split)
 			return;
 
-		AIGroupMovementComponent movement =
-			AIGroupMovementComponent.Cast(
-				group.FindComponent(AIGroupMovementComponent)
-			);
+		int currentHandler = movement.GetAgentMoveHandlerId(agent);
+		int home = split.m_iHome;
+		if (
+			currentHandler >= 0 &&
+			home >= 0 &&
+			currentHandler != home
+		)
+		{
+			movement.SetMoveHandlerLeader(agent, currentHandler, home);
+		}
 
-		if (!movement)
+		RemoveHandler(movement, split.m_iSolo, home);
+	}
+
+	protected static void RemoveHandler(
+		AIGroupMovementComponent movement,
+		int handlerId,
+		int keepId)
+	{
+		if (!movement || handlerId < 0 || handlerId == keepId)
 			return;
 
 		movement.RemoveGroupMoveHandler(handlerId);
+	}
+
+	protected static AIGroupMovementComponent MovementOf(SCR_AIGroup group)
+	{
+		if (!group)
+			return null;
+
+		return AIGroupMovementComponent.Cast(
+			group.FindComponent(AIGroupMovementComponent)
+		);
 	}
 }

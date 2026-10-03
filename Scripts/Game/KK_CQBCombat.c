@@ -106,6 +106,31 @@ modded class SCR_AICombatComponent
 			outWeaponEvent = false;
 		}
 
+		// A repeated order starts clean. The selector just put the last
+		// fight back. A last-seen point is not a target of this order.
+		// Someone he can see right now is.
+		if (KK_GarrisonHold.IsFreshOrder(GetOwner()))
+		{
+			if (
+				m_SelectedTarget &&
+				KK_GarrisonHold.IsLivingTarget(m_SelectedTarget) &&
+				KK_GarrisonHold.SeesTarget(GetOwner(), m_SelectedTarget)
+			)
+			{
+				KK_GarrisonHold.EndFreshOrder(GetOwner());
+			}
+			else
+			{
+				KK_ClearTarget();
+				m_SelectedTargetVisible = false;
+				outCurrentTarget = null;
+				outSelectedTargetChanged = false;
+				KK_GarrisonHold.DropRememberedAim(GetOwner());
+				m_SelectedTargetDestinationPos =
+					KK_GarrisonHold.LevelAimPoint(GetOwner());
+			}
+		}
+
 		if (!KK_GarrisonHold.UseRoomCombat() || !KK_GarrisonHold.HasBuilding(GetOwner()))
 			return;
 
@@ -291,6 +316,10 @@ class KK_GarrisonHold
 	// The raise was requested and the pose has since been up. Until then
 	// another SetWeaponRaised restarts the animation and cuts off the step.
 	protected static ref set<IEntity> s_RaiseSettled = new set<IEntity>();
+	// This order has not seen a living enemy yet. Last-seen points from
+	// the previous clear of this house stay out of the selector.
+	protected static ref set<IEntity> s_FreshOrder = new set<IEntity>();
+	protected static ref set<AIAgent> s_OrderNoted = new set<AIAgent>();
 	protected static ref TraceParam s_SightTrace;
 	protected static IEntity s_SightViewer;
 	protected static ref map<IEntity, vector> s_ApproachGoals =
@@ -505,6 +534,108 @@ class KK_GarrisonHold
 			return;
 
 		utility.m_ThreatSystem.KK_DropStaleAlert();
+	}
+
+	// A clear can leave him speed-locked, idle, or ignoring targets. Follow
+	// and the next fight both need that undone.
+	static void ReleaseFollowLocks(AIAgent agent)
+	{
+		if (!agent)
+			return;
+
+		SetIgnoringTargets(agent, false);
+		SetMoveFire(agent, false);
+		SetDoorFiring(agent, false);
+		SetTraveling(agent, false);
+		ClearApproachGoal(agent);
+
+		IEntity body = agent.GetControlledEntity();
+		SetPinned(body, false);
+		if (!body)
+			return;
+
+		AICharacterMovementComponent movement =
+			AICharacterMovementComponent.Cast(
+				body.FindComponent(AICharacterMovementComponent)
+			);
+		if (movement)
+			movement.SetMovementTypeWanted(EMovementType.RUN);
+	}
+
+	// A new clear or garrison. The last fight in this house is over unless
+	// a living enemy is in sight right now.
+	static void NoteOrderGroup(SCR_AIGroup group)
+	{
+		if (!group)
+			return;
+
+		array<AIAgent> agents = {};
+		group.GetAgents(agents);
+		foreach (AIAgent agent : agents)
+			NoteOrderSoldier(agent);
+	}
+
+	static void NoteOrderSoldier(AIAgent agent)
+	{
+		if (!agent || s_OrderNoted.Contains(agent))
+			return;
+
+		s_OrderNoted.Insert(agent);
+
+		IEntity body = CharacterBody(agent);
+		if (!body)
+			return;
+
+		if (HasVisibleEnemy(body) || s_ShotLive.Contains(body))
+			return;
+
+		s_FreshOrder.Insert(body);
+		ClearSelectedTarget(body);
+		ReleaseLatentCombat(body);
+		DropStaleAlert(body);
+		s_MoveWeaponKnown.RemoveItem(body);
+		s_MoveWeaponUp.RemoveItem(body);
+		s_RaiseSettled.RemoveItem(body);
+	}
+
+	static void ReleaseOrderGroup(SCR_AIGroup group)
+	{
+		if (!group)
+			return;
+
+		array<AIAgent> agents = {};
+		group.GetAgents(agents);
+		foreach (AIAgent agent : agents)
+		{
+			if (!agent)
+				continue;
+
+			s_OrderNoted.RemoveItem(agent);
+			EndFreshOrder(agent);
+		}
+	}
+
+	static bool IsFreshOrder(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		return body && s_FreshOrder.Contains(body);
+	}
+
+	static void EndFreshOrder(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (body)
+			s_FreshOrder.RemoveItem(body);
+	}
+
+	protected static void ClearSelectedTarget(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (!utility || !utility.m_CombatComponent)
+			return;
+
+		utility.m_CombatComponent.KK_ClearTarget();
 	}
 
 	static void ReleaseLatentCombat(IEntity soldier)
@@ -4592,6 +4723,22 @@ modded class SCR_AIThreatSystem
 			return;
 		}
 
+		// A selected last-seen point sets endangered back to full on every
+		// update. Drop it before that, until this order sees someone.
+		if (
+			m_Utility &&
+			(
+				KK_GarrisonHold.IsFreshOrder(m_Utility.m_OwnerEntity) ||
+				KK_GarrisonHold.IsFreshOrder(m_Utility.GetOwner())
+			) &&
+			!KK_GarrisonHold.HasVisibleEnemy(m_Utility.m_OwnerEntity) &&
+			!KK_GarrisonHold.HasVisibleEnemy(m_Utility.GetOwner()) &&
+			m_Utility.m_CombatComponent
+		)
+		{
+			m_Utility.m_CombatComponent.KK_ClearTarget();
+		}
+
 		super.Update(utility, timeSlice);
 	}
 
@@ -4648,8 +4795,24 @@ modded class SCR_AIUtilityComponent
 		if (ignore && m_CombatComponent)
 			m_CombatComponent.KK_ClearTarget();
 
+		// The previous fight's unknown point would start an investigate
+		// on a house he was just told to clear again.
+		bool freshOrder =
+			KK_GarrisonHold.IsFreshOrder(m_OwnerEntity) ||
+			KK_GarrisonHold.IsFreshOrder(GetOwner());
+		IEntity viewer = m_OwnerEntity;
+		if (!viewer)
+			viewer = GetOwner();
+		bool staleUnknown =
+			freshOrder &&
+			(
+				!unknownTarget ||
+				!KK_GarrisonHold.IsLivingTarget(unknownTarget) ||
+				!KK_GarrisonHold.SeesTarget(viewer, unknownTarget)
+			);
+
 		SCR_AIBehaviorBase result;
-		if (ignore)
+		if (ignore || staleUnknown)
 			result = super.EvaluateBehavior(null);
 		else
 			result = super.EvaluateBehavior(unknownTarget);

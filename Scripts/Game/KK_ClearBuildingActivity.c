@@ -56,8 +56,8 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 	protected ref array<ref KK_InteriorAgentAssignment>
 		m_aAssignments = {};
 
-	protected ref map<AIAgent, int> m_mSoloHandlers =
-		new map<AIAgent, int>();
+	protected ref map<AIAgent, ref KK_FormationSplit> m_mSoloHandlers =
+		new map<AIAgent, ref KK_FormationSplit>();
 
 	protected ref map<AIAgent, float> m_mPerceptionFactors =
 		new map<AIAgent, float>();
@@ -144,6 +144,8 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				"KK: Clear Building activity selected at %1",
 				m_ClearWaypoint.GetOrigin()
 			);
+
+		KK_GarrisonHold.NoteOrderGroup(m_Group);
 	}
 	
 	override float CustomEvaluate()
@@ -1794,6 +1796,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		assignment.m_iRouteIndex = 0;
 
 		m_aAssignments.Insert(assignment);
+		KK_GarrisonHold.NoteOrderSoldier(agent);
 		KK_PerceptionBoost.Apply(agent, m_mPerceptionFactors);
 		IssueMoveOrder(agent, AssignmentMoveGoal(assignment));
 
@@ -1833,6 +1836,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		assignment.m_iRouteIndex = 0;
 
 		m_aAssignments.Insert(assignment);
+		KK_GarrisonHold.NoteOrderSoldier(agent);
 		KK_PerceptionBoost.Apply(agent, m_mPerceptionFactors);
 		IssueMoveOrder(agent, AssignmentMoveGoal(assignment));
 
@@ -2465,6 +2469,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					continue;
 
 				CancelAgentOrder(agent);
+				KK_GarrisonHold.ReleaseFollowLocks(agent);
 			}
 		}
 
@@ -3164,6 +3169,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 		m_bCancelled = true;
 
+		KK_GarrisonHold.ReleaseOrderGroup(m_Group);
 		SendCancelMessagesToAllAgents();
 		ReleaseOrderBuildings();
 		KK_PerceptionBoost.RestoreAll(m_mPerceptionFactors);
@@ -3198,6 +3204,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 	
 		m_bFinished = true;
 
+		KK_GarrisonHold.ReleaseOrderGroup(m_Group);
 		SendCancelMessagesToAllAgents();
 		ReleaseOrderBuildings();
 		KK_PerceptionBoost.RestoreAll(m_mPerceptionFactors);
@@ -3237,8 +3244,15 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
 		bool garrisonAfterClear = !mode || mode.KK_GetGarrisonAfterClear();
+		bool playerLeads = PlayerLeads(group);
 
-		if (assignGarrison && group && !hasNextWaypoint && garrisonAfterClear)
+		if (
+			assignGarrison &&
+			group &&
+			!hasNextWaypoint &&
+			garrisonAfterClear &&
+			!playerLeads
+		)
 		{
 			KK_BuildingOrderService.AssignGarrison(
 				group,
@@ -3246,11 +3260,63 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				building
 			);
 		}
+		else if (playerLeads && !hasNextWaypoint && garrisonAfterClear)
+		{
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				Print("KK: Clear finished for a player squad, skipping garrison");
+		}
 		else if (hasNextWaypoint)
 		{
 			if (SCR_BaseGameMode.KK_LogEnabled())
 				Print("KK: Clear finished with another waypoint queued, skipping garrison");
 		}
+	}
+
+	// The player group, or the AI group slaved to it. Those soldiers should
+	// fall in behind him when the clear is the last order.
+	protected bool PlayerLeads(SCR_AIGroup group)
+	{
+		if (!group)
+			return false;
+
+		if (LeaderIsPlayer(group))
+			return true;
+
+		SCR_GroupsManagerComponent groups = SCR_GroupsManagerComponent.GetInstance();
+		PlayerManager manager = GetGame().GetPlayerManager();
+		if (!groups || !manager)
+			return false;
+
+		array<int> playerIds = {};
+		manager.GetPlayers(playerIds);
+		foreach (int playerId : playerIds)
+		{
+			SCR_AIGroup playerGroup = groups.GetPlayerGroup(playerId);
+			if (!playerGroup)
+				continue;
+
+			if (playerGroup == group || playerGroup.GetSlave() == group)
+				return true;
+		}
+
+		return false;
+	}
+
+	protected bool LeaderIsPlayer(SCR_AIGroup group)
+	{
+		if (!group)
+			return false;
+
+		IEntity leader = group.GetLeaderEntity();
+		if (!leader)
+			return false;
+
+		CharacterControllerComponent controller =
+			CharacterControllerComponent.Cast(
+				leader.FindComponent(CharacterControllerComponent)
+			);
+
+		return controller && controller.IsPlayerControlled();
 	}
 
 	protected bool GetFilterUnreachableIslands()
@@ -3324,6 +3390,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 	
 		m_bFinished = true;
 		
+		KK_GarrisonHold.ReleaseOrderGroup(m_Group);
 		SendCancelMessagesToAllAgents();
 		ReleaseOrderBuildings();
 		KK_PerceptionBoost.RestoreAll(m_mPerceptionFactors);
@@ -3355,6 +3422,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			return;
 
 		m_bFinished = true;
+		KK_GarrisonHold.ReleaseOrderGroup(m_Group);
 		SendCancelMessagesToAllAgents();
 		ReleaseOrderBuildings();
 		KK_PerceptionBoost.RestoreAll(m_mPerceptionFactors);

@@ -68,8 +68,8 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 	protected ref array<ref KK_GarrisonAgentAssignment>
 		m_aAssignments = {};
 
-	protected ref map<AIAgent, int> m_mSoloHandlers =
-		new map<AIAgent, int>();
+	protected ref map<AIAgent, ref KK_FormationSplit> m_mSoloHandlers =
+		new map<AIAgent, ref KK_FormationSplit>();
 
 	protected ref map<AIAgent, float> m_mPerceptionFactors =
 		new map<AIAgent, float>();
@@ -141,6 +141,8 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				"KK: Garrison activity selected at %1",
 				m_GarrisonWaypoint.GetOrigin()
 			);
+
+		KK_GarrisonHold.NoteOrderGroup(m_Group);
 	}
 
 	override float CustomEvaluate()
@@ -935,6 +937,8 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 					currentTime,
 					agent.GetControlledEntity().GetOrigin()
 				);
+
+			KK_GarrisonHold.NoteOrderSoldier(agent);
 
 			KK_AuthoredRouteHelper.BuildGoals(
 				m_Plan,
@@ -2205,6 +2209,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 					continue;
 
 				CancelAgentOrder(agent);
+				KK_GarrisonHold.ReleaseFollowLocks(agent);
 			}
 		}
 
@@ -2412,6 +2417,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 		m_bCancelled = true;
 
+		KK_GarrisonHold.ReleaseOrderGroup(m_Group);
 		SendCancelMessagesToAllAgents();
 		UnpinAssignments();
 		KK_PerceptionBoost.RestoreAll(m_mPerceptionFactors);
@@ -2445,6 +2451,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 		m_bFinished = true;
 
+		KK_GarrisonHold.ReleaseOrderGroup(m_Group);
 		SendCancelMessagesToAllAgents();
 		UnpinAssignments();
 		KK_PerceptionBoost.RestoreAll(m_mPerceptionFactors);
@@ -2475,6 +2482,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			return;
 
 		m_bFinished = true;
+		KK_GarrisonHold.ReleaseOrderGroup(m_Group);
 		SendCancelMessagesToAllAgents();
 		UnpinAssignments();
 		KK_PerceptionBoost.RestoreAll(m_mPerceptionFactors);
