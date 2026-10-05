@@ -17,6 +17,24 @@ modded class SCR_AICombatComponent
 			return;
 		}
 
+		// Vanilla threatened recognition is slower than safe, so a squad
+		// that is already being shot at is the last to pick the enemy up.
+		// With sharp combat on, an attack stays on the alerted rate. The
+		// scenario multiplier still scales it.
+		if (
+			perceptionComp &&
+			threatSystem &&
+			KK_GarrisonHold.IsAttackSearch(GetOwner()) &&
+			KK_PerceptionBoost.UseSharpCombat()
+		)
+		{
+			float attackFactor = PERCEPTION_FACTOR_ALERTED;
+			attackFactor *= m_fEquipmentPerceptionFactor;
+			attackFactor *= m_fPerceptionFactor;
+			perceptionComp.SetPerceptionFactor(attackFactor);
+			return;
+		}
+
 		if (
 			!perceptionComp ||
 			!threatSystem ||
@@ -338,6 +356,11 @@ class KK_GarrisonHold
 	protected static ref set<IEntity> s_Clearing = new set<IEntity>();
 	// On an attack order. The rifle stays up. Shooting stays with vanilla attack.
 	protected static ref set<IEntity> s_Advancing = new set<IEntity>();
+	// Recognition stays at the alerted rate for the whole attack, including
+	// the bound sprint. The sprint does not turn the head toward a contact.
+	protected static ref set<IEntity> s_AttackSearch = new set<IEntity>();
+	protected static ref array<BaseTarget> s_AttackSeen = new array<BaseTarget>();
+	protected static const float ATTACK_CONTACT_RANGE = 180;
 	// The pair that is bounding. The rifle stays down so the sprint can run.
 	protected static ref set<IEntity> s_BoundSprint = new set<IEntity>();
 	// Handed to the fight, then walked back inside the return distance.
@@ -3206,6 +3229,55 @@ class KK_GarrisonHold
 		return body && s_Advancing.Contains(body);
 	}
 
+	// True for every soldier still on an attack, including a bound sprint.
+	// Clearing it refreshes perception, so the alerted rate does not stick.
+	// Restore the combat multiplier before clearing, or that refresh scales
+	// the vanilla rate by the attack multiplier.
+	static void SetAttackSearch(IEntity soldier, bool searching)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		bool active = s_AttackSearch.Contains(body);
+		if (searching == active)
+			return;
+
+		if (searching)
+		{
+			s_AttackSearch.Insert(body);
+			return;
+		}
+
+		s_AttackSearch.RemoveItem(body);
+		RefreshSearchPerception(body);
+	}
+
+	static bool IsAttackSearch(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		return body && s_AttackSearch.Contains(body);
+	}
+
+	protected static void RefreshSearchPerception(IEntity body)
+	{
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (
+			!utility ||
+			!utility.m_CombatComponent ||
+			!utility.m_PerceptionComponent ||
+			!utility.m_ThreatSystem
+		)
+		{
+			return;
+		}
+
+		utility.m_CombatComponent.UpdatePerceptionFactor(
+			utility.m_PerceptionComponent,
+			utility.m_ThreatSystem
+		);
+	}
+
 	static void SetBoundSprint(IEntity soldier, bool sprinting)
 	{
 		IEntity body = CharacterBody(soldier);
@@ -4316,6 +4388,72 @@ class KK_GarrisonHold
 		return CanSeeTarget(CharacterBody(soldier), target);
 	}
 
+	// Nearest living enemy perception has already started on, and this
+	// order can trace. Identified, detected, and unknown all count.
+	// Far contacts stay on the lane look.
+	static IEntity VisibleContact(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return null;
+
+		PerceptionComponent perception = PerceptionComponent.Cast(
+			body.FindComponent(PerceptionComponent)
+		);
+		if (!perception)
+			return null;
+
+		IEntity nearest = null;
+		float best = ATTACK_CONTACT_RANGE;
+
+		for (int category = 0; category < 3; category++)
+		{
+			ETargetCategory kind = ETargetCategory.ENEMY;
+			bool requireHostile = false;
+			if (category == 1)
+			{
+				kind = ETargetCategory.DETECTED;
+				requireHostile = true;
+			}
+			else if (category == 2)
+			{
+				kind = ETargetCategory.UNKNOWN;
+				requireHostile = true;
+			}
+
+			s_AttackSeen.Clear();
+			perception.GetTargetsList(s_AttackSeen, kind);
+
+			foreach (BaseTarget candidate : s_AttackSeen)
+			{
+				if (!candidate)
+					continue;
+
+				IEntity enemy = candidate.GetTargetEntity();
+				if (!enemy || enemy == body || !IsLiving(enemy))
+					continue;
+
+				if (requireHostile && !IsHostile(body, enemy))
+					continue;
+
+				if (!CanSeeEntity(body, enemy))
+					continue;
+
+				float distance = vector.Distance(
+					body.GetOrigin(),
+					enemy.GetOrigin()
+				);
+				if (distance >= best)
+					continue;
+
+				best = distance;
+				nearest = enemy;
+			}
+		}
+
+		return nearest;
+	}
+
 	protected static bool CanSeeTarget(IEntity body, BaseTarget target)
 	{
 		if (!body || !target)
@@ -4805,10 +4943,19 @@ modded class SCR_AIAttackBehavior
 			return;
 		}
 
-		if (
+		bool attackSearch =
 			utility &&
-			KK_PerceptionBoost.IsActiveSoldier(utility.m_OwnerEntity) &&
-			KK_PerceptionBoost.UseSharpCombat()
+			(
+				KK_GarrisonHold.IsAttackSearch(utility.m_OwnerEntity) ||
+				KK_GarrisonHold.IsAttackSearch(utility.GetOwner())
+			);
+
+		if (
+			KK_PerceptionBoost.UseSharpCombat() &&
+			(
+				attackSearch ||
+				(utility && KK_PerceptionBoost.IsActiveSoldier(utility.m_OwnerEntity))
+			)
 		)
 		{
 			m_fWaitTime.m_Value = 0;

@@ -42,6 +42,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 	// even when the rest of the squad is still on the way.
 	protected ref set<AIAgent> m_Released = new set<AIAgent>();
 	protected ref map<AIAgent, float> m_mReturnAt = new map<AIAgent, float>();
+	protected ref map<AIAgent, float> m_mPerceptionFactors =
+		new map<AIAgent, float>();
 
 	protected ref TraceParam m_CoverTrace;
 
@@ -67,6 +69,11 @@ class KK_AttackActivity : SCR_AIActivityBase
 	protected static const float EMPTY_MS = 10000;
 	protected static const float SCAN_AHEAD = 40;
 	protected static const float SCAN_ASIDE = 30;
+	// Below an unidentified-target look (50) and an enemy look (80). Above
+	// a danger glance (20) and the lane scan, so a seen man wins the head
+	// without restarting the look the attack behavior already owns.
+	protected static const float CONTACT_LOOK = 45;
+	protected static const float LANE_LOOK = 4;
 
 	void KK_AttackActivity(
 		SCR_AIGroupUtilityComponent utility,
@@ -277,6 +284,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 			}
 
 			MaintainMove(pair, speed, now);
+			LookAtContact(pair);
 		}
 	}
 
@@ -796,9 +804,13 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 		if (speed == EMovementType.SPRINT)
 		{
+			bool startingSprint = !KK_GarrisonHold.IsBoundSprint(agent);
 			KK_GarrisonHold.SetBoundSprint(agent, true);
 			KK_GarrisonHold.SetAdvancing(agent, false);
 			SetWeapon(agent, false);
+			// A look at the contact turns a sprint into a strafe.
+			if (startingSprint)
+				CancelLook(agent);
 			return;
 		}
 
@@ -936,13 +948,61 @@ class KK_AttackActivity : SCR_AIActivityBase
 			if (!agent || !agent.GetControlledEntity() || IsReleased(agent))
 				continue;
 
+			if (LookAtHostile(agent))
+				continue;
+
 			vector eye = agent.GetControlledEntity().GetOrigin();
 			eye = eye + Vector(0, 1.6, 0);
-			LookAt(agent, eye + (direction * distance));
+			LookAt(agent, eye + (direction * distance), LANE_LOOK);
 		}
 	}
 
-	protected void LookAt(notnull AIAgent agent, vector point)
+	protected void LookAtContact(notnull KK_AttackPair pair)
+	{
+		foreach (AIAgent agent : pair.m_aAgents)
+		{
+			if (!agent || IsReleased(agent))
+				continue;
+
+			LookAtHostile(agent);
+		}
+	}
+
+	// A man the perception list has already started on, in the front half
+	// of the push. Behind the squad, the danger look still owns the head.
+	// A bound sprint does not turn. Once the gun has a target, the attack
+	// behavior owns the aim.
+	protected bool LookAtHostile(AIAgent agent)
+	{
+		if (!agent || !agent.GetControlledEntity())
+			return false;
+
+		if (KK_GarrisonHold.IsBoundSprint(agent) || HasLivingTarget(agent))
+			return false;
+
+		IEntity enemy = KK_GarrisonHold.VisibleContact(agent);
+		if (!enemy)
+			return false;
+
+		vector axis;
+		vector right;
+		if (BuildAxis(axis, right))
+		{
+			vector flat = enemy.GetOrigin() - agent.GetControlledEntity().GetOrigin();
+			flat[1] = 0;
+			if (flat.Length() > 0.5)
+			{
+				flat.Normalize();
+				if (vector.Dot(flat, axis) < 0)
+					return false;
+			}
+		}
+
+		LookAt(agent, KK_GarrisonHold.ShotAimPoint(enemy), CONTACT_LOOK);
+		return true;
+	}
+
+	protected void LookAt(notnull AIAgent agent, vector point, float priority = 4)
 	{
 		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
 		if (!soldier || !soldier.m_UtilityComponent)
@@ -951,7 +1011,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (!soldier.m_UtilityComponent.m_LookAction)
 			return;
 
-		soldier.m_UtilityComponent.m_LookAction.KK_Track(point, 4, 1.5);
+		soldier.m_UtilityComponent.m_LookAction.KK_Track(point, priority, 1.5);
 	}
 
 	protected void CancelLooks()
@@ -1221,8 +1281,11 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (axis.Length() < 0.01)
 			return;
 
+		if (LookAtHostile(agent))
+			return;
+
 		vector eye = agent.GetControlledEntity().GetOrigin() + Vector(0, 1.6, 0);
-		LookAt(agent, eye + (axis * SCAN_AHEAD));
+		LookAt(agent, eye + (axis * SCAN_AHEAD), LANE_LOOK);
 	}
 
 	protected void ForgetPairSettled(notnull KK_AttackPair pair)
@@ -1768,6 +1831,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 				continue;
 
 			KK_GarrisonHold.SetAdvancing(agent, true);
+			KK_GarrisonHold.SetAttackSearch(agent, true);
+			KK_PerceptionBoost.ApplyRecognition(agent, m_mPerceptionFactors);
 
 			if (m_mPairOf.Contains(agent))
 				continue;
@@ -1795,6 +1860,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 				if (body)
 					KK_GarrisonHold.SetPinned(body, false);
 
+				KK_PerceptionBoost.RestoreRecognition(agent, m_mPerceptionFactors);
+				KK_GarrisonHold.SetAttackSearch(agent, false);
 				KK_GarrisonHold.SetBoundSprint(agent, false);
 				KK_GarrisonHold.SetRecalled(agent, false);
 				KK_GarrisonHold.SetAdvancing(agent, false);
@@ -2056,6 +2123,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 			if (!agent)
 				continue;
 
+			KK_PerceptionBoost.RestoreRecognition(agent, m_mPerceptionFactors);
+			KK_GarrisonHold.SetAttackSearch(agent, false);
 			KK_GarrisonHold.SetBoundSprint(agent, false);
 			KK_GarrisonHold.SetRecalled(agent, false);
 			KK_GarrisonHold.SetAdvancing(agent, false);

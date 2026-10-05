@@ -134,7 +134,7 @@ modded class SCR_BaseGameMode
 	[Attribute("40", UIWidgets.EditBox, "Distance from the point before a soldier is walked back into cover (m)", category: "Koopky CQB/Attack")]
 	protected float m_fKK_TakeCoverReturn;
 
-	[Attribute("1", UIWidgets.CheckBox, "While clearing or garrisoning, suppression does not slow recognition and the first shot does not wait", category: "Koopky CQB/Combat")]
+	[Attribute("1", UIWidgets.CheckBox, "While clearing, garrisoning, or attacking, suppression does not slow recognition and the first shot does not wait", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_SharpCombat;
 
 	[Attribute("1", UIWidgets.CheckBox, "While clearing or garrisoning, shoot the nearest visible enemy in the building instead of staying on one target", category: "Koopky CQB/Combat")]
@@ -164,7 +164,7 @@ modded class SCR_BaseGameMode
 	[Attribute("10", UIWidgets.EditBox, "Seconds to leave a soldier on the normal AI after gun ammo returns, so a rearm can keep handing him magazines. 0 puts him back on the next check. The clear or garrison has to still be active.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_RearmReturn;
 
-	[Attribute("1", UIWidgets.EditBox, "Recognition speed while clearing or garrisoning (×). 1 is normal.", category: "Koopky CQB/Combat")]
+	[Attribute("1", UIWidgets.EditBox, "Recognition speed while clearing, garrisoning, or attacking (×). 1 is normal.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_PerceptionFactor;
 
 	[Attribute("1", UIWidgets.CheckBox, "Open a closed door ahead. Step back only when it swings outward", category: "Koopky CQB/Combat")]
@@ -1369,6 +1369,17 @@ class KK_PerceptionBoost
 		if (controlledEntity)
 			s_ActiveSoldiers.Insert(controlledEntity);
 
+		ApplyRecognition(agent, saved);
+	}
+
+	// The recognition multiplier only. Attack uses this. Clear and garrison
+	// also change how squadmates collide, and that stays in Apply.
+	static void ApplyRecognition(notnull AIAgent agent, notnull map<AIAgent, float> saved)
+	{
+		SCR_AICombatComponent combat = Combat(agent);
+		if (!combat)
+			return;
+
 		if (!saved.Contains(agent))
 			saved.Set(agent, combat.GetPerceptionFactor());
 
@@ -1377,6 +1388,21 @@ class KK_PerceptionBoost
 			combat.SetPerceptionFactor(factor);
 
 		RefreshThreatPerception(agent, combat);
+	}
+
+	// Puts the combat multiplier back. Does not touch collision. The caller
+	// refreshes perception after the attack flag is cleared.
+	static void RestoreRecognition(AIAgent agent, notnull map<AIAgent, float> saved)
+	{
+		if (!agent || !saved.Contains(agent))
+			return;
+
+		float previous = saved.Get(agent);
+		saved.Remove(agent);
+
+		SCR_AICombatComponent combat = Combat(agent);
+		if (combat)
+			combat.SetPerceptionFactor(previous);
 	}
 
 	static void Restore(AIAgent agent, notnull map<AIAgent, float> saved)
