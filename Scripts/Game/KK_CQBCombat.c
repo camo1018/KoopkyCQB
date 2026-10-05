@@ -111,10 +111,17 @@ modded class SCR_AICombatComponent
 		// Someone he can see right now is.
 		if (KK_GarrisonHold.IsFreshOrder(GetOwner()))
 		{
+			// A cover hold stands against something solid. This order's sight
+			// trace hits that cover, so it must not delete a living target
+			// the normal attack can still see.
+			bool coverHold = KK_GarrisonHold.IsPinned(GetOwner());
 			if (
 				m_SelectedTarget &&
 				KK_GarrisonHold.IsLivingTarget(m_SelectedTarget) &&
-				KK_GarrisonHold.SeesTarget(GetOwner(), m_SelectedTarget)
+				(
+					coverHold ||
+					KK_GarrisonHold.SeesTarget(GetOwner(), m_SelectedTarget)
+				)
 			)
 			{
 				KK_GarrisonHold.EndFreshOrder(GetOwner());
@@ -329,6 +336,13 @@ class KK_GarrisonHold
 	// On a clear order. Garrison uses the building map too, and a quiet
 	// post is allowed to lower the rifle. A clear is not.
 	protected static ref set<IEntity> s_Clearing = new set<IEntity>();
+	// On an attack order. The rifle stays up. Shooting stays with vanilla attack.
+	protected static ref set<IEntity> s_Advancing = new set<IEntity>();
+	// The pair that is bounding. The rifle stays down so the sprint can run.
+	protected static ref set<IEntity> s_BoundSprint = new set<IEntity>();
+	// Handed to the fight, then walked back inside the return distance.
+	// His run is his. The others at the point keep the mod.
+	protected static ref set<IEntity> s_Recalled = new set<IEntity>();
 	protected static ref map<IEntity, float> s_ShotAt =
 		new map<IEntity, float>();
 	protected static ref map<IEntity, IEntity> s_ShotLook =
@@ -361,6 +375,10 @@ class KK_GarrisonHold
 	protected static ref map<IEntity, float> s_RoomLookAt =
 		new map<IEntity, float>();
 	protected static ref map<IEntity, float> s_ShotLean = new map<IEntity, float>();
+	// A moving shot loses the ray for a frame at a time. The trigger stays
+	// with the last accepted enemy through that gap.
+	protected static ref map<IEntity, float> s_MoveShotSeen = new map<IEntity, float>();
+	protected static const float MOVE_SHOT_HOLD_MS = 400;
 	protected static ref map<IEntity, IEntity> s_AimTarget = new map<IEntity, IEntity>();
 	protected static ref map<IEntity, float> s_AimSince = new map<IEntity, float>();
 	protected static ref set<IEntity> s_LeanHeld = new set<IEntity>();
@@ -424,25 +442,27 @@ class KK_GarrisonHold
 
 	static void SetPinned(IEntity soldier, bool pinned)
 	{
-		if (!soldier)
+		IEntity body = CharacterBody(soldier);
+		if (!body)
 			return;
 
 		if (pinned)
 		{
-			s_Traveling.RemoveItem(soldier);
-			s_Pinned.Insert(soldier);
+			s_Traveling.RemoveItem(body);
+			s_Pinned.Insert(body);
 		}
 		else
 		{
-			s_Pinned.RemoveItem(soldier);
+			s_Pinned.RemoveItem(body);
 		}
 
-		ApplyFootLock(soldier, pinned);
+		ApplyFootLock(body, pinned);
 	}
 
 	static bool IsPinned(IEntity soldier)
 	{
-		return soldier && s_Pinned.Contains(soldier);
+		IEntity body = CharacterBody(soldier);
+		return body && s_Pinned.Contains(body);
 	}
 
 	// Unconscious, still alive. Dead is handled by the caller that drops the hold.
@@ -806,33 +826,57 @@ class KK_GarrisonHold
 		if (!firing)
 			return;
 
-		// Threat keeps the gun up. He fires only when a sightline reaches
-		// someone. The picked enemy is checked again, so a wall that he
-		// walks behind still blocks the shot.
+		// Threat keeps the gun up. He fires when a sightline reaches someone.
+		// A center-only check hits cover beside him and leaves the trigger off.
 		IEntity lookAt = null;
 		if (body && s_ShotLook.Contains(body))
 			lookAt = s_ShotLook.Get(body);
 
-		bool visible = lookAt && ShotStillVisible(body);
-		bool raise = visible || FeelsThreatened(utility);
-		// A clear keeps the rifle up between shots. The trigger stays on
-		// the sightline. Sprint, bash, an empty gun, and a reload already
-		// refused this.
-		if (ClearWeaponStaysUp(body))
-			raise = true;
-		bool wasFiring = body && s_MoveFiring.Contains(body);
-		CommandWeapon(body, raise, visible);
-
 		if (!lookAt || !IsLiving(lookAt))
 		{
+			RememberLean(body, 0);
+			bool raise = FeelsThreatened(utility);
+			if (ClearWeaponStaysUp(body) || AttackWeaponStaysUp(body))
+				raise = true;
+
+			bool wasFiring = body && s_MoveFiring.Contains(body);
+			CommandWeapon(body, raise, false);
 			if (wasFiring && utility.m_LookAction)
 				utility.m_LookAction.Cancel();
 
 			return;
 		}
 
-		// The trigger is already gated above. While he is alive the face
-		// stays on him, including a trace that a wall just blocked.
+		float lean = 0;
+		if (s_ShotLean.Contains(body))
+			lean = s_ShotLean.Get(body);
+
+		// The commit already required a clear shot. Checking it again every
+		// frame drops the trigger while he is moving, so the gun never cycles.
+		// It stays down until the target refresh gives that enemy up.
+		bool canShoot = IsMoveFire(body);
+		if (!canShoot)
+		{
+			canShoot = ShotStillVisible(body);
+			if (!canShoot && lean != 0)
+				canShoot = SideStillClear(body, lookAt, lean);
+		}
+
+		float command = 0;
+		if (canShoot)
+			command = lean;
+
+		RememberLean(body, command);
+
+		bool fire = AimReady(body, lookAt, canShoot);
+		bool raise = canShoot || FeelsThreatened(utility);
+		if (ClearWeaponStaysUp(body) || AttackWeaponStaysUp(body))
+			raise = true;
+
+		CommandWeapon(body, raise, fire);
+		if (!fire)
+			SetFireWanted(body, false);
+
 		AimLook(utility, body, lookAt);
 	}
 
@@ -3132,6 +3176,94 @@ class KK_GarrisonHold
 		return body && s_Clearing.Contains(body);
 	}
 
+	static void SetAdvancing(IEntity soldier, bool advancing)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		if (advancing)
+		{
+			s_Advancing.Insert(body);
+			SetIgnoringTargets(body, false);
+			return;
+		}
+
+		if (!s_Advancing.Contains(body))
+			return;
+
+		s_Advancing.RemoveItem(body);
+		// The order lowered him on the way out. Forget the raise, or the
+		// next order thinks the rifle is still up and never sends it.
+		s_MoveWeaponKnown.RemoveItem(body);
+		s_MoveWeaponUp.RemoveItem(body);
+		s_RaiseSettled.RemoveItem(body);
+	}
+
+	static bool IsAdvancing(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		return body && s_Advancing.Contains(body);
+	}
+
+	static void SetBoundSprint(IEntity soldier, bool sprinting)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		if (sprinting)
+		{
+			s_BoundSprint.Insert(body);
+			return;
+		}
+
+		s_BoundSprint.RemoveItem(body);
+	}
+
+	// The sprint lowered the rifle on its own. The hold has to forget that
+	// pose, or it still believes the rifle is down and never sends the raise.
+	static void RaiseAfterSprint(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		SetBoundSprint(body, false);
+		SetAdvancing(body, true);
+		s_MoveWeaponKnown.RemoveItem(body);
+		s_MoveWeaponUp.RemoveItem(body);
+		s_RaiseSettled.RemoveItem(body);
+		RequestWeaponStance(body, true);
+	}
+
+	static bool IsBoundSprint(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		return body && s_BoundSprint.Contains(body);
+	}
+
+	static void SetRecalled(IEntity soldier, bool recalled)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		if (recalled)
+		{
+			s_Recalled.Insert(body);
+			return;
+		}
+
+		s_Recalled.RemoveItem(body);
+	}
+
+	static bool IsRecalled(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		return body && s_Recalled.Contains(body);
+	}
+
 	// A clear holds the rifle up. These are the lowers that still win:
 	// the approach sprint, the reload sprint, a bash, an empty gun, a
 	// reload already playing, and a frag in hand.
@@ -3156,13 +3288,40 @@ class KK_GarrisonHold
 		return true;
 	}
 
-	// The raise node runs after the controller. While a clear wants the
-	// rifle up, that node is held off. The controller is touched only
-	// when the rifle is actually down after having been up, because
+	// An attack holds the rifle up the same way, without the clear's
+	// move-and-shoot. A reload, an empty gun, and a grenade still lower it.
+	static bool AttackWeaponStaysUp(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!IsAdvancing(body))
+			return false;
+
+		// A bound sprint lowers the rifle so he can run. Walk and jog stay up.
+		if (IsBoundSprint(body))
+			return false;
+
+		if (IsIgnoringTargets(body))
+			return false;
+
+		if (SprintBeforeReload(body) || IsReloadBashing(body))
+			return false;
+
+		if (CannotShoot(body) || IsQuietReload(body))
+			return false;
+
+		if (HoldingThrowable(body))
+			return false;
+
+		return true;
+	}
+
+	// The raise node runs after the controller. While a clear or an attack
+	// wants the rifle up, that node is held off. The controller is touched
+	// only when the rifle is actually down after having been up, because
 	// repeating the raise restarts it and cuts off the step.
 	static bool KeepClearWeaponRaised(IEntity soldier)
 	{
-		if (!ClearWeaponStaysUp(soldier))
+		if (!ClearWeaponStaysUp(soldier) && !AttackWeaponStaysUp(soldier))
 			return false;
 
 		IEntity body = CharacterBody(soldier);
@@ -3413,6 +3572,15 @@ class KK_GarrisonHold
 		}
 
 		s_ShotAt.Set(body, now);
+		IEntity previousLook = null;
+		float previousLean = 0;
+		if (s_ShotLook.Contains(body))
+		{
+			previousLook = s_ShotLook.Get(body);
+			if (s_ShotLean.Contains(body))
+				previousLean = s_ShotLean.Get(body);
+		}
+
 		s_ShotLook.Remove(body);
 		s_ShotBase.Remove(body);
 		s_ShotLean.Remove(body);
@@ -3430,7 +3598,18 @@ class KK_GarrisonHold
 
 		if (!building || !PositionInside(building, body.GetOrigin()))
 		{
-			ConsiderSelected(body, selected);
+			// A jog has no building, and the selected target may be empty.
+			// Reaper often keeps a sector there instead of a body. The
+			// perceived enemies are still the ones he can shoot.
+			if (IsMoveFire(body))
+				ConsiderOpen(body, perception);
+
+			if (!s_ShotLive.Contains(body))
+				ConsiderSelected(body, selected);
+
+			if (IsMoveFire(body))
+				HoldMoveShot(body, now, previousLook, previousLean);
+
 			UpdateRoomFire(body);
 			return;
 		}
@@ -3450,30 +3629,8 @@ class KK_GarrisonHold
 		ConsiderIndoor(perception, body, building, ETargetCategory.UNKNOWN, true);
 		CollectRoom(body, building);
 
-		for (int i = 0; i < s_Candidates.Count(); i++)
+		if (CommitNearestShot(body, perception))
 		{
-			IEntity enemy = s_Candidates[i];
-			if (!enemy)
-				continue;
-
-			float lean;
-			if (!CanEngage(body, enemy, lean))
-				continue;
-
-			s_ShotLive.Insert(body);
-			s_ShotLook.Set(body, enemy);
-			s_ShotLean.Set(body, lean);
-
-			BaseTarget known = null;
-			if (s_CandidateKnown.Contains(enemy))
-				known = s_CandidateKnown.Get(enemy);
-
-			if (!known && perception)
-				known = perception.FindTargetPerceptionObject(enemy);
-
-			if (known)
-				s_ShotBase.Set(body, known);
-
 			UpdateRoomFire(body);
 			return;
 		}
@@ -3534,6 +3691,7 @@ class KK_GarrisonHold
 		s_ShotBase.Remove(body);
 		s_ShotLean.Remove(body);
 		s_ShotLive.RemoveItem(body);
+		s_MoveShotSeen.Remove(body);
 		s_RoomFire.RemoveItem(body);
 		ClearAim(body);
 		ReleaseLean(body);
@@ -3543,6 +3701,139 @@ class KK_GarrisonHold
 			SetFireWanted(body, false);
 			s_MoveFiring.RemoveItem(body);
 		}
+	}
+
+	// True while this order has a living enemy it is going to shoot, or the
+	// combat component already has one in sight.
+	static bool HasShootableEnemy(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (body && s_ShotLive.Contains(body))
+			return true;
+
+		return HasVisibleEnemy(soldier);
+	}
+
+	// The moving ray misses for a few checks and then finds him again. Dropping
+	// the enemy on the first miss releases the trigger before the gun fires.
+	protected static void HoldMoveShot(
+		IEntity body,
+		float now,
+		IEntity previousLook,
+		float previousLean)
+	{
+		if (!body)
+			return;
+
+		if (s_ShotLive.Contains(body))
+		{
+			s_MoveShotSeen.Set(body, now);
+			return;
+		}
+
+		if (!previousLook || !IsLiving(previousLook))
+			return;
+
+		float seen = 0;
+		if (s_MoveShotSeen.Contains(body))
+			seen = s_MoveShotSeen.Get(body);
+
+		if (now - seen > MOVE_SHOT_HOLD_MS)
+			return;
+
+		s_ShotLive.Insert(body);
+		s_ShotLook.Set(body, previousLook);
+		s_ShotLean.Set(body, previousLean);
+	}
+
+	protected static void ConsiderOpen(IEntity body, PerceptionComponent perception)
+	{
+		if (!body)
+			return;
+
+		if (!perception)
+		{
+			perception = PerceptionComponent.Cast(
+				body.FindComponent(PerceptionComponent)
+			);
+		}
+
+		s_Candidates.Clear();
+		s_CandidateDist.Clear();
+		s_CandidateKnown.Clear();
+		ConsiderOpenCategory(perception, body, ETargetCategory.ENEMY, false);
+		ConsiderOpenCategory(perception, body, ETargetCategory.DETECTED, true);
+		ConsiderOpenCategory(perception, body, ETargetCategory.UNKNOWN, true);
+		CommitNearestShot(body, perception);
+	}
+
+	protected static void ConsiderOpenCategory(
+		PerceptionComponent perception,
+		IEntity body,
+		ETargetCategory category,
+		bool requireHostile)
+	{
+		if (!perception)
+			return;
+
+		s_Perceived.Clear();
+		perception.GetTargetsList(s_Perceived, category);
+
+		foreach (BaseTarget candidate : s_Perceived)
+		{
+			if (!candidate)
+				continue;
+
+			ChimeraCharacter character = CharacterOf(candidate.GetTargetEntity());
+			if (!character || character == body)
+				continue;
+
+			if (!IsLiving(character))
+				continue;
+
+			if (requireHostile && !IsHostile(body, character))
+				continue;
+
+			AddCandidate(
+				character,
+				vector.Distance(body.GetOrigin(), character.GetOrigin()),
+				candidate
+			);
+		}
+	}
+
+	protected static bool CommitNearestShot(
+		IEntity body,
+		PerceptionComponent perception)
+	{
+		for (int i = 0; i < s_Candidates.Count(); i++)
+		{
+			IEntity enemy = s_Candidates[i];
+			if (!enemy)
+				continue;
+
+			float lean;
+			if (!CanEngage(body, enemy, lean))
+				continue;
+
+			s_ShotLive.Insert(body);
+			s_ShotLook.Set(body, enemy);
+			s_ShotLean.Set(body, lean);
+
+			BaseTarget known = null;
+			if (s_CandidateKnown.Contains(enemy))
+				known = s_CandidateKnown.Get(enemy);
+
+			if (!known && perception)
+				known = perception.FindTargetPerceptionObject(enemy);
+
+			if (known)
+				s_ShotBase.Set(body, known);
+
+			return true;
+		}
+
+		return false;
 	}
 
 	protected static void ConsiderIndoor(
@@ -3736,13 +4027,18 @@ class KK_GarrisonHold
 		bool left;
 		bool right;
 		SidesClear(body, enemy, left, right);
+
+		if (CanSeeEntity(body, enemy))
+			return true;
+
+		// The center ray hits the cover he is standing against. A clear
+		// side is still a shot, and the trigger needs that side remembered.
 		if (left && !right)
 			lean = -1;
 		else if (right && !left)
 			lean = 1;
-
-		if (CanSeeEntity(body, enemy))
-			return true;
+		else if (left && right)
+			lean = -1;
 
 		return left || right;
 	}
@@ -4609,7 +4905,7 @@ modded class SCR_AIAvoidCharacterBehavior
 {
 	override float CustomEvaluate()
 	{
-		if (DoorFiring() || RunningToReloadNode() || BashingReload())
+		if (DoorFiring() || RunningToReloadNode() || BashingReload() || HeldInCover())
 			return 0;
 
 		return super.CustomEvaluate();
@@ -4639,6 +4935,15 @@ modded class SCR_AIAvoidCharacterBehavior
 			(
 				KK_GarrisonHold.IsDoorFiring(m_Utility.m_OwnerEntity) ||
 				KK_GarrisonHold.IsDoorFiring(m_Utility.GetOwner())
+			);
+	}
+
+	protected bool HeldInCover()
+	{
+		return m_Utility &&
+			(
+				KK_GarrisonHold.IsPinned(m_Utility.m_OwnerEntity) ||
+				KK_GarrisonHold.IsPinned(m_Utility.GetOwner())
 			);
 	}
 }
@@ -4673,6 +4978,8 @@ modded class SCR_AIRetreatWhileLookAtBehavior
 			(
 				KK_GarrisonHold.IsDoorFiring(m_Utility.m_OwnerEntity) ||
 				KK_GarrisonHold.IsDoorFiring(m_Utility.GetOwner()) ||
+				KK_GarrisonHold.IsPinned(m_Utility.m_OwnerEntity) ||
+				KK_GarrisonHold.IsPinned(m_Utility.GetOwner()) ||
 				KK_GarrisonHold.SprintBeforeReload(m_Utility.m_OwnerEntity) ||
 				KK_GarrisonHold.SprintBeforeReload(m_Utility.GetOwner()) ||
 				KK_GarrisonHold.IsReloadBashing(m_Utility.m_OwnerEntity) ||
@@ -4725,8 +5032,15 @@ modded class SCR_AIThreatSystem
 
 		// A selected last-seen point sets endangered back to full on every
 		// update. Drop it before that, until this order sees someone.
+		bool coverHold =
+			m_Utility &&
+			(
+				KK_GarrisonHold.IsPinned(m_Utility.m_OwnerEntity) ||
+				KK_GarrisonHold.IsPinned(m_Utility.GetOwner())
+			);
 		if (
 			m_Utility &&
+			!coverHold &&
 			(
 				KK_GarrisonHold.IsFreshOrder(m_Utility.m_OwnerEntity) ||
 				KK_GarrisonHold.IsFreshOrder(m_Utility.GetOwner())
@@ -4862,6 +5176,27 @@ modded class SCR_AISetWeaponRaised
 
 				if (controller)
 					controller.SetWeaponRaised(false);
+			}
+
+			return ENodeResult.SUCCESS;
+		}
+
+		// A bound sprint cannot keep the rifle up. The raise would cut the run.
+		// Sending the lower again restarts it and cuts the step off.
+		if (KK_GarrisonHold.IsBoundSprint(body) || KK_GarrisonHold.IsBoundSprint(owner))
+		{
+			if (body)
+			{
+				CharacterControllerComponent controller =
+					CharacterControllerComponent.Cast(
+						body.FindComponent(CharacterControllerComponent)
+					);
+
+				if (controller && (controller.IsWeaponRaised() || controller.IsWeaponADS()))
+				{
+					controller.SetWeaponADS(false);
+					controller.SetWeaponRaised(false);
+				}
 			}
 
 			return ENodeResult.SUCCESS;

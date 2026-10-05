@@ -75,6 +75,11 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 32: return mode.KK_GetOutOfSight();
 			case 33: return mode.KK_GetRearmReturn();
 			case 27: return mode.KK_GetSampleAttempts();
+			case 34: return mode.KK_GetAttackLaneOffset();
+			case 35: return mode.KK_GetAttackStepLength();
+			case 38: return mode.KK_GetAttackPause();
+			case 36: return mode.KK_GetAttackArrivalRadius();
+			case 37: return mode.KK_GetTakeCoverReturn();
 		}
 
 		return mode.KK_GetHorizontalSpacing();
@@ -116,6 +121,11 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 32: mode.KK_SetOutOfSight(value); break;
 			case 33: mode.KK_SetRearmReturn(value); break;
 			case 27: mode.KK_SetSampleAttempts((int)Math.Round(value)); break;
+			case 34: mode.KK_SetAttackLaneOffset(value); break;
+			case 35: mode.KK_SetAttackStepLength(value); break;
+			case 38: mode.KK_SetAttackPause(value); break;
+			case 36: mode.KK_SetAttackArrivalRadius(value); break;
+			case 37: mode.KK_SetTakeCoverReturn(value); break;
 			default: mode.KK_SetHorizontalSpacing(value); break;
 		}
 	}
@@ -179,6 +189,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 17: return mode.KK_GetDebugLog();
 			case 18: return mode.KK_GetSidearmThenRelease();
 			case 19: return mode.KK_GetStartFromOrder();
+			case 21: return mode.KK_GetTakeCoverAttack();
 		}
 
 		return mode.KK_GetGarrisonAfterClear();
@@ -206,6 +217,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 17: mode.KK_SetDebugLog(value); break;
 			case 18: mode.KK_SetSidearmThenRelease(value); break;
 			case 19: mode.KK_SetStartFromOrder(value); break;
+			case 21: mode.KK_SetTakeCoverAttack(value); break;
 			default: mode.KK_SetGarrisonAfterClear(value); break;
 		}
 	}
@@ -385,6 +397,18 @@ class KK_CQBAttrDebugLog : KK_CQBBoolEditorAttribute {}
 class KK_CQBAttrWaypointAuthoring : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrSampleAttempts : KK_CQBFloatEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrAttackLaneOffset : KK_CQBFloatEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrAttackStepLength : KK_CQBFloatEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrAttackPause : KK_CQBFloatEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrAttackArrivalRadius : KK_CQBFloatEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrTakeCoverAttack : KK_CQBBoolEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrTakeCoverReturn : KK_CQBFloatEditorAttribute {}
 
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrClearSpareMode : SCR_BaseEditorAttribute

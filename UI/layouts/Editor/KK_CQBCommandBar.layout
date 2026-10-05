@@ -1,0 +1,245 @@
+FrameWidgetClass {
+ Name "KK_CQBCommandBar"
+ Slot FrameWidgetSlot {
+  Anchor 0.5 1 0.5 1
+  PositionX 0
+  PositionY -252
+  SizeX 260
+  SizeY 48
+  Alignment 0.5 1
+ }
+ {
+  HorizontalLayoutWidgetClass {
+   Name "Items"
+   Slot FrameWidgetSlot {
+    Anchor 0 0 1 1
+    OffsetLeft 0
+    OffsetTop 0
+    OffsetRight 0
+    OffsetBottom 0
+   }
+   {
+    SizeLayoutWidgetClass {
+     Name "GarrisonSize"
+     Slot LayoutSlot {
+      Padding 2 0 2 0
+     }
+     AllowWidthOverride 1
+     AllowHeightOverride 1
+     WidthOverride 48
+     HeightOverride 48
+     {
+      ButtonWidgetClass {
+       Name "Garrison"
+       Slot AlignableSlot {
+        HorizontalAlign Stretch
+        VerticalAlign Stretch
+       }
+       components {
+        KK_CQBOrderButtonHandler "{6A7B0A1000000042}" {
+        }
+       }
+       {
+        OverlayWidgetClass {
+         Name "Face"
+         "Ignore Cursor" 1
+         Slot ButtonWidgetSlot {
+          HorizontalAlign Stretch
+          VerticalAlign Stretch
+         }
+         {
+          ImageWidgetClass {
+           Name "Icon"
+           "Ignore Cursor" 1
+           Slot OverlayWidgetSlot {
+            HorizontalAlign Stretch
+            VerticalAlign Stretch
+            Padding 8 8 8 8
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+    SizeLayoutWidgetClass {
+     Name "ClearSize"
+     Slot LayoutSlot {
+      Padding 2 0 2 0
+     }
+     AllowWidthOverride 1
+     AllowHeightOverride 1
+     WidthOverride 48
+     HeightOverride 48
+     {
+      ButtonWidgetClass {
+       Name "Clear"
+       Slot AlignableSlot {
+        HorizontalAlign Stretch
+        VerticalAlign Stretch
+       }
+       components {
+        KK_CQBOrderButtonHandler "{6A7B0A1000000043}" {
+        }
+       }
+       {
+        OverlayWidgetClass {
+         Name "Face"
+         "Ignore Cursor" 1
+         Slot ButtonWidgetSlot {
+          HorizontalAlign Stretch
+          VerticalAlign Stretch
+         }
+         {
+          ImageWidgetClass {
+           Name "Icon"
+           "Ignore Cursor" 1
+           Slot OverlayWidgetSlot {
+            HorizontalAlign Stretch
+            VerticalAlign Stretch
+            Padding 8 8 8 8
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+    SizeLayoutWidgetClass {
+     Name "AdvanceSize"
+     Slot LayoutSlot {
+      Padding 2 0 2 0
+     }
+     AllowWidthOverride 1
+     AllowHeightOverride 1
+     WidthOverride 48
+     HeightOverride 48
+     {
+      ButtonWidgetClass {
+       Name "Advance"
+       Slot AlignableSlot {
+        HorizontalAlign Stretch
+        VerticalAlign Stretch
+       }
+       components {
+        KK_CQBOrderButtonHandler "{6A7B0A1000000044}" {
+        }
+       }
+       {
+        OverlayWidgetClass {
+         Name "Face"
+         "Ignore Cursor" 1
+         Slot ButtonWidgetSlot {
+          HorizontalAlign Stretch
+          VerticalAlign Stretch
+         }
+         {
+          ImageWidgetClass {
+           Name "Icon"
+           "Ignore Cursor" 1
+           Slot OverlayWidgetSlot {
+            HorizontalAlign Stretch
+            VerticalAlign Stretch
+            Padding 8 8 8 8
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+    SizeLayoutWidgetClass {
+     Name "BoundSize"
+     Slot LayoutSlot {
+      Padding 2 0 2 0
+     }
+     AllowWidthOverride 1
+     AllowHeightOverride 1
+     WidthOverride 48
+     HeightOverride 48
+     {
+      ButtonWidgetClass {
+       Name "Bound"
+       Slot AlignableSlot {
+        HorizontalAlign Stretch
+        VerticalAlign Stretch
+       }
+       components {
+        KK_CQBOrderButtonHandler "{6A7B0A1000000045}" {
+        }
+       }
+       {
+        OverlayWidgetClass {
+         Name "Face"
+         "Ignore Cursor" 1
+         Slot ButtonWidgetSlot {
+          HorizontalAlign Stretch
+          VerticalAlign Stretch
+         }
+         {
+          ImageWidgetClass {
+           Name "Icon"
+           "Ignore Cursor" 1
+           Slot OverlayWidgetSlot {
+            HorizontalAlign Stretch
+            VerticalAlign Stretch
+            Padding 8 8 8 8
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+    SizeLayoutWidgetClass {
+     Name "TakeCoverSize"
+     Slot LayoutSlot {
+      Padding 2 0 2 0
+     }
+     AllowWidthOverride 1
+     AllowHeightOverride 1
+     WidthOverride 48
+     HeightOverride 48
+     {
+      ButtonWidgetClass {
+       Name "Take cover"
+       Slot AlignableSlot {
+        HorizontalAlign Stretch
+        VerticalAlign Stretch
+       }
+       components {
+        KK_CQBOrderButtonHandler "{6A7B0A1000000046}" {
+        }
+       }
+       {
+        OverlayWidgetClass {
+         Name "Face"
+         "Ignore Cursor" 1
+         Slot ButtonWidgetSlot {
+          HorizontalAlign Stretch
+          VerticalAlign Stretch
+         }
+         {
+          ImageWidgetClass {
+           Name "Icon"
+           "Ignore Cursor" 1
+           Slot OverlayWidgetSlot {
+            HorizontalAlign Stretch
+            VerticalAlign Stretch
+            Padding 8 8 8 8
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}

@@ -30,6 +30,16 @@ class KK_AgentMove
 			- 1;
 	}
 
+	// Above the emergent attack. A take cover sprint that loses to that
+	// attack stops where it is: combat movement is locked, and the sprint
+	// keeps the rifle down, so he neither runs nor shoots.
+	static float SprintPriorityLevel()
+	{
+		return SCR_AIActionBase.PRIORITY_BEHAVIOR_ATTACK_HIGH_PRIORITY
+			- SCR_AIActionBase.PRIORITY_BEHAVIOR_MOVE_INDIVIDUALLY
+			+ 1;
+	}
+
 	// Above the sidestep and the melee retreat. Both of those outrank a
 	// danger move, and a nearby enemy uses them to shove him back from the door.
 	static float EnterBuildingPriorityLevel()

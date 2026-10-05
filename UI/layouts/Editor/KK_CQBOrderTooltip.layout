@@ -1,0 +1,58 @@
+FrameWidgetClass {
+ Name "KK_CQBOrderTooltip"
+ {
+  ButtonWidgetClass {
+   Name "Background"
+   "Ignore Cursor" 1
+   Slot FrameWidgetSlot {
+    Anchor 0 0 1 1
+    OffsetLeft 0
+    OffsetTop 0
+    OffsetRight 0
+    OffsetBottom 0
+   }
+  }
+  VerticalLayoutWidgetClass {
+   Name "Lines"
+   "Ignore Cursor" 1
+   Slot FrameWidgetSlot {
+    Anchor 0 0 1 1
+    OffsetLeft 12
+    OffsetTop 8
+    OffsetRight 12
+    OffsetBottom 8
+   }
+   {
+    TextWidgetClass {
+     Name "Title"
+     "Ignore Cursor" 1
+     Slot LayoutSlot {
+      Padding 0 0 0 2
+     }
+     "Font Size" 18
+     "Min Font Size" 16
+    }
+    TextWidgetClass {
+     Name "Description"
+     "Ignore Cursor" 1
+     Slot LayoutSlot {
+      SizeMode Fill
+      Padding 0 0 0 8
+     }
+     "Font Size" 15
+     "Min Font Size" 13
+     Wrap 1
+    }
+    TextWidgetClass {
+     Name "Hotkey"
+     "Ignore Cursor" 1
+     Slot LayoutSlot {
+      SizeMode Fill
+     }
+     "Font Size" 16
+     "Min Font Size" 14
+    }
+   }
+  }
+ }
+}

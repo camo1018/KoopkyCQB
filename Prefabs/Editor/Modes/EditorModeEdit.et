@@ -15,6 +15,65 @@ SCR_EditorModeEntity : "{E56F54E533ACE527}Prefabs/Editor/Modes/EditorModeBase.et
      m_Prefabs {
       "{BFB02E608EDD10FB}PrefabsEditable/Auto/AI/Waypoints/E_KK_AIWaypoint_ClearBuilding.et"
       "{6A6969C055667788}PrefabsEditable/Auto/AI/Waypoints/E_KK_AIWaypoint_GarrisonBuilding.et"
+      "{6A7B0A1000000003}PrefabsEditable/Auto/AI/Waypoints/E_KK_AIWaypoint_Attack.et"
+      "{6A7B0A1000000006}PrefabsEditable/Auto/AI/Waypoints/E_KK_AIWaypoint_Attack_Bound.et"
+      "{6A7B0A1000000007}PrefabsEditable/Auto/AI/Waypoints/E_KK_AIWaypoint_Attack_TakeCover.et"
+     }
+    }
+   }
+  }
+  KK_CQBCommandBarComponent "{6A7B0A1000000050}" {
+   m_ActionsLists {
+    SCR_EditorActionList "{6A7B0A1000000051}" {
+     m_Actions {
+    KK_GarrisonCommandAction "{6A696941DD0BF3A6}" {
+     m_Info SCR_UIInfo "{6A696941C4BD964E}" {
+      Name "Garrison"
+      Description "Occupy the building under the cursor. Open ground uses the nearest building."
+      Icon "{8083D425A749EE46}UI/Textures/Editor/Toolbar/Commanding/Toolbar_Commanding_Objective_Custom.edds"
+     }
+     m_ActionGroup COMMAND_TASK
+     m_CommandPrefab "{6A6969C055667788}PrefabsEditable/Auto/AI/Waypoints/E_KK_AIWaypoint_GarrisonBuilding.et"
+    }
+    KK_ClearCommandAction "{6A696947AA2BCB61}" {
+     m_Info SCR_UIInfo "{6A69694712B2A2D5}" {
+      Name "Clear"
+      Description "Clear the building under the cursor. Open ground uses the nearest building."
+      Icon "{36106BA9CF5483B0}UI/Textures/Editor/Toolbar/Commanding/Toolbar_Commanding_Waypoint_Attack.edds"
+     }
+     m_ActionGroup COMMAND_TASK
+     m_CommandPrefab "{BFB02E608EDD10FB}PrefabsEditable/Auto/AI/Waypoints/E_KK_AIWaypoint_ClearBuilding.et"
+    }
+    KK_AttackCommandAction "{6A7B0A1000000030}" {
+     m_Info SCR_UIInfo "{6A7B0A1000000031}" {
+      Name "Advance"
+      Description "Advance to the point in pairs. They jog, pause beside cover, and scan."
+      Icon "{2006D8738EA93571}UI/Textures/Editor/Toolbar/Commanding/Toolbar_Commanding_Waypoint_Move.edds"
+     }
+     m_ActionGroup COMMAND_TASK
+     m_ePace 0
+     m_CommandPrefab "{6A7B0A1000000003}PrefabsEditable/Auto/AI/Waypoints/E_KK_AIWaypoint_Attack.et"
+    }
+    KK_AttackCommandAction "{6A7B0A1000000032}" {
+     m_Info SCR_UIInfo "{6A7B0A1000000033}" {
+      Name "Bound"
+      Description "Bound to the point. One pair runs while the other watches."
+      Icon "{87265C14C67EDDE7}UI/Textures/Editor/Toolbar/Commanding/Toolbar_Commanding_Waypoint_ForcedMove.edds"
+     }
+     m_ActionGroup COMMAND_TASK
+     m_ePace 1
+     m_CommandPrefab "{6A7B0A1000000006}PrefabsEditable/Auto/AI/Waypoints/E_KK_AIWaypoint_Attack_Bound.et"
+    }
+    KK_AttackCommandAction "{6A7B0A1000000034}" {
+     m_Info SCR_UIInfo "{6A7B0A1000000035}" {
+      Name "Take cover"
+      Description "Push to the point under fire, take cover there, and fight from it."
+      Icon "{8083D425A749EE46}UI/Textures/Editor/Toolbar/Commanding/Toolbar_Commanding_Objective_Custom.edds"
+     }
+     m_ActionGroup COMMAND_TASK
+     m_ePace 2
+     m_CommandPrefab "{6A7B0A1000000007}PrefabsEditable/Auto/AI/Waypoints/E_KK_AIWaypoint_Attack_TakeCover.et"
+    }
      }
     }
    }

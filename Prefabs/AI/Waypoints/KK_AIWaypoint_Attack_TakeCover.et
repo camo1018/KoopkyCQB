@@ -1,0 +1,3 @@
+KK_AttackWaypoint : "{6A7B0A1000000002}Prefabs/AI/Waypoints/KK_AIWaypoint_Attack.et" {
+ m_ePace 2
+}

@@ -1,0 +1,15 @@
+KK_AttackWaypoint : "{49CED34BBCD060F0}Prefabs/AI/Waypoints/AIWaypoint_Base.et" {
+ ID "663CBEF736DEBDE2"
+ Type "SearchAndDestroy"
+ Title "Attack Waypoint"
+ AIBehaviorTree "{6A7B0A1000000001}AI/BehaviorTrees/Waypoints/KK_WP_Attack.bt"
+ AIBehaviorTreeMoveTo "{6A7B0A1000000001}AI/BehaviorTrees/Waypoints/KK_WP_Attack.bt"
+ CompletionRadius 0
+ Autocomplete 0
+ CompletionType Any
+ m_ePace 0
+ m_fStepLength 20
+ m_fPause 2
+ m_fLaneOffset 12
+ m_fArrivalRadius 8
+}

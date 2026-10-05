@@ -116,6 +116,24 @@ modded class SCR_BaseGameMode
 	[Attribute("0", UIWidgets.CheckBox, "Mark doors and windows and prefer those posts.", category: "Koopky CQB/Garrison")]
 	protected bool m_bKK_ClassifyOpenings;
 
+	[Attribute("12", UIWidgets.EditBox, "Distance between attack pair lanes (m)", category: "Koopky CQB/Attack")]
+	protected float m_fKK_AttackLaneOffset;
+
+	[Attribute("20", UIWidgets.EditBox, "Distance of one attack step (m)", category: "Koopky CQB/Attack")]
+	protected float m_fKK_AttackStepLength;
+
+	[Attribute("2", UIWidgets.EditBox, "Seconds a pair holds after a step. Advance scans. Take cover lets the normal attack shoot. One pair and several pairs use the same pause. 0 goes straight on.", category: "Koopky CQB/Attack")]
+	protected float m_fKK_AttackPause;
+
+	[Attribute("8", UIWidgets.EditBox, "Distance to the point that finishes an attack (m)", category: "Koopky CQB/Attack")]
+	protected float m_fKK_AttackArrivalRadius;
+
+	[Attribute("1", UIWidgets.CheckBox, "At the point, normal attack runs the fight. Off, this order keeps them on the cover spot.", category: "Koopky CQB/Attack")]
+	protected bool m_bKK_TakeCoverAttack;
+
+	[Attribute("40", UIWidgets.EditBox, "Distance from the point before a soldier is walked back into cover (m)", category: "Koopky CQB/Attack")]
+	protected float m_fKK_TakeCoverReturn;
+
 	[Attribute("1", UIWidgets.CheckBox, "While clearing or garrisoning, suppression does not slow recognition and the first shot does not wait", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_SharpCombat;
 
@@ -314,6 +332,17 @@ modded class SCR_BaseGameMode
 			context.EndObject();
 		}
 
+		if (context.StartObject("Attack"))
+		{
+			KK_ReadFloat(context, "LaneOffset", m_fKK_AttackLaneOffset);
+			KK_ReadFloat(context, "StepLength", m_fKK_AttackStepLength);
+			KK_ReadFloat(context, "Pause", m_fKK_AttackPause);
+			KK_ReadFloat(context, "ArrivalRadius", m_fKK_AttackArrivalRadius);
+			KK_ReadBool(context, "TakeCoverAttack", m_bKK_TakeCoverAttack);
+			KK_ReadFloat(context, "TakeCoverReturn", m_fKK_TakeCoverReturn);
+			context.EndObject();
+		}
+
 		if (context.StartObject("Combat"))
 		{
 			KK_ReadBool(context, "SharpCombat", m_bKK_SharpCombat);
@@ -484,6 +513,15 @@ modded class SCR_BaseGameMode
 		context.WriteValue("ClassifyOpenings", m_bKK_ClassifyOpenings);
 		context.EndObject();
 
+		context.StartObject("Attack");
+		context.WriteValue("LaneOffset", m_fKK_AttackLaneOffset);
+		context.WriteValue("StepLength", m_fKK_AttackStepLength);
+		context.WriteValue("Pause", m_fKK_AttackPause);
+		context.WriteValue("ArrivalRadius", m_fKK_AttackArrivalRadius);
+		context.WriteValue("TakeCoverAttack", m_bKK_TakeCoverAttack);
+		context.WriteValue("TakeCoverReturn", m_fKK_TakeCoverReturn);
+		context.EndObject();
+
 		context.StartObject("Combat");
 		context.WriteValue("SharpCombat", m_bKK_SharpCombat);
 		context.WriteValue("RoomCombat", m_bKK_RoomCombat);
@@ -614,6 +652,36 @@ modded class SCR_BaseGameMode
 	bool KK_GetClearFailCluster()
 	{
 		return m_bKK_ClearFailCluster;
+	}
+
+	float KK_GetAttackLaneOffset()
+	{
+		return Math.Max(m_fKK_AttackLaneOffset, 4);
+	}
+
+	float KK_GetAttackStepLength()
+	{
+		return Math.Max(m_fKK_AttackStepLength, 8);
+	}
+
+	float KK_GetAttackPause()
+	{
+		return Math.Max(m_fKK_AttackPause, 0);
+	}
+
+	float KK_GetAttackArrivalRadius()
+	{
+		return Math.Max(m_fKK_AttackArrivalRadius, 3);
+	}
+
+	bool KK_GetTakeCoverAttack()
+	{
+		return m_bKK_TakeCoverAttack;
+	}
+
+	float KK_GetTakeCoverReturn()
+	{
+		return Math.Max(m_fKK_TakeCoverReturn, 3);
 	}
 
 	float KK_GetGarrisonSearchRadius()
@@ -837,6 +905,12 @@ modded class SCR_BaseGameMode
 
 		return value;
 	}
+	void KK_SetAttackLaneOffset(float value) { m_fKK_AttackLaneOffset = value; }
+	void KK_SetAttackStepLength(float value) { m_fKK_AttackStepLength = value; }
+	void KK_SetAttackPause(float value) { m_fKK_AttackPause = value; }
+	void KK_SetAttackArrivalRadius(float value) { m_fKK_AttackArrivalRadius = value; }
+	void KK_SetTakeCoverAttack(bool value) { m_bKK_TakeCoverAttack = value; }
+	void KK_SetTakeCoverReturn(float value) { m_fKK_TakeCoverReturn = value; }
 	void KK_SetGarrisonSearchRadius(float value) { m_fKK_GarrisonSearchRadius = value; }
 	void KK_SetGarrisonArrivalRadius(float value) { m_fKK_GarrisonArrivalRadius = value; }
 	void KK_SetHoldRadius(float value) { m_fKK_HoldRadius = value; }
@@ -1484,6 +1558,133 @@ class KK_CQBOrders
 		ClearPending(ResolveGroup(groupEntity));
 	}
 
+	static void NoteAttackPace(IEntity groupEntity, KK_EAttackPace pace)
+	{
+		NoteAttackPaceOn(ResolveGroup(groupEntity), pace);
+	}
+
+	static void ClearAttackPace(IEntity groupEntity)
+	{
+		ClearAttackPaceOn(ResolveGroup(groupEntity));
+	}
+
+	static bool ConsumeAttackPace(SCR_AIGroup group, out KK_EAttackPace pace)
+	{
+		pace = KK_EAttackPace.ADVANCE;
+		if (!group || !s_mAttackPace || !s_mAttackPace.Contains(group))
+			return false;
+
+		int noted = s_mAttackPace.Get(group);
+		s_mAttackPace.Remove(group);
+
+		if (noted == KK_EAttackPace.BOUND)
+			pace = KK_EAttackPace.BOUND;
+		else if (noted == KK_EAttackPace.TAKE_COVER)
+			pace = KK_EAttackPace.TAKE_COVER;
+
+		return true;
+	}
+
+	static void ApplyLatestAttack(
+		IEntity groupEntity,
+		vector position,
+		KK_EAttackPace pace)
+	{
+		KK_AttackWaypoint waypoint = KK_AttackWaypoint.Cast(
+			FindNearestAttack(groupEntity, position)
+		);
+
+		if (waypoint)
+		{
+			waypoint.ApplyScenarioSettings();
+			waypoint.SetPace(pace);
+		}
+
+		ClearAttackPaceOn(ResolveGroup(groupEntity));
+	}
+
+	protected static void NoteAttackPaceOn(SCR_AIGroup group, KK_EAttackPace pace)
+	{
+		if (!group)
+			return;
+
+		if (!s_mAttackPace)
+			s_mAttackPace = new map<SCR_AIGroup, int>();
+
+		int stored = KK_EAttackPace.ADVANCE;
+		if (pace == KK_EAttackPace.BOUND)
+			stored = KK_EAttackPace.BOUND;
+		else if (pace == KK_EAttackPace.TAKE_COVER)
+			stored = KK_EAttackPace.TAKE_COVER;
+
+		s_mAttackPace.Set(group, stored);
+
+		SCR_AIGroup slave = group.GetSlave();
+		if (slave && slave != group)
+			s_mAttackPace.Set(slave, stored);
+	}
+
+	protected static void ClearAttackPaceOn(SCR_AIGroup group)
+	{
+		if (!group || !s_mAttackPace)
+			return;
+
+		if (s_mAttackPace.Contains(group))
+			s_mAttackPace.Remove(group);
+
+		SCR_AIGroup slave = group.GetSlave();
+		if (slave && slave != group && s_mAttackPace.Contains(slave))
+			s_mAttackPace.Remove(slave);
+	}
+
+	protected static AIWaypoint FindNearestAttack(
+		IEntity groupEntity,
+		vector position)
+	{
+		SCR_AIGroup group = ResolveGroup(groupEntity);
+		if (!group)
+			return null;
+
+		AIWaypoint nearest = FindNearestAttackOn(group, position);
+		if (nearest)
+			return nearest;
+
+		SCR_AIGroup slave = group.GetSlave();
+		if (!slave || slave == group)
+			return null;
+
+		return FindNearestAttackOn(slave, position);
+	}
+
+	protected static AIWaypoint FindNearestAttackOn(
+		notnull SCR_AIGroup group,
+		vector position)
+	{
+		array<AIWaypoint> waypoints = {};
+		group.GetWaypoints(waypoints);
+
+		AIWaypoint nearest;
+		float nearestDistance = 25;
+
+		foreach (AIWaypoint waypoint : waypoints)
+		{
+			if (!waypoint || !KK_AttackWaypoint.Cast(waypoint))
+				continue;
+
+			if (IsReplacedOrder(waypoint))
+				continue;
+
+			float distance = vector.Distance(waypoint.GetOrigin(), position);
+			if (distance >= nearestDistance)
+				continue;
+
+			nearestDistance = distance;
+			nearest = waypoint;
+		}
+
+		return nearest;
+	}
+
 	protected static AIWaypoint FindNearestWaypoint(
 		IEntity groupEntity,
 		vector position,
@@ -1573,6 +1774,8 @@ class KK_CQBOrders
 	}
 
 	protected static int s_iRetiring;
+	protected static ref map<SCR_AIGroup, int> s_mAttackPace =
+		new map<SCR_AIGroup, int>();
 
 	static bool IsRetiringOrder()
 	{
@@ -1582,7 +1785,8 @@ class KK_CQBOrders
 	static bool IsBuildingOrder(AIWaypoint waypoint)
 	{
 		return KK_ClearBuildingWaypoint.Cast(waypoint) ||
-			KK_GarrisonBuildingWaypoint.Cast(waypoint);
+			KK_GarrisonBuildingWaypoint.Cast(waypoint) ||
+			KK_AttackWaypoint.Cast(waypoint);
 	}
 
 	static bool IsReplacedOrder(AIWaypoint waypoint)
@@ -1596,6 +1800,10 @@ class KK_CQBOrders
 			KK_GarrisonBuildingWaypoint.Cast(waypoint);
 		if (garrison)
 			return garrison.IsReplaced();
+
+		KK_AttackWaypoint attack = KK_AttackWaypoint.Cast(waypoint);
+		if (attack)
+			return attack.IsReplaced();
 
 		return false;
 	}
@@ -1613,13 +1821,21 @@ class KK_CQBOrders
 		KK_GarrisonBuildingWaypoint garrison =
 			KK_GarrisonBuildingWaypoint.Cast(waypoint);
 		if (garrison)
+		{
 			garrison.MarkReplaced();
+			return;
+		}
+
+		KK_AttackWaypoint attack = KK_AttackWaypoint.Cast(waypoint);
+		if (attack)
+			attack.MarkReplaced();
 	}
 
 	// A radial command and a Game Master placement both add a waypoint.
-	// A move does too. That is a new order, so the clear or garrison
-	// already running has to end. Soldiers still spawning restart the
-	// same waypoint instead, and that path does not come through here.
+	// A move does too. That is a new order, so the attack, clear, or
+	// garrison already running has to end. Soldiers still spawning
+	// restart the same waypoint instead, and that path does not come
+	// through here.
 	static void RetirePreviousBuildingOrders(
 		notnull SCR_AIGroup group,
 		AIWaypoint incoming)
@@ -1642,7 +1858,7 @@ class KK_CQBOrders
 			MarkReplaced(waypoint);
 
 			if (SCR_BaseGameMode.KK_LogEnabled())
-				Print("KK: Previous building order replaced by a new one");
+				Print("KK: Previous order replaced by a new one");
 
 			s_iRetiring++;
 			group.CompleteWaypoint(waypoint);
@@ -1662,7 +1878,8 @@ modded class SCR_AIGroup
 
 		// Waypoints already on the group when it comes up are one queue.
 		// A waypoint added after that, from the radial or the editor, is
-		// a new order and replaces the clear or garrison already running.
+		// a new order and replaces the attack, clear, or garrison
+		// already running.
 		if (!m_bKK_OrdersArmed)
 		{
 			if (!m_bKK_OrderFillScheduled && GetGame())
