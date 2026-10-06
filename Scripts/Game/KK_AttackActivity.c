@@ -8,6 +8,7 @@ class KK_AttackPair
 	bool m_bHolding;
 	bool m_bArrived;
 	float m_fPauseSince;
+	float m_fFirstStopAt;
 	int m_iSide;
 	float m_fLastOrderAt;
 	float m_fStillSince;
@@ -386,7 +387,11 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (!runner.m_bHasGoal || runner.m_bHolding || runner.m_bArrived)
 			StartStep(runner, EMovementType.SPRINT, now);
 
-		if (Reached(runner) && (!IsTakeCover() || PairStopped(runner)))
+		bool stepDone = Reached(runner) && PairStopped(runner);
+		if (IsTakeCover())
+			stepDone = CoverReady(runner, now);
+
+		if (stepDone)
 		{
 			ForgetPairSettled(runner);
 			if (IsTakeCover())
@@ -394,7 +399,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 			else
 				BeginHold(runner);
 
-			if (IsTakeCover() && PauseMs() > 0)
+			bool holdForPause = IsTakeCover() && FightersArrived(runner);
+			if (holdForPause && PauseMs() > 0)
 			{
 				runner.m_fPauseSince = now;
 				runner.m_bPaused = true;
@@ -510,6 +516,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 		pair.m_fStillSince = now;
 		pair.m_vStillPosition = PairCenter(pair);
 		pair.m_iNudges = 0;
+		pair.m_fFirstStopAt = 0;
 		SetPairCrouch(pair, false);
 		// The step does not shoot. A sprint lowers the rifle. A jog keeps it
 		// up, and contact on that jog hands the fight to the normal attack.
@@ -568,6 +575,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 			IssuePair(pair, speed, now);
 		else
 			SetPairSpeed(pair, speed);
+
+		if (speed == EMovementType.SPRINT)
+			SnapPairSprint(pair);
 	}
 
 	protected void Nudge(
@@ -804,6 +814,11 @@ class KK_AttackActivity : SCR_AIActivityBase
 				continue;
 
 			vector goal = pair.m_vGoal + (right * side);
+			// Clear the enemy move before the sprint speed, or this step
+			// runs along the facing instead of the lane.
+			if (speed == EMovementType.SPRINT)
+				KK_GarrisonHold.ReleaseCombatAim(agent);
+
 			KK_AgentMove.Issue(
 				this,
 				m_Group,
@@ -815,6 +830,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 			);
 			SetCrouch(agent, false);
 			ApplyWeaponForSpeed(agent, speed);
+			if (speed == EMovementType.SPRINT)
+				SnapSprintLook(agent, goal);
 		}
 
 		pair.m_fLastOrderAt = now;
@@ -841,13 +858,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 		if (speed == EMovementType.SPRINT)
 		{
-			bool startingSprint = !KK_GarrisonHold.IsBoundSprint(agent);
 			KK_GarrisonHold.SetBoundSprint(agent, true);
 			KK_GarrisonHold.SetAdvancing(agent, false);
 			SetWeapon(agent, false);
-			// A look at the contact turns a sprint into a strafe.
-			if (startingSprint)
-				CancelLook(agent);
 			return;
 		}
 
@@ -1037,6 +1050,64 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 		LookAt(agent, KK_GarrisonHold.ShotAimPoint(enemy), CONTACT_LOOK);
 		return true;
+	}
+
+	// The hold leaves his head on the enemy. That look outranks the lane,
+	// so it has to be replaced, not cancelled, or he finishes the turn
+	// before the sprint.
+	protected void SnapSprintLook(notnull AIAgent agent, vector goal)
+	{
+		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
+		if (!soldier || !soldier.m_UtilityComponent)
+			return;
+
+		if (!soldier.m_UtilityComponent.m_LookAction)
+			return;
+
+		IEntity body = agent.GetControlledEntity();
+		if (!body)
+			return;
+
+		vector flat = goal - body.GetOrigin();
+		flat[1] = 0;
+		if (flat.Length() < 0.5)
+			return;
+
+		flat.Normalize();
+		vector look = body.GetOrigin() + Vector(0, 1.6, 0) + (flat * 12);
+		KK_GarrisonHold.SetSprintLook(body, look);
+		soldier.m_UtilityComponent.m_LookAction.KK_Snap(
+			look,
+			SCR_AILookAction.PRIO_COMMANDER,
+			8
+		);
+	}
+
+	protected void SnapPairSprint(notnull KK_AttackPair pair)
+	{
+		vector axis;
+		vector right;
+		BuildAxis(axis, right);
+
+		int slot = 0;
+		foreach (AIAgent agent : pair.m_aAgents)
+		{
+			if (!agent || !agent.GetControlledEntity())
+				continue;
+
+			if (m_mSettledAt.Contains(agent) || IsReleased(agent))
+				continue;
+
+			if (!KK_GarrisonHold.IsBoundSprint(agent))
+				continue;
+
+			float side = -1.5;
+			if (slot == 1)
+				side = 1.5;
+
+			slot++;
+			SnapSprintLook(agent, pair.m_vGoal + (right * side));
+		}
 	}
 
 	protected void LookAt(notnull AIAgent agent, vector point, float priority = 4)
@@ -1360,6 +1431,99 @@ class KK_AttackActivity : SCR_AIActivityBase
 		}
 
 		return any;
+	}
+
+	// Men who are down do not hold the next bound. A fighter has arrived
+	// when he is on the step. One fighter who has stopped is enough cover
+	// once the handoff time has run, so a partner still on the way does
+	// not stall the pair that is waiting.
+	protected bool CoverReady(notnull KK_AttackPair pair, float now)
+	{
+		int fighters = 0;
+		int arrived = 0;
+		bool stopped = false;
+
+		foreach (AIAgent agent : pair.m_aAgents)
+		{
+			if (!CanFight(agent))
+				continue;
+
+			fighters++;
+			float distance = FlatDistance(
+				agent.GetControlledEntity().GetOrigin(),
+				pair.m_vGoal
+			);
+			if (distance <= STEP_REACH)
+				arrived++;
+
+			if (FlatSpeed(agent) <= MEMBER_STOP)
+				stopped = true;
+		}
+
+		// Nobody left who can cover. The pair that is waiting has to go.
+		if (fighters == 0)
+			return true;
+
+		if (arrived == fighters)
+			return true;
+
+		if (!stopped || CoverHandoffMs() <= 0)
+			return false;
+
+		if (pair.m_fFirstStopAt <= 0)
+			pair.m_fFirstStopAt = now;
+
+		return now - pair.m_fFirstStopAt >= CoverHandoffMs();
+	}
+
+	protected bool FightersArrived(notnull KK_AttackPair pair)
+	{
+		bool any = false;
+
+		foreach (AIAgent agent : pair.m_aAgents)
+		{
+			if (!CanFight(agent))
+				continue;
+
+			any = true;
+			float distance = FlatDistance(
+				agent.GetControlledEntity().GetOrigin(),
+				pair.m_vGoal
+			);
+			if (distance > STEP_REACH)
+				return false;
+		}
+
+		return any;
+	}
+
+	protected bool CanFight(AIAgent agent)
+	{
+		if (!agent)
+			return false;
+
+		IEntity body = agent.GetControlledEntity();
+		if (!body)
+			return false;
+
+		CharacterControllerComponent controller = CharacterControllerComponent.Cast(
+			body.FindComponent(CharacterControllerComponent)
+		);
+		if (!controller)
+			return true;
+
+		if (controller.IsDead() || controller.IsUnconscious())
+			return false;
+
+		return true;
+	}
+
+	protected float CoverHandoffMs()
+	{
+		if (!m_AttackWaypoint)
+			return 2000;
+
+		return m_AttackWaypoint.GetCoverHandoff() * 1000;
 	}
 
 	protected float FlatSpeed(notnull AIAgent agent)
@@ -2188,6 +2352,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 			ForgetPairSettled(pair);
 			pair.m_fProgressBoost = 0;
 			pair.m_iNudges = 0;
+			pair.m_fFirstStopAt = 0;
 		}
 	}
 

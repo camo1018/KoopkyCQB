@@ -5,6 +5,42 @@ modded class SCR_AICombatComponent
 		m_SelectedTarget = null;
 	}
 
+	// The sprint hid the enemy so the run would not aim. If he is still
+	// alive and in sight, he is the target again on the frame the sprint ends.
+	void KK_HoldSprintEnemy(out BaseTarget outCurrentTarget)
+	{
+		if (KK_GarrisonHold.IsBoundSprint(GetOwner()))
+			return;
+
+		BaseTarget known = KK_GarrisonHold.SprintKnown(GetOwner());
+		if (!known)
+			return;
+
+		if (!KK_GarrisonHold.IsLivingTarget(known))
+		{
+			KK_GarrisonHold.ForgetSprintEnemy(GetOwner());
+			return;
+		}
+
+		if (m_SelectedTarget && KK_GarrisonHold.IsLivingTarget(m_SelectedTarget))
+		{
+			KK_GarrisonHold.ForgetSprintEnemy(GetOwner());
+			return;
+		}
+
+		if (!KK_GarrisonHold.SeesTarget(GetOwner(), known))
+			return;
+
+		IEntity enemy = known.GetTargetEntity();
+		if (!enemy)
+			return;
+
+		m_SelectedTarget = known;
+		m_SelectedTargetVisible = true;
+		m_SelectedTargetDestinationPos = KK_GarrisonHold.ShotAimPoint(enemy);
+		outCurrentTarget = known;
+	}
+
 	override void UpdatePerceptionFactor(
 		PerceptionComponent perceptionComp,
 		SCR_AIThreatSystem threatSystem)
@@ -123,6 +159,24 @@ modded class SCR_AICombatComponent
 			// forced back, and the two swaps never finish a reload.
 			outWeaponEvent = false;
 		}
+
+		// A bound sprint is the move. A selected enemy here is what aims
+		// that move, and an aimed move will not sprint. He is remembered
+		// so the stop does not have to recognize him again.
+		if (KK_GarrisonHold.IsBoundSprint(GetOwner()))
+		{
+			KK_GarrisonHold.RememberSprintEnemy(GetOwner(), m_SelectedTarget);
+			KK_ClearTarget();
+			m_SelectedTargetVisible = false;
+			outCurrentTarget = null;
+			outSelectedTargetChanged = false;
+			vector lane;
+			if (KK_GarrisonHold.GetSprintLook(GetOwner(), lane))
+				m_SelectedTargetDestinationPos = lane;
+			return;
+		}
+
+		KK_HoldSprintEnemy(outCurrentTarget);
 
 		// A repeated order starts clean. The selector just put the last
 		// fight back. A last-seen point is not a target of this order.
@@ -363,6 +417,19 @@ class KK_GarrisonHold
 	protected static const float ATTACK_CONTACT_RANGE = 180;
 	// The pair that is bounding. The rifle stays down so the sprint can run.
 	protected static ref set<IEntity> s_BoundSprint = new set<IEntity>();
+	// Combat move states that must refuse every request for that sprint.
+	// A request still in this state is what turns the sprint into a strafe.
+	protected static ref set<SCR_AICombatMoveState> s_SprintMoveLock =
+		new set<SCR_AICombatMoveState>();
+	// Where the sprint is looking. CRX writes the enemy into the look
+	// between order updates, and this puts the lane back.
+	protected static ref map<IEntity, vector> s_SprintLook =
+		new map<IEntity, vector>();
+	// An enemy already selected when the bound started. The sprint does not
+	// aim at him, and perception then drops him, so the stop had to spot
+	// him again. This puts that same target back.
+	protected static ref map<IEntity, ref BaseTarget> s_SprintKnown =
+		new map<IEntity, ref BaseTarget>();
 	// Handed to the fight, then walked back inside the return distance.
 	// His run is his. The others at the point keep the mod.
 	protected static ref set<IEntity> s_Recalled = new set<IEntity>();
@@ -3316,10 +3383,117 @@ class KK_GarrisonHold
 		if (sprinting)
 		{
 			s_BoundSprint.Insert(body);
+			// The fight may already be walking him at the enemy. A sprint
+			// on top of that request runs the same way, off the waypoint.
+			LockSprintMove(body, true);
+			ReleaseCombatAim(body);
 			return;
 		}
 
+		bool wasSprinting = s_BoundSprint.Contains(body);
 		s_BoundSprint.RemoveItem(body);
+		if (wasSprinting)
+			LockSprintMove(body, false);
+		// The lane look outranks a man. Leave it up and the hold cannot
+		// turn onto a target.
+		if (wasSprinting)
+			DropSprintLook(body);
+	}
+
+	// While this is set, that combat move state will not take a request and
+	// will not aim. The bound is the move. A strafe at the enemy is not.
+	static void LockSprintMove(IEntity soldier, bool locked)
+	{
+		SCR_AIUtilityComponent utility = UtilityOf(soldier);
+		if (!utility || !utility.m_CombatMoveState)
+			return;
+
+		if (locked)
+			s_SprintMoveLock.Insert(utility.m_CombatMoveState);
+		else
+			s_SprintMoveLock.RemoveItem(utility.m_CombatMoveState);
+	}
+
+	static bool IsSprintMoveLocked(SCR_AICombatMoveState state)
+	{
+		return state && s_SprintMoveLock.Contains(state);
+	}
+
+	// Drops a combat move that is still steering him at a target. The sprint
+	// has to follow the order, and an aimed step will not take that sprint.
+	static void ReleaseCombatAim(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (!utility)
+			return;
+
+		if (!utility.m_CombatMoveState)
+			return;
+
+		if (utility.m_CombatMoveState.IsExecutingRequest())
+			utility.m_CombatMoveState.CancelRequest();
+
+		utility.m_CombatMoveState.EnableAiming(false);
+	}
+
+	protected static void DropSprintLook(IEntity body)
+	{
+		s_SprintLook.Remove(body);
+
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (!utility || !utility.m_LookAction)
+			return;
+
+		utility.m_LookAction.Cancel();
+	}
+
+	static void SetSprintLook(IEntity soldier, vector look)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		s_SprintLook.Set(body, look);
+	}
+
+	static bool GetSprintLook(IEntity soldier, out vector look)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !s_SprintLook.Contains(body))
+			return false;
+
+		look = s_SprintLook.Get(body);
+		return true;
+	}
+
+	// The man he was already on. Later frames overwrite this while the
+	// selector still has him. An empty frame does not erase it.
+	static void RememberSprintEnemy(IEntity soldier, BaseTarget target)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !IsLivingTarget(target))
+			return;
+
+		s_SprintKnown.Set(body, target);
+	}
+
+	static BaseTarget SprintKnown(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !s_SprintKnown.Contains(body))
+			return null;
+
+		return s_SprintKnown.Get(body);
+	}
+
+	static void ForgetSprintEnemy(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		s_SprintKnown.Remove(body);
 	}
 
 	// The sprint lowered the rifle on its own. The hold has to forget that
@@ -4905,6 +5079,17 @@ modded class SCR_AIAttackBehavior
 			agentEntity = m_Utility.GetOwner();
 		}
 
+		// The bound is a sprint to the next spot. The attack aims that
+		// step, and the aimed step walks.
+		if (
+			KK_GarrisonHold.IsBoundSprint(character) ||
+			KK_GarrisonHold.IsBoundSprint(agentEntity)
+		)
+		{
+			m_bUseCombatMove = false;
+			return 0;
+		}
+
 		// A remembered burst is not a target. The attack would keep firing
 		// at that spot after the body is gone.
 		bool onOrder =
@@ -5465,9 +5650,38 @@ modded class SCR_AILookAction
 		m_fDuration = duration;
 	}
 
-	override void LookAt(vector pos, float priority, float duration = 0.8)
+	// Replaces a look at a man. A lower priority is ignored, so the head
+	// stays on him until that look ends. One restart turns him onto the
+	// lane. Later calls only move the point.
+	void KK_Snap(vector pos, float priority, float duration)
 	{
 		if (SprintIgnoring() || SprintingToCover())
+			return;
+
+		if (pos == vector.Zero)
+			return;
+
+		// A new point while this look is already his does not start the
+		// turn again. Restarting it is the head snapping off the lane.
+		if (m_fPriority == priority && m_vPosition != vector.Zero)
+		{
+			m_vPosition = pos;
+			m_fDuration = duration;
+			m_bCancelLook = false;
+			m_bRestartLook = false;
+			return;
+		}
+
+		m_bCancelLook = false;
+		m_bRestartLook = true;
+		m_vPosition = pos;
+		m_fPriority = priority;
+		m_fDuration = duration;
+	}
+
+	override void LookAt(vector pos, float priority, float duration = 0.8)
+	{
+		if (SprintIgnoring() || SprintingToCover() || BoundSprinting())
 			return;
 
 		super.LookAt(pos, priority, duration);
@@ -5475,7 +5689,7 @@ modded class SCR_AILookAction
 
 	override void LookAt(IEntity ent, float priority, float duration = 0.8)
 	{
-		if (SprintIgnoring() || SprintingToCover())
+		if (SprintIgnoring() || SprintingToCover() || BoundSprinting())
 			return;
 
 		super.LookAt(ent, priority, duration);
@@ -5497,6 +5711,67 @@ modded class SCR_AILookAction
 				KK_GarrisonHold.SprintBeforeReload(m_Utility.m_OwnerEntity) ||
 				KK_GarrisonHold.SprintBeforeReload(m_Utility.GetOwner())
 			);
+	}
+
+	protected bool BoundSprinting()
+	{
+		return m_Utility &&
+			(
+				KK_GarrisonHold.IsBoundSprint(m_Utility.m_OwnerEntity) ||
+				KK_GarrisonHold.IsBoundSprint(m_Utility.GetOwner())
+			);
+	}
+}
+
+// The sprint is this move. Combat movement on it is a strafe at the enemy,
+// and that strafe will not take a sprint.
+modded class SCR_AIMoveIndividuallyBehavior
+{
+	override float CustomEvaluate()
+	{
+		float score = super.CustomEvaluate();
+		if (
+			m_Utility &&
+			(
+				KK_GarrisonHold.IsBoundSprint(m_Utility.m_OwnerEntity) ||
+				KK_GarrisonHold.IsBoundSprint(m_Utility.GetOwner())
+			)
+		)
+			m_bUseCombatMove = false;
+
+		return score;
+	}
+}
+
+// A take cover bound owns the body. Combat movement is how the enemy
+// steers him, and aiming that steer is what refuses the sprint.
+modded class SCR_AICombatMoveState
+{
+	override void ApplyNewRequest(notnull SCR_AICombatMoveRequestBase request)
+	{
+		if (KK_GarrisonHold.IsSprintMoveLocked(this))
+		{
+			request.m_eState = SCR_EAICombatMoveRequestState.CANCELED;
+			if (m_Request && m_Request.m_eState == SCR_EAICombatMoveRequestState.EXECUTING)
+				m_Request.m_eState = SCR_EAICombatMoveRequestState.CANCELED;
+
+			m_Request = null;
+			m_bAimAtTarget = false;
+			return;
+		}
+
+		super.ApplyNewRequest(request);
+	}
+
+	override void EnableAiming(bool enable)
+	{
+		if (enable && KK_GarrisonHold.IsSprintMoveLocked(this))
+		{
+			m_bAimAtTarget = false;
+			return;
+		}
+
+		super.EnableAiming(enable);
 	}
 }
 

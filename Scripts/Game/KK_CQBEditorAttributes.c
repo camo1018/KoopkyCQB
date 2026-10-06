@@ -78,6 +78,7 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 34: return mode.KK_GetAttackLaneOffset();
 			case 35: return mode.KK_GetAttackStepLength();
 			case 38: return mode.KK_GetAttackPause();
+			case 40: return mode.KK_GetCoverHandoff();
 			case 39: return mode.KK_GetAttackContactDuration();
 			case 36: return mode.KK_GetAttackArrivalRadius();
 			case 37: return mode.KK_GetTakeCoverReturn();
@@ -125,6 +126,7 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 34: mode.KK_SetAttackLaneOffset(value); break;
 			case 35: mode.KK_SetAttackStepLength(value); break;
 			case 38: mode.KK_SetAttackPause(value); break;
+			case 40: mode.KK_SetCoverHandoff(value); break;
 			case 39: mode.KK_SetAttackContactDuration(value); break;
 			case 36: mode.KK_SetAttackArrivalRadius(value); break;
 			case 37: mode.KK_SetTakeCoverReturn(value); break;
@@ -405,6 +407,8 @@ class KK_CQBAttrAttackLaneOffset : KK_CQBFloatEditorAttribute {}
 class KK_CQBAttrAttackStepLength : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrAttackPause : KK_CQBFloatEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrCoverHandoff : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrAttackContactDuration : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
