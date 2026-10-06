@@ -128,7 +128,7 @@ modded class SCR_BaseGameMode
 	[Attribute("2", UIWidgets.EditBox, "Take cover: seconds after one fighter in the moving pair has stopped before the holding pair bounds, if the others have not arrived. Men who are down are not counted. 0 waits until every fighter who can still fight has arrived.", category: "Koopky CQB/Attack")]
 	protected float m_fKK_CoverHandoff;
 
-	[Attribute("2", UIWidgets.EditBox, "Seconds an advance or bound shoots on contact before the normal attack takes the fight. 0 hands the fight over immediately.", category: "Koopky CQB/Attack")]
+	[Attribute("2", UIWidgets.EditBox, "Seconds an advance or bound shoots on contact before the normal attack takes the fight. Above 0, a take cover hold uses that shot the whole time the pair is planted. Those seconds time advance and bound only. 0 leaves the fight to the normal attack.", category: "Koopky CQB/Attack")]
 	protected float m_fKK_AttackContactDuration;
 
 	[Attribute("8", UIWidgets.EditBox, "Distance to the point that finishes an attack (m)", category: "Koopky CQB/Attack")]

@@ -23,7 +23,7 @@ class KK_AttackWaypoint : SCR_AIWaypoint
 	[Attribute("2", UIWidgets.EditBox, "Seconds after one fighter has stopped before the next pair bounds, if the others have not arrived. 0 waits for every fighter.")]
 	protected float m_fCoverHandoff;
 
-	[Attribute("2", UIWidgets.EditBox, "Seconds to shoot on contact before the normal attack takes the fight. 0 hands it over immediately.")]
+	[Attribute("2", UIWidgets.EditBox, "Seconds an advance or bound shoots on contact before the normal attack takes the fight. Above 0, a take cover hold uses that shot the whole time the pair is planted. Those seconds time advance and bound only. 0 leaves the fight to the normal attack.")]
 	protected float m_fReturnFire;
 
 	[Attribute("12", UIWidgets.EditBox, "Distance between pair lanes (m)")]

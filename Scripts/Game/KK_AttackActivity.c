@@ -518,8 +518,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 		pair.m_iNudges = 0;
 		pair.m_fFirstStopAt = 0;
 		SetPairCrouch(pair, false);
-		// The step does not shoot. A sprint lowers the rifle. A jog keeps it
-		// up, and contact on that jog hands the fight to the normal attack.
+		// The step does not shoot. A sprint lowers the rifle. The contact
+		// shot from the hold has to drop here, or the aim stays on him.
 		ClearHoldFight(pair);
 
 		IssuePair(pair, speed, now);
@@ -1385,6 +1385,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 					continue;
 
 				m_mSettledAt.Remove(agent);
+				KK_GarrisonHold.SetReturnFire(agent, false);
 				KK_GarrisonHold.SetPinned(agent.GetControlledEntity(), false);
 				SetCrouch(agent, false);
 				// The hold cancelled his move. The next maintain gives
@@ -1401,7 +1402,6 @@ class KK_AttackActivity : SCR_AIActivityBase
 				// send the stay on a later pass so this cancel cannot drop it.
 				KK_AgentMove.SetWantedSpeed(agent, EMovementType.WALK);
 				ApplyWeaponForSpeed(agent, EMovementType.WALK);
-				KK_GarrisonHold.SetMoveFire(agent, false);
 				SetCrouch(agent, true);
 				m_mSettledAt.Set(agent, now);
 			}
@@ -1411,7 +1411,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 			}
 
 			KK_GarrisonHold.SetPinned(agent.GetControlledEntity(), true);
-			if (!HasLivingTarget(agent))
+			if (!HoldContactAgent(agent))
 				LookAgentDownLane(agent, axis);
 		}
 	}
@@ -1606,9 +1606,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 		m_mSettledAt.Clear();
 	}
 
-	// The pair that is not sprinting. The normal attack fires. A move above
-	// that attack was the selected behavior, so the attack never shot, and
-	// the indoor shot trace hits the cover he is pinned against.
+	// The pair that is not sprinting. Feet stay put. Anyone he can already
+	// see is shot by the contact routine, which does not wait on the attack.
 	protected void CoverHold(notnull KK_AttackPair pair, float now)
 	{
 		// The cancel and the stay cannot share a frame. The cancel is for this
@@ -1617,7 +1616,6 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (started)
 			BeginHold(pair);
 
-		ClearHoldFight(pair);
 		SetPairCrouch(pair, true);
 
 		if (
@@ -1628,9 +1626,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 		// After the stay order, so a walk speed does not clear the lock.
 		SetPairPinned(pair, true);
-
-		if (!PairHasLivingTarget(pair))
-			LookDownLane(pair);
+		HoldContact(pair);
 	}
 
 	// Under the normal attack. It keeps him from wandering when he has no
@@ -1683,6 +1679,54 @@ class KK_AttackActivity : SCR_AIActivityBase
 		return false;
 	}
 
+	// The contact shot from Advance. A man in sight is fired on without the
+	// attack's aim delay. With nobody there, the head stays down the lane.
+	protected void HoldContact(notnull KK_AttackPair pair)
+	{
+		vector axis;
+		vector right;
+		bool haveAxis = BuildAxis(axis, right);
+
+		foreach (AIAgent agent : pair.m_aAgents)
+		{
+			if (!agent || IsReleased(agent))
+				continue;
+
+			if (HoldContactAgent(agent))
+				continue;
+
+			if (haveAxis && !HasLivingTarget(agent))
+				LookAgentDownLane(agent, axis);
+		}
+	}
+
+	// True while the contact shot owns him. The lane look stays off then,
+	// or it turns the rifle off the man.
+	protected bool HoldContactAgent(AIAgent agent)
+	{
+		if (!agent || !agent.GetControlledEntity() || IsReleased(agent))
+			return false;
+
+		// Same switch as Advance. Contact duration 0 leaves the hold on the
+		// normal attack. Above 0, the shot stays for the whole hold.
+		if (ReturnFireMs() <= 0 || KK_GarrisonHold.IsBoundSprint(agent))
+		{
+			KK_GarrisonHold.SetReturnFire(agent, false);
+			return false;
+		}
+
+		bool shooting = CanReturnFire(agent);
+		KK_GarrisonHold.SetReturnFire(agent, shooting);
+		if (!shooting)
+			return false;
+
+		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
+		if (soldier && soldier.m_UtilityComponent)
+			KK_GarrisonHold.ApplyMoveFire(soldier.m_UtilityComponent);
+
+		return true;
+	}
+
 	protected void ClearHoldFight(notnull KK_AttackPair pair)
 	{
 		foreach (AIAgent agent : pair.m_aAgents)
@@ -1690,7 +1734,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 			if (!agent)
 				continue;
 
-			KK_GarrisonHold.SetMoveFire(agent, false);
+			KK_GarrisonHold.SetReturnFire(agent, false);
 		}
 	}
 
