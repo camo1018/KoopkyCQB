@@ -125,6 +125,9 @@ modded class SCR_BaseGameMode
 	[Attribute("2", UIWidgets.EditBox, "Seconds a pair holds after a step. Advance scans. Take cover lets the normal attack shoot. One pair and several pairs use the same pause. 0 goes straight on.", category: "Koopky CQB/Attack")]
 	protected float m_fKK_AttackPause;
 
+	[Attribute("2", UIWidgets.EditBox, "Seconds an advance or bound shoots on contact before the normal attack takes the fight. 0 hands the fight over immediately.", category: "Koopky CQB/Attack")]
+	protected float m_fKK_AttackContactDuration;
+
 	[Attribute("8", UIWidgets.EditBox, "Distance to the point that finishes an attack (m)", category: "Koopky CQB/Attack")]
 	protected float m_fKK_AttackArrivalRadius;
 
@@ -134,7 +137,7 @@ modded class SCR_BaseGameMode
 	[Attribute("40", UIWidgets.EditBox, "Distance from the point before a soldier is walked back into cover (m)", category: "Koopky CQB/Attack")]
 	protected float m_fKK_TakeCoverReturn;
 
-	[Attribute("1", UIWidgets.CheckBox, "While clearing, garrisoning, or attacking, suppression does not slow recognition and the first shot does not wait", category: "Koopky CQB/Combat")]
+	[Attribute("1", UIWidgets.CheckBox, "While clearing, garrisoning, or on an attack waypoint, suppression does not slow recognition and the first shot does not wait. An attack stays at the alerted rate for the whole order.", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_SharpCombat;
 
 	[Attribute("1", UIWidgets.CheckBox, "While clearing or garrisoning, shoot the nearest visible enemy in the building instead of staying on one target", category: "Koopky CQB/Combat")]
@@ -337,6 +340,7 @@ modded class SCR_BaseGameMode
 			KK_ReadFloat(context, "LaneOffset", m_fKK_AttackLaneOffset);
 			KK_ReadFloat(context, "StepLength", m_fKK_AttackStepLength);
 			KK_ReadFloat(context, "Pause", m_fKK_AttackPause);
+			KK_ReadFloat(context, "ContactDuration", m_fKK_AttackContactDuration);
 			KK_ReadFloat(context, "ArrivalRadius", m_fKK_AttackArrivalRadius);
 			KK_ReadBool(context, "TakeCoverAttack", m_bKK_TakeCoverAttack);
 			KK_ReadFloat(context, "TakeCoverReturn", m_fKK_TakeCoverReturn);
@@ -517,6 +521,7 @@ modded class SCR_BaseGameMode
 		context.WriteValue("LaneOffset", m_fKK_AttackLaneOffset);
 		context.WriteValue("StepLength", m_fKK_AttackStepLength);
 		context.WriteValue("Pause", m_fKK_AttackPause);
+		context.WriteValue("ContactDuration", m_fKK_AttackContactDuration);
 		context.WriteValue("ArrivalRadius", m_fKK_AttackArrivalRadius);
 		context.WriteValue("TakeCoverAttack", m_bKK_TakeCoverAttack);
 		context.WriteValue("TakeCoverReturn", m_fKK_TakeCoverReturn);
@@ -667,6 +672,11 @@ modded class SCR_BaseGameMode
 	float KK_GetAttackPause()
 	{
 		return Math.Max(m_fKK_AttackPause, 0);
+	}
+
+	float KK_GetAttackContactDuration()
+	{
+		return Math.Max(m_fKK_AttackContactDuration, 0);
 	}
 
 	float KK_GetAttackArrivalRadius()
@@ -908,6 +918,7 @@ modded class SCR_BaseGameMode
 	void KK_SetAttackLaneOffset(float value) { m_fKK_AttackLaneOffset = value; }
 	void KK_SetAttackStepLength(float value) { m_fKK_AttackStepLength = value; }
 	void KK_SetAttackPause(float value) { m_fKK_AttackPause = value; }
+	void KK_SetAttackContactDuration(float value) { m_fKK_AttackContactDuration = value; }
 	void KK_SetAttackArrivalRadius(float value) { m_fKK_AttackArrivalRadius = value; }
 	void KK_SetTakeCoverAttack(bool value) { m_bKK_TakeCoverAttack = value; }
 	void KK_SetTakeCoverReturn(float value) { m_fKK_TakeCoverReturn = value; }

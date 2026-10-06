@@ -20,6 +20,9 @@ class KK_AttackWaypoint : SCR_AIWaypoint
 	[Attribute("2", UIWidgets.EditBox, "Seconds to hold after a step. 0 goes straight on.")]
 	protected float m_fPause;
 
+	[Attribute("2", UIWidgets.EditBox, "Seconds to shoot on contact before the normal attack takes the fight. 0 hands it over immediately.")]
+	protected float m_fReturnFire;
+
 	[Attribute("12", UIWidgets.EditBox, "Distance between pair lanes (m)")]
 	protected float m_fLaneOffset;
 
@@ -57,6 +60,11 @@ class KK_AttackWaypoint : SCR_AIWaypoint
 		return Math.Max(m_fPause, 0);
 	}
 
+	float GetReturnFire()
+	{
+		return Math.Max(m_fReturnFire, 0);
+	}
+
 	float GetLaneOffset()
 	{
 		return Math.Max(m_fLaneOffset, 4);
@@ -75,6 +83,7 @@ class KK_AttackWaypoint : SCR_AIWaypoint
 
 		m_fStepLength = mode.KK_GetAttackStepLength();
 		m_fPause = mode.KK_GetAttackPause();
+		m_fReturnFire = mode.KK_GetAttackContactDuration();
 		m_fLaneOffset = mode.KK_GetAttackLaneOffset();
 		m_fArrivalRadius = mode.KK_GetAttackArrivalRadius();
 	}

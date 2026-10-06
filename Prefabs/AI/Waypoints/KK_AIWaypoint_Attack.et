@@ -10,6 +10,7 @@ KK_AttackWaypoint : "{49CED34BBCD060F0}Prefabs/AI/Waypoints/AIWaypoint_Base.et" 
  m_ePace 0
  m_fStepLength 20
  m_fPause 2
+ m_fReturnFire 2
  m_fLaneOffset 12
  m_fArrivalRadius 8
 }

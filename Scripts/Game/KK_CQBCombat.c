@@ -404,6 +404,9 @@ class KK_GarrisonHold
 	protected static const float MOVE_SHOT_HOLD_MS = 400;
 	protected static ref map<IEntity, IEntity> s_AimTarget = new map<IEntity, IEntity>();
 	protected static ref map<IEntity, float> s_AimSince = new map<IEntity, float>();
+	// Attack contact shoots on the same frame the enemy is in sight.
+	// The indoor shot keeps its own delay.
+	protected static ref set<IEntity> s_InstantAim = new set<IEntity>();
 	protected static ref set<IEntity> s_LeanHeld = new set<IEntity>();
 	protected static ref map<IEntity, float> s_WantedLean = new map<IEntity, float>();
 	protected static ref map<IEntity, IEntity> s_LookEntity = new map<IEntity, IEntity>();
@@ -795,6 +798,32 @@ class KK_GarrisonHold
 	{
 		IEntity body = CharacterBody(soldier);
 		return body && s_MoveFire.Contains(body);
+	}
+
+	// The first burst on an attack. Move fire pulls the trigger, and the
+	// aim delay is skipped so the shot is not waiting on the attack behavior.
+	// Turning it off drops the trigger and leaves the rifle where it is.
+	static void SetReturnFire(IEntity soldier, bool enabled)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		if (enabled)
+		{
+			SetMoveFire(body, true);
+			s_InstantAim.Insert(body);
+			return;
+		}
+
+		if (!s_InstantAim.Contains(body) && !s_MoveFire.Contains(body))
+			return;
+
+		s_InstantAim.RemoveItem(body);
+		s_MoveFire.RemoveItem(body);
+		s_MoveFiring.RemoveItem(body);
+		SetFireWanted(body, false);
+		ClearShot(body);
 	}
 
 	static void ApplyMoveFire(SCR_AIUtilityComponent utility)
@@ -4185,6 +4214,9 @@ class KK_GarrisonHold
 	{
 		if (!canShoot || !enemy)
 			return false;
+
+		if (s_InstantAim.Contains(body))
+			return true;
 
 		float now = 0;
 		BaseWorld world = GetGame().GetWorld();

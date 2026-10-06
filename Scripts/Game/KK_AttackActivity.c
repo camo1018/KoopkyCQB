@@ -52,6 +52,11 @@ class KK_AttackActivity : SCR_AIActivityBase
 	protected bool m_bOriginSet;
 	protected bool m_bNoted;
 	protected bool m_bYielding;
+	// Contact shoots from here before the normal attack, Reaper, or CRX
+	// is allowed to take the fight and run for cover.
+	protected float m_fReturnFireSince;
+	protected bool m_bReturnFired;
+	protected ref set<AIAgent> m_ReturnFireHeld = new set<AIAgent>();
 	protected bool m_bFinished;
 	protected bool m_bCancelled;
 	protected bool m_bRetain;
@@ -179,6 +184,34 @@ class KK_AttackActivity : SCR_AIActivityBase
 		}
 		if (AnyContact() && !IsTakeCover())
 		{
+			if (!m_bReturnFired)
+			{
+				float burst = ReturnFireMs();
+				if (burst > 0)
+				{
+					if (m_fReturnFireSince <= 0)
+					{
+						m_fReturnFireSince = now;
+
+						if (SCR_BaseGameMode.KK_LogEnabled())
+							Print("KK: Attack return fire");
+					}
+
+					if (now - m_fReturnFireSince < burst)
+					{
+						UpdateReturnFire();
+						return GetPriority();
+					}
+
+					EndReturnFire();
+
+					if (SCR_BaseGameMode.KK_LogEnabled())
+						Print("KK: Attack handed the fight on");
+				}
+
+				m_bReturnFired = true;
+			}
+
 			if (!m_bYielding)
 			{
 				m_bYielding = true;
@@ -190,9 +223,13 @@ class KK_AttackActivity : SCR_AIActivityBase
 			return GetPriority();
 		}
 
-		if (m_bYielding)
+		if (m_bYielding || m_bReturnFired || m_fReturnFireSince > 0)
 		{
+			EndReturnFire();
 			m_bYielding = false;
+			m_bReturnFired = false;
+			m_fReturnFireSince = 0;
+
 			foreach (KK_AttackPair pair : m_aPairs)
 			{
 				if (pair)
@@ -1024,6 +1061,92 @@ class KK_AttackActivity : SCR_AIActivityBase
 			foreach (AIAgent agent : pair.m_aAgents)
 				CancelLook(agent);
 		}
+	}
+
+	// Stop the step and shoot anyone this order can already see. Feet stay
+	// put so the cover move cannot start until the burst is over.
+	protected void UpdateReturnFire()
+	{
+		foreach (KK_AttackPair pair : m_aPairs)
+		{
+			if (!pair)
+				continue;
+
+			foreach (AIAgent agent : pair.m_aAgents)
+			{
+				if (!agent || !agent.GetControlledEntity() || IsReleased(agent))
+					continue;
+
+				if (!m_ReturnFireHeld.Contains(agent))
+				{
+					CancelAgent(agent);
+					m_ReturnFireHeld.Insert(agent);
+				}
+
+				ApplyWeaponForSpeed(agent, EMovementType.IDLE);
+				KK_GarrisonHold.SetPinned(agent.GetControlledEntity(), true);
+
+				bool shooting = CanReturnFire(agent);
+				KK_GarrisonHold.SetReturnFire(agent, shooting);
+				if (!shooting)
+					continue;
+
+				SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
+				if (soldier && soldier.m_UtilityComponent)
+					KK_GarrisonHold.ApplyMoveFire(soldier.m_UtilityComponent);
+			}
+		}
+	}
+
+	protected bool CanReturnFire(AIAgent agent)
+	{
+		if (!agent)
+			return false;
+
+		IEntity body = agent.GetControlledEntity();
+		if (!body)
+			return false;
+
+		if (KK_GarrisonHold.VisibleContact(body))
+			return true;
+
+		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
+		if (
+			!soldier ||
+			!soldier.m_UtilityComponent ||
+			!soldier.m_UtilityComponent.m_CombatComponent
+		)
+		{
+			return false;
+		}
+
+		return KK_GarrisonHold.SeesTarget(
+			body,
+			soldier.m_UtilityComponent.m_CombatComponent.GetCurrentTarget()
+		);
+	}
+
+	protected void EndReturnFire()
+	{
+		foreach (KK_AttackPair pair : m_aPairs)
+		{
+			if (!pair)
+				continue;
+
+			foreach (AIAgent agent : pair.m_aAgents)
+			{
+				if (!agent)
+					continue;
+
+				KK_GarrisonHold.SetReturnFire(agent, false);
+
+				IEntity body = agent.GetControlledEntity();
+				if (body)
+					KK_GarrisonHold.SetPinned(body, false);
+			}
+		}
+
+		m_ReturnFireHeld.Clear();
 	}
 
 	protected void ReleaseBoundSprint()
@@ -2038,6 +2161,10 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (m_bPaceSet && pace == m_eApplied)
 			return;
 
+		EndReturnFire();
+		m_bYielding = false;
+		m_bReturnFired = false;
+		m_fReturnFireSince = 0;
 		m_bPaceSet = true;
 		m_eApplied = pace;
 		m_iRunner = 0;
@@ -2080,6 +2207,14 @@ class KK_AttackActivity : SCR_AIActivityBase
 		return m_AttackWaypoint.GetPause() * 1000;
 	}
 
+	protected float ReturnFireMs()
+	{
+		if (!m_AttackWaypoint)
+			return 2000;
+
+		return m_AttackWaypoint.GetReturnFire() * 1000;
+	}
+
 	protected float LaneSpacing()
 	{
 		if (!m_AttackWaypoint)
@@ -2117,6 +2252,11 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 	protected void ReleaseSoldiers()
 	{
+		EndReturnFire();
+		m_bYielding = false;
+		m_bReturnFired = false;
+		m_fReturnFireSince = 0;
+
 		for (int i = 0; i < m_mPairOf.Count(); i++)
 		{
 			AIAgent agent = m_mPairOf.GetKey(i);
