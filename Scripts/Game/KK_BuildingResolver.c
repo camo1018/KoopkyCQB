@@ -58,40 +58,6 @@ class KK_BuildingResolver
 		return results;
 	}
 
-	static BaseBuilding FindNearestBuilding(
-		vector origin,
-		float radius = 75.0)
-	{
-		array<BaseBuilding> buildings =
-			FindOccupiableBuildings(origin, radius);
-
-		if (buildings.IsEmpty())
-			return null;
-
-		return buildings[0];
-	}
-
-	static vector FindNearestBuildingPosition(
-		vector origin,
-		float radius = 75.0)
-	{
-		BaseBuilding building = FindNearestBuilding(origin, radius);
-		if (!building)
-			return origin;
-
-		vector center = SCR_EntityHelper.GetEntityCenterWorld(building);
-
-		if (SCR_BaseGameMode.KK_LogEnabled())
-			PrintFormat(
-				"KK: Nearest building to %1 is %2 at %3",
-				origin,
-				building,
-				center
-			);
-
-		return center;
-	}
-
 	// A hit piece uses its building when the order point is on that building.
 	// A point inside a building uses that one. Open ground uses the nearest.
 	static BaseBuilding ResolveOrderBuilding(

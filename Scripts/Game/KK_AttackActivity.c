@@ -1668,17 +1668,6 @@ class KK_AttackActivity : SCR_AIActivityBase
 		}
 	}
 
-	protected bool PairHasLivingTarget(notnull KK_AttackPair pair)
-	{
-		foreach (AIAgent agent : pair.m_aAgents)
-		{
-			if (HasLivingTarget(agent))
-				return true;
-		}
-
-		return false;
-	}
-
 	// The contact shot from Advance. A man in sight is fired on without the
 	// attack's aim delay. With nobody there, the head stays down the lane.
 	protected void HoldContact(notnull KK_AttackPair pair)
@@ -1834,24 +1823,6 @@ class KK_AttackActivity : SCR_AIActivityBase
 		return mode.KK_GetTakeCoverAttack();
 	}
 
-	protected bool PairOutside(notnull KK_AttackPair pair, float leash)
-	{
-		foreach (AIAgent agent : pair.m_aAgents)
-		{
-			if (!agent || !agent.GetControlledEntity())
-				continue;
-
-			float distance = FlatDistance(
-				agent.GetControlledEntity().GetOrigin(),
-				m_vTarget
-			);
-			if (distance > leash)
-				return true;
-		}
-
-		return false;
-	}
-
 	protected vector CoverAtTarget(notnull KK_AttackPair pair)
 	{
 		vector axis;
@@ -1864,17 +1835,6 @@ class KK_AttackActivity : SCR_AIActivityBase
 			stagger = -2;
 
 		return PreferCover(m_vTarget + (right * stagger), axis, right, true);
-	}
-
-	protected void YieldPair(notnull KK_AttackPair pair)
-	{
-		foreach (AIAgent agent : pair.m_aAgents)
-		{
-			if (!agent || IsReleased(agent))
-				continue;
-
-			YieldSoldier(agent);
-		}
 	}
 
 	// He is inside the finish distance. The push lets him go, and the attack

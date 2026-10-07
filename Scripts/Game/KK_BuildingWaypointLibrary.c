@@ -95,27 +95,6 @@ class KK_BuildingWaypointLibrary
 			scaleZ = 1.0;
 	}
 
-	static string CacheKey(
-		string prefabName,
-		float scaleX,
-		float scaleY,
-		float scaleZ,
-		float horizontalSpacing,
-		float verticalSpacing,
-		float deduplicateDistance)
-	{
-		return string.Format(
-			"%1|%2|%3|%4|%5|%6|%7",
-			prefabName,
-			scaleX.ToString(3),
-			scaleY.ToString(3),
-			scaleZ.ToString(3),
-			horizontalSpacing.ToString(3),
-			verticalSpacing.ToString(3),
-			deduplicateDistance.ToString(3)
-		);
-	}
-
 	static bool ScaleMatches(
 		notnull KK_PrefabWaypointSet prefabSet,
 		float scaleX,
@@ -791,44 +770,6 @@ class KK_BuildingWaypointLibrary
 	{
 		prefabSet.m_bDropRoof = !prefabSet.m_bDropRoof;
 		SaveToDisk();
-	}
-
-	static void ToggleForbiddenFloor(notnull KK_PrefabWaypointSet prefabSet, float localY)
-	{
-		for (int i = prefabSet.m_aForbiddenFloorYs.Count() - 1; i >= 0; i--)
-		{
-			if (Math.AbsFloat(prefabSet.m_aForbiddenFloorYs[i] - localY) <= FLOOR_BAND)
-			{
-				prefabSet.m_aForbiddenFloorYs.Remove(i);
-				SaveToDisk();
-				return;
-			}
-		}
-
-		prefabSet.m_aForbiddenFloorYs.Insert(localY);
-		SaveToDisk();
-	}
-
-	static bool IsForbiddenFloorIndex(notnull KK_PrefabWaypointSet prefabSet, int floorIndex)
-	{
-		array<float> bands = {};
-		CollectFloorBands(prefabSet, bands);
-
-		if (floorIndex < 0 || floorIndex >= bands.Count())
-			return false;
-
-		return IsFloorForbidden(prefabSet, bands[floorIndex]);
-	}
-
-	static void ToggleForbiddenFloorIndex(notnull KK_PrefabWaypointSet prefabSet, int floorIndex)
-	{
-		array<float> bands = {};
-		CollectFloorBands(prefabSet, bands);
-
-		if (floorIndex < 0 || floorIndex >= bands.Count())
-			return;
-
-		ToggleForbiddenFloor(prefabSet, bands[floorIndex]);
 	}
 
 	static void CollectFloorBands(

@@ -385,7 +385,6 @@ class KK_GarrisonHold
 	// Unlocked while unconscious. The speed override does not stick until he is up.
 	protected static ref array<IEntity> s_SpeedRelease = {};
 	protected static bool s_bSpeedReleaseTicking;
-	protected static ref set<IEntity> s_Traveling = new set<IEntity>();
 	protected static ref set<IEntity> s_IgnoringTargets = new set<IEntity>();
 	protected static ref set<IEntity> s_DoorFiring = new set<IEntity>();
 	protected static ref set<IEntity> s_MoveFire = new set<IEntity>();
@@ -517,7 +516,6 @@ class KK_GarrisonHold
 	// An empty reload outlasts both of those. IsReloading() drops between
 	// stages, and a second order in that gap plays the animation again.
 	protected static const float EMPTY_RELOAD_MS = 4500;
-	protected static const float RELOAD_COVER_RADIUS = 0.8;
 	protected static const float RELOAD_NODE_RADIUS = 0.2;
 	protected static const float RELOAD_NODE_THERE = 1.5;
 	protected static const float RELOAD_NODE_ARRIVE = 3;
@@ -540,10 +538,7 @@ class KK_GarrisonHold
 			return;
 
 		if (pinned)
-		{
-			s_Traveling.RemoveItem(body);
 			s_Pinned.Insert(body);
-		}
 		else
 		{
 			s_Pinned.RemoveItem(body);
@@ -659,7 +654,6 @@ class KK_GarrisonHold
 		SetIgnoringTargets(agent, false);
 		SetMoveFire(agent, false);
 		SetDoorFiring(agent, false);
-		SetTraveling(agent, false);
 		ClearApproachGoal(agent);
 
 		IEntity body = agent.GetControlledEntity();
@@ -766,31 +760,6 @@ class KK_GarrisonHold
 		DropRememberedAim(body);
 		CancelCombatMove(body);
 		ClearApproachGoal(body);
-	}
-
-	// On the way to a post, combat must not steer them off the route.
-	// Speed stays free so they can still sprint. A foot lock would stop the run.
-	static void SetTraveling(IEntity soldier, bool traveling)
-	{
-		if (!soldier)
-			return;
-
-		if (!traveling)
-		{
-			s_Traveling.RemoveItem(soldier);
-			return;
-		}
-
-		if (s_Pinned.Contains(soldier))
-			return;
-
-		s_Traveling.Insert(soldier);
-		CancelCombatMove(soldier);
-	}
-
-	static bool IsTraveling(IEntity soldier)
-	{
-		return soldier && s_Traveling.Contains(soldier);
 	}
 
 	// Outside the building the sprint ignores enemies. A target raises the
@@ -2304,16 +2273,6 @@ class KK_GarrisonHold
 			return false;
 
 		return WorldTime() - s_ReloadDashAt.Get(body) >= RELOAD_DASH_MS;
-	}
-
-	static bool AtReloadCover(IEntity soldier, vector position)
-	{
-		IEntity body = CharacterBody(soldier);
-		if (!body || !s_ReloadDash.Contains(body))
-			return false;
-
-		return vector.Distance(position, s_ReloadDash.Get(body)) <=
-			RELOAD_COVER_RADIUS;
 	}
 
 	// True while he should keep moving. He runs to the cluster node farthest
@@ -3978,17 +3937,6 @@ class KK_GarrisonHold
 		}
 	}
 
-	// True while this order has a living enemy it is going to shoot, or the
-	// combat component already has one in sight.
-	static bool HasShootableEnemy(IEntity soldier)
-	{
-		IEntity body = CharacterBody(soldier);
-		if (body && s_ShotLive.Contains(body))
-			return true;
-
-		return HasVisibleEnemy(soldier);
-	}
-
 	// The moving ray misses for a few checks and then finds him again. Dropping
 	// the enemy on the first miss releases the trigger before the gun fires.
 	protected static void HoldMoveShot(
@@ -4805,16 +4753,6 @@ class KK_GarrisonHold
 			local[1] <= maxs[1] + 1.0 &&
 			local[2] >= mins[2] &&
 			local[2] <= maxs[2];
-	}
-
-	static void SuppressTargeting(notnull AIAgent agent)
-	{
-		SetIgnoringTargets(agent, true);
-		SetIgnoringTargets(agent.GetControlledEntity(), true);
-
-		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
-		if (soldier)
-			EnforceSprintIgnore(soldier.m_UtilityComponent);
 	}
 
 	// Called from the soldier's own evaluation so a later target reaction

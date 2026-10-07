@@ -2103,17 +2103,6 @@ bool EnsureNavmeshLoaded(
 		return true;
 	}
 
-	void ResetStates()
-	{
-		foreach (KK_InteriorTarget target : m_aTargets)
-		{
-			target.m_eState =
-				KK_EInteriorTargetState.PENDING;
-
-			target.m_iRetries = 0;
-		}
-	}
-
 	bool HasPendingOrActive()
 	{
 		foreach (KK_InteriorTarget target : m_aTargets)
@@ -2124,22 +2113,6 @@ bool EnsureNavmeshLoaded(
 			if (
 				target.m_eState == KK_EInteriorTargetState.PENDING ||
 				target.m_eState == KK_EInteriorTargetState.ACTIVE
-			)
-			{
-				return true;
-			}
-		}
-
-		return false;
-	}
-
-	bool HasPending()
-	{
-		foreach (KK_InteriorTarget target : m_aTargets)
-		{
-			if (
-				target &&
-				target.m_eState == KK_EInteriorTargetState.PENDING
 			)
 			{
 				return true;

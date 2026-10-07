@@ -61,8 +61,6 @@ class KK_Opening
 	bool m_bHaveState;
 	bool m_bStalled;
 	bool m_bOpenCalled;
-	bool m_bStallAnchorSet;
-	vector m_vStallAnchor;
 	float m_fLastOpenCall;
 	bool m_bLoggedHold;
 }
@@ -719,7 +717,6 @@ class KK_Passage
 		if (OpeningPassable(opening))
 		{
 			opening.m_bStalled = false;
-			opening.m_bStallAnchorSet = false;
 			opening.m_bLoggedHold = false;
 			return;
 		}
@@ -797,7 +794,6 @@ class KK_Passage
 		opening.m_bOpenCalled = true;
 		opening.m_bHaveState = false;
 		opening.m_bStalled = false;
-		opening.m_bStallAnchorSet = false;
 	}
 
 	protected static bool WantsOpenCommand(notnull BaseDoorComponent door)

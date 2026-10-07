@@ -100,24 +100,4 @@ class KK_AuthoredRouteHelper
 		return routeIndex >= routeGoals.Count();
 	}
 
-	static bool AdvanceIfArrived(
-		array<vector> routeGoals,
-		inout int routeIndex,
-		vector unitPosition,
-		vector finalPosition,
-		float arrivalRadius)
-	{
-		if (!routeGoals || routeGoals.IsEmpty() || routeIndex >= routeGoals.Count())
-		{
-			return vector.Distance(unitPosition, finalPosition) <= arrivalRadius;
-		}
-
-		vector goal = routeGoals[routeIndex];
-		if (vector.Distance(unitPosition, goal) > arrivalRadius)
-			return false;
-
-		routeIndex++;
-		return routeIndex >= routeGoals.Count() &&
-			vector.Distance(unitPosition, finalPosition) <= arrivalRadius;
-	}
 }

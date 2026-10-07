@@ -58,26 +58,6 @@ class KK_WaypointAuthoring
 	protected static bool s_bHeightWeaponLocked;
 	protected static bool s_bHeightWeaponWasDisabled;
 
-	static BaseBuilding GetLockedBuilding()
-	{
-		return s_LockedBuilding;
-	}
-
-	static string GetLockedPrefab()
-	{
-		return s_sLockedPrefab;
-	}
-
-	static int GetLastWaypointId()
-	{
-		return s_iLastWaypointId;
-	}
-
-	static bool IsDebugDrawEnabled()
-	{
-		return s_bDebugDraw;
-	}
-
 	static bool Enabled()
 	{
 		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
@@ -98,24 +78,6 @@ class KK_WaypointAuthoring
 			return null;
 
 		return controller.GetControlledEntity();
-	}
-
-	static BaseBuilding ResolveBuildingUnderPlayer()
-	{
-		IEntity player = GetLocalPlayerEntity();
-		if (!player)
-			return null;
-
-		BaseBuilding fromParent =
-			KK_BuildingResolver.ResolveBuildingRoot(player);
-
-		if (fromParent)
-			return fromParent;
-
-		return KK_BuildingResolver.FindNearestBuilding(
-			player.GetOrigin(),
-			8.0
-		);
 	}
 
 	static BaseBuilding ResolveBuildingInSight()
@@ -1815,22 +1777,6 @@ class KK_WaypointAuthoring
 		RefreshDebugDraw();
 	}
 
-	protected static SCR_AIGroup FindLocalPlayerGroup()
-	{
-		SCR_PlayerControllerGroupComponent groupController =
-			SCR_PlayerControllerGroupComponent.GetLocalPlayerControllerGroupComponent();
-
-		if (!groupController)
-			return null;
-
-		SCR_GroupsManagerComponent groupsManager =
-			SCR_GroupsManagerComponent.GetInstance();
-
-		if (!groupsManager)
-			return null;
-
-		return groupsManager.FindGroup(groupController.GetGroupID());
-	}
 }
 
 class KK_AuthorSnapshot

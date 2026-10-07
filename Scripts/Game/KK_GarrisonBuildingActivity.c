@@ -15,7 +15,6 @@ class KK_GarrisonAgentAssignment
 	bool m_bRotating;
 	bool m_bCombatYield;
 	bool m_bFacingApplied;
-	bool m_bCombatMove;
 	bool m_bEntryPriority;
 	bool m_bCanFight;
 	bool m_bPassageStep;
@@ -606,7 +605,6 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			if (!settledAtPost)
 			{
 				KK_GarrisonHold.SetPinned(controlledEntity, false);
-				KK_GarrisonHold.SetTraveling(controlledEntity, false);
 
 				if (!passageOverride && !attacking)
 				{
@@ -618,7 +616,6 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			}
 			else
 			{
-				KK_GarrisonHold.SetTraveling(controlledEntity, false);
 				KK_GarrisonHold.ClearApproachGoal(controlledEntity);
 			}
 
@@ -1743,29 +1740,6 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		return currentTime - assignment.m_fContactSeenAt <= CONTACT_GRACE_MS;
 	}
 
-	protected vector AimPosition(notnull AIAgent agent, vector fallback)
-	{
-		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
-		if (!soldier || !soldier.m_UtilityComponent)
-			return fallback;
-
-		SCR_AICombatComponent combat =
-			soldier.m_UtilityComponent.m_CombatComponent;
-
-		if (!combat)
-			return fallback;
-
-		BaseTarget target = combat.GetCurrentTarget();
-		if (!target)
-			return fallback;
-
-		IEntity targetEntity = target.GetTargetEntity();
-		if (targetEntity && KK_GarrisonHold.IsFightable(targetEntity))
-			return targetEntity.GetOrigin();
-
-		return fallback;
-	}
-
 	protected void CollectPassageSoldiers(
 		notnull array<ref KK_PassageSoldier> soldiers)
 	{
@@ -2250,7 +2224,6 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			return;
 
 		KK_GarrisonHold.SetPinned(body, false);
-		KK_GarrisonHold.SetTraveling(body, false);
 		KK_GarrisonHold.ClearApproachGoal(body);
 		KK_GarrisonHold.SetIgnoringTargets(body, false);
 		KK_GarrisonHold.SetDoorFiring(body, false);
