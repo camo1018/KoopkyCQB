@@ -2333,19 +2333,23 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		if (!contact && !assignment.m_bPlanted)
 			assignment.m_fPlantUntil = 0;
 
+		// The room gun drops its shot whenever the moving trace misses, so that
+		// shot is often already gone on this tick. A living enemy he can see
+		// right now is enough to stop. The grace after that only holds a
+		// plant that has already started.
+		bool seeing = HasLivingTarget(assignment.m_Agent);
+		if (!seeing && KK_GarrisonHold.VisibleContact(body))
+			seeing = true;
+
 		// A reload sprint lowers the rifle and clears the shot. He can still
 		// shoot, and someone is in sight right now, so the sprint is over.
-		if (
-			KK_GarrisonHold.OwnsShot(body) &&
-			KK_GarrisonHold.HasVisibleEnemy(body) &&
-			KK_GarrisonHold.SprintBeforeReload(body)
-		)
+		if (seeing && KK_GarrisonHold.SprintBeforeReload(body))
 		{
 			KK_GarrisonHold.ClearReloadDash(body);
 			KK_GarrisonHold.SetReloadCover(body, false);
 		}
 
-		bool want = KK_GarrisonHold.WantsSteadyShot(body);
+		bool want = seeing || KK_GarrisonHold.WantsSteadyShot(body);
 		bool hold = want || (assignment.m_bPlanted && contact);
 		if (!hold)
 		{

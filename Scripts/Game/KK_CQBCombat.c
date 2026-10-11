@@ -5862,10 +5862,16 @@ modded class SCR_AILookAction
 
 // The sprint is this move. Combat movement on it is a strafe at the enemy,
 // and that strafe will not take a sprint.
+// A plant pins him, but this order's speed is run and the behavior applies
+// that speed on its own evaluation. Idle from the clear is gone by then,
+// so the route has to lose the behavior while the pin is on.
 modded class SCR_AIMoveIndividuallyBehavior
 {
 	override float CustomEvaluate()
 	{
+		if (PlantHoldsFeet())
+			return 0;
+
 		float score = super.CustomEvaluate();
 		if (!m_Utility)
 			return score;
@@ -5884,6 +5890,35 @@ modded class SCR_AIMoveIndividuallyBehavior
 			m_bUseCombatMove = false;
 
 		return score;
+	}
+
+	protected bool PlantHoldsFeet()
+	{
+		if (!m_Utility)
+			return false;
+
+		IEntity body = m_Utility.m_OwnerEntity;
+		if (!KK_GarrisonHold.IsPinned(body) && !KK_GarrisonHold.IsPinned(m_Utility.GetOwner()))
+			return false;
+
+		if (!body)
+		{
+			AIAgent agent = AIAgent.Cast(m_Utility.GetOwner());
+			if (agent)
+				body = agent.GetControlledEntity();
+		}
+
+		if (!body)
+			return true;
+
+		AICharacterMovementComponent movement =
+			AICharacterMovementComponent.Cast(
+				body.FindComponent(AICharacterMovementComponent)
+			);
+		if (movement)
+			movement.SetMovementTypeWanted(EMovementType.IDLE);
+
+		return true;
 	}
 }
 
