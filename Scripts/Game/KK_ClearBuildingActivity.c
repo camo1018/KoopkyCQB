@@ -16,6 +16,8 @@ class KK_InteriorAgentAssignment
 	bool m_bReloadMove;
 	bool m_bHadContact;
 	bool m_bInsidePush;
+	bool m_bPlanted;
+	float m_fPlantUntil;
 	float m_fContactSeenAt;
 	vector m_vReloadGoal;
 	ref array<vector> m_aRouteGoals = {};
@@ -97,6 +99,9 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 	// the soldier alerted the whole time. That is long enough to miss the
 	// node. A second covers a corner blocking the trace.
 	protected static const float CONTACT_GRACE_MS = 1000;
+	// A man he can see stops the route. The cap sends him on again so a
+	// figure in a window cannot hold the stack for the rest of the clear.
+	protected static const float PLANT_CAP_MS = 4000;
 
 	void KK_ClearBuildingActivity(
 		SCR_AIGroupUtilityComponent utility,
@@ -495,9 +500,20 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				// target still pauses the clocks for a short grace after
 				// the trace breaks. The threat bar stays up much longer
 				// than that, and it must not hold the route.
+				// A committed shot does. He plants and fires from where he
+				// stands, then the route below starts again.
 				bool contact = InContact(assignment, currentTime);
+				bool resumeRoute = false;
+				bool planting = HoldClearPlant(
+					assignment,
+					contact,
+					currentTime,
+					resumeRoute
+				);
 
-				if (assignment.m_bHadContact && !contact)
+				// Planting cancels the run for the shot. Saying it again in this
+				// pass would walk him through the burst.
+				if (!planting && assignment.m_bHadContact && !contact)
 				{
 					assignment.m_bInsidePush = false;
 					assignment.m_fStillSince = currentTime;
@@ -512,7 +528,18 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 						true
 					);
 				}
-				else if (!assignment.m_bHadContact && contact)
+				else if (!planting && resumeRoute)
+				{
+					assignment.m_fStillSince = currentTime;
+					assignment.m_fStartedAt = currentTime;
+					IssueMoveOrder(
+						assignment.m_Agent,
+						AssignmentMoveGoal(assignment),
+						EMovementType.RUN,
+						true
+					);
+				}
+				else if (!planting && !assignment.m_bHadContact && contact)
 				{
 					IssueMoveOrder(
 						assignment.m_Agent,
@@ -525,6 +552,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					);
 				}
 				else if (
+					!planting &&
 					!assignment.m_bInsidePush &&
 					KK_GarrisonHold.OwnsShot(assignment.m_Agent) &&
 					(
@@ -545,12 +573,12 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 						true
 					);
 				}
-				else if (!KK_GarrisonHold.OwnsShot(assignment.m_Agent))
+				else if (!planting && !KK_GarrisonHold.OwnsShot(assignment.m_Agent))
 					assignment.m_bInsidePush = false;
 
 				assignment.m_bHadContact = contact;
 
-				if (contact)
+				if (contact || planting)
 				{
 					assignment.m_fStillSince = currentTime;
 					assignment.m_fStartedAt += timerDelta;
@@ -583,12 +611,17 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				vector unitPosition =
 					assignment.m_Agent.GetControlledEntity().GetOrigin();
 
-				bool reloadMove = DriveClearReload(
-					assignment,
-					unitPosition,
-					currentTime
-				);
-				if (assignment.m_bReloadMove && !reloadMove)
+				bool reloadMove = false;
+				if (!planting)
+				{
+					reloadMove = DriveClearReload(
+						assignment,
+						unitPosition,
+						currentTime
+					);
+				}
+
+				if (assignment.m_bReloadMove && !reloadMove && !planting)
 				{
 					assignment.m_fLastOrderAt = currentTime;
 					IssueMoveOrder(
@@ -598,7 +631,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				}
 				assignment.m_bReloadMove = reloadMove;
 
-				if (!reloadMove)
+				if (!reloadMove && !planting)
 				{
 				vector moveGoal = AssignmentMoveGoal(assignment);
 				bool onFinalGoal = KK_AuthoredRouteHelper.IsOnFinalGoal(
@@ -2255,6 +2288,135 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		return false;
 	}
 
+	// The room gun has a living body it can shoot. Stop the route and fire
+	// from this spot. Threat with nobody in sight does not plant. The latch
+	// stays up through the contact grace, and the cap lets the clear go on
+	// while that same contact is still in front of him.
+	protected bool HoldClearPlant(
+		notnull KK_InteriorAgentAssignment assignment,
+		bool contact,
+		float currentTime,
+		out bool resumeRoute)
+	{
+		resumeRoute = false;
+
+		IEntity body = assignment.m_Agent.GetControlledEntity();
+		if (!body)
+			return false;
+
+		if (KK_GarrisonHold.CannotShoot(body))
+		{
+			resumeRoute = EndClearPlant(assignment, !contact);
+			return false;
+		}
+
+		bool capSpent =
+			assignment.m_fPlantUntil > 0 &&
+			currentTime >= assignment.m_fPlantUntil;
+		if (capSpent)
+		{
+			bool wasPlanted = assignment.m_bPlanted;
+			if (wasPlanted)
+				EndClearPlant(assignment, false);
+
+			if (contact || wasPlanted)
+			{
+				resumeRoute = wasPlanted;
+				return false;
+			}
+
+			assignment.m_fPlantUntil = 0;
+		}
+
+		// A deadline left over from the last contact. Clearing it while he is
+		// still planted would let this shot run with no cap.
+		if (!contact && !assignment.m_bPlanted)
+			assignment.m_fPlantUntil = 0;
+
+		// A reload sprint lowers the rifle and clears the shot. He can still
+		// shoot, and someone is in sight right now, so the sprint is over.
+		if (
+			KK_GarrisonHold.OwnsShot(body) &&
+			KK_GarrisonHold.HasVisibleEnemy(body) &&
+			KK_GarrisonHold.SprintBeforeReload(body)
+		)
+		{
+			KK_GarrisonHold.ClearReloadDash(body);
+			KK_GarrisonHold.SetReloadCover(body, false);
+		}
+
+		bool want = KK_GarrisonHold.WantsSteadyShot(body);
+		bool hold = want || (assignment.m_bPlanted && contact);
+		if (!hold)
+		{
+			resumeRoute = EndClearPlant(assignment, !contact);
+			return false;
+		}
+
+		if (!assignment.m_bPlanted)
+		{
+			assignment.m_bPlanted = true;
+			assignment.m_fPlantUntil = currentTime + PLANT_CAP_MS;
+			assignment.m_bReloadMove = false;
+			assignment.m_bRunSet = false;
+			if (KK_GarrisonHold.OwnsShot(assignment.m_Agent))
+				assignment.m_bInsidePush = true;
+
+			KK_GarrisonHold.ClearReloadDash(body);
+			KK_GarrisonHold.SetReloadCover(body, false);
+			CancelAgentOrder(assignment.m_Agent);
+
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				Print("KK: Clear plant, shooting in place");
+		}
+
+		KK_GarrisonHold.SetPinned(body, true);
+		KK_AgentMove.SetWantedSpeed(assignment.m_Agent, EMovementType.IDLE);
+		return true;
+	}
+
+	// Drops the plant. The cap deadline stays while this contact is still
+	// up, so the same man does not pin him again the next frame.
+	protected bool EndClearPlant(
+		notnull KK_InteriorAgentAssignment assignment,
+		bool contactEnded)
+	{
+		bool wasPlanted = assignment.m_bPlanted;
+		assignment.m_bPlanted = false;
+		if (contactEnded)
+			assignment.m_fPlantUntil = 0;
+
+		if (!wasPlanted)
+			return false;
+
+		assignment.m_bRunSet = false;
+		KK_GarrisonHold.SetPinned(
+			assignment.m_Agent.GetControlledEntity(),
+			false
+		);
+
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			Print("KK: Clear plant released");
+
+		return true;
+	}
+
+	protected void DropPlant(KK_InteriorAgentAssignment assignment)
+	{
+		if (!assignment)
+			return;
+
+		assignment.m_bPlanted = false;
+		assignment.m_fPlantUntil = 0;
+		if (!assignment.m_Agent)
+			return;
+
+		KK_GarrisonHold.SetPinned(
+			assignment.m_Agent.GetControlledEntity(),
+			false
+		);
+	}
+
 	protected void IssueMoveOrder(
 		notnull AIAgent agent,
 		vector position,
@@ -2290,9 +2452,9 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		// route order. With room combat on, leftover danger does the same
 		// while the threat bar is still falling. Room combat off leaves
 		// that fight at the normal priorities.
-		// Within range of the building, he keeps this route while he knows someone is there. A
-		// sight line is not required. The room gun fires once he can see,
-		// and the threat hide does not get to plant him.
+		// Within range of the building, threat with nobody in sight still
+		// keeps this route. HoldClearPlant is what stops him once the room
+		// gun has a body it can shoot. The threat hide does not.
 		bool stepOver =
 			HoldsDownedTarget(agent) ||
 			(
@@ -2884,6 +3046,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		if (assignment && assignment.m_Agent)
 		{
 			assignment.m_bFacingApplied = false;
+			DropPlant(assignment);
 
 			KK_GarrisonHold.SetClearing(
 				assignment.m_Agent.GetControlledEntity(),
@@ -2924,6 +3087,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		if (assignment && assignment.m_Agent)
 		{
 			assignment.m_bFacingApplied = false;
+			DropPlant(assignment);
 
 			KK_GarrisonHold.SetClearing(
 				assignment.m_Agent.GetControlledEntity(),
@@ -3158,6 +3322,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 			if (assignment.m_Agent)
 			{
+				DropPlant(assignment);
 				KK_GarrisonHold.SetClearing(
 					assignment.m_Agent.GetControlledEntity(),
 					false

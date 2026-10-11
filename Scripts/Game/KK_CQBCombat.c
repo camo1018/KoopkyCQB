@@ -989,7 +989,9 @@ class KK_GarrisonHold
 		// The commit already required a clear shot. Checking it again every
 		// frame drops the trigger while he is moving, so the gun never cycles.
 		// It stays down until the target refresh gives that enemy up.
-		bool canShoot = IsMoveFire(body);
+		// A plant is standing still, so the trace is checked again and a
+		// wall he is now behind drops the trigger.
+		bool canShoot = IsMoveFire(body) && !IsPinned(body);
 		if (!canShoot)
 		{
 			canShoot = ShotStillVisible(body);
