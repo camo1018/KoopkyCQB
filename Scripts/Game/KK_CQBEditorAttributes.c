@@ -82,6 +82,7 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 39: return mode.KK_GetAttackContactDuration();
 			case 36: return mode.KK_GetAttackArrivalRadius();
 			case 37: return mode.KK_GetTakeCoverReturn();
+			case 41: return mode.KK_GetRoomCombatRange();
 		}
 
 		return mode.KK_GetHorizontalSpacing();
@@ -130,6 +131,7 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 39: mode.KK_SetAttackContactDuration(value); break;
 			case 36: mode.KK_SetAttackArrivalRadius(value); break;
 			case 37: mode.KK_SetTakeCoverReturn(value); break;
+			case 41: mode.KK_SetRoomCombatRange(value); break;
 			default: mode.KK_SetHorizontalSpacing(value); break;
 		}
 	}
@@ -295,6 +297,8 @@ class KK_CQBAttrClassifyOpenings : KK_CQBBoolEditorAttribute {}
 class KK_CQBAttrSharpCombat : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrRoomCombat : KK_CQBBoolEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrRoomCombatRange : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrShotDelay : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]

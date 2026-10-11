@@ -15,6 +15,7 @@ class KK_InteriorAgentAssignment
 	bool m_bRunSet;
 	bool m_bReloadMove;
 	bool m_bHadContact;
+	bool m_bInsidePush;
 	float m_fContactSeenAt;
 	vector m_vReloadGoal;
 	ref array<vector> m_aRouteGoals = {};
@@ -498,6 +499,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 				if (assignment.m_bHadContact && !contact)
 				{
+					assignment.m_bInsidePush = false;
 					assignment.m_fStillSince = currentTime;
 					assignment.m_fStartedAt = currentTime;
 					KK_GarrisonHold.ReleaseLatentCombat(
@@ -518,7 +520,33 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 						EMovementType.RUN,
 						true
 					);
+					assignment.m_bInsidePush = KK_GarrisonHold.OwnsShot(
+						assignment.m_Agent
+					);
 				}
+				else if (
+					!assignment.m_bInsidePush &&
+					KK_GarrisonHold.OwnsShot(assignment.m_Agent) &&
+					(
+						contact ||
+						KK_GarrisonHold.IsAware(assignment.m_Agent)
+					)
+				)
+				{
+					// He already knew someone was in the house when he got
+					// inside. A sight line is not required. The move from
+					// out there sits under the threat hide, so the route
+					// has to be said again.
+					assignment.m_bInsidePush = true;
+					IssueMoveOrder(
+						assignment.m_Agent,
+						AssignmentMoveGoal(assignment),
+						EMovementType.RUN,
+						true
+					);
+				}
+				else if (!KK_GarrisonHold.OwnsShot(assignment.m_Agent))
+					assignment.m_bInsidePush = false;
 
 				assignment.m_bHadContact = contact;
 
@@ -2262,11 +2290,17 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		// route order. With room combat on, leftover danger does the same
 		// while the threat bar is still falling. Room combat off leaves
 		// that fight at the normal priorities.
+		// Within range of the building, he keeps this route while he knows someone is there. A
+		// sight line is not required. The room gun fires once he can see,
+		// and the threat hide does not get to plant him.
 		bool stepOver =
 			HoldsDownedTarget(agent) ||
 			(
 				KK_GarrisonHold.UseRoomCombat() &&
-				!AgentInContact(agent, now)
+				(
+					!AgentInContact(agent, now) ||
+					KK_GarrisonHold.OwnsShot(agent)
+				)
 			);
 		if (stepOver)
 			priority = KK_AgentMove.EnterBuildingPriorityLevel();

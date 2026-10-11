@@ -5,6 +5,32 @@ modded class SCR_AICombatComponent
 		m_SelectedTarget = null;
 	}
 
+	// A last-seen point is not a target once the building order is over.
+	// A living enemy he can see stays. A cover hold keeps a living one
+	// the trace cannot confirm.
+	bool KK_DropStaleTarget()
+	{
+		if (!m_SelectedTarget)
+			return false;
+
+		if (
+			KK_GarrisonHold.IsLivingTarget(m_SelectedTarget) &&
+			(
+				KK_GarrisonHold.IsPinned(GetOwner()) ||
+				KK_GarrisonHold.SeesTarget(GetOwner(), m_SelectedTarget)
+			)
+		)
+		{
+			return false;
+		}
+
+		KK_ClearTarget();
+		m_SelectedTargetVisible = false;
+		KK_GarrisonHold.DropRememberedAim(GetOwner());
+		m_SelectedTargetDestinationPos = KK_GarrisonHold.LevelAimPoint(GetOwner());
+		return true;
+	}
+
 	// The sprint hid the enemy so the run would not aim. If he is still
 	// alive and in sight, he is the target again on the frame the sprint ends.
 	void KK_HoldSprintEnemy(out BaseTarget outCurrentTarget)
@@ -420,6 +446,10 @@ class KK_GarrisonHold
 	// A request still in this state is what turns the sprint into a strafe.
 	protected static ref set<SCR_AICombatMoveState> s_SprintMoveLock =
 		new set<SCR_AICombatMoveState>();
+	// A clear refuses a combat move when it is submitted. Cancelling one
+	// that is already running, every tick, is a fight with CRX.
+	protected static ref set<SCR_AICombatMoveState> s_ClearMoveLock =
+		new set<SCR_AICombatMoveState>();
 	// Where the sprint is looking. CRX writes the enemy into the look
 	// between order updates, and this puts the lane back.
 	protected static ref map<IEntity, vector> s_SprintLook =
@@ -743,6 +773,23 @@ class KK_GarrisonHold
 			return;
 
 		utility.m_CombatComponent.KK_ClearTarget();
+	}
+
+	// The building order is over. Keep the last-seen point from arming
+	// the next move, until a living enemy is actually in sight.
+	static void ReleaseStaleAim(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || HasVisibleEnemy(body))
+			return;
+
+		s_FreshOrder.Insert(body);
+
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (!utility || !utility.m_CombatComponent)
+			return;
+
+		utility.m_CombatComponent.KK_DropStaleTarget();
 	}
 
 	static void ReleaseLatentCombat(IEntity soldier)
@@ -3007,6 +3054,32 @@ class KK_GarrisonHold
 			state == EAIThreatState.THREATENED;
 	}
 
+	// Alerted or threatened, or a living enemy already selected. A wall
+	// between them still counts. The sight trace is a separate question.
+	static bool IsAware(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (FeelsThreatened(utility))
+			return true;
+
+		if (!utility || !utility.m_CombatComponent)
+			return false;
+
+		return IsLivingTarget(utility.m_CombatComponent.GetCurrentTarget());
+	}
+
+	// A clearer with room combat keeps walking the route. Threat hide,
+	// retreat, and the attack would plant him once he knows someone is there.
+	static bool ClearerPushing(SCR_AIUtilityComponent utility)
+	{
+		if (!utility || !UseRoomCombat())
+			return false;
+
+		return IsClearing(utility.m_OwnerEntity) ||
+			IsClearing(utility.GetOwner());
+	}
+
 	static bool HasBuilding(IEntity soldier)
 	{
 		IEntity body = CharacterBody(soldier);
@@ -3077,7 +3150,38 @@ class KK_GarrisonHold
 		return PositionInside(building, enemy.GetOrigin());
 	}
 
-	// Inside the order's building, this soldier's gun is ours. The attack
+	static float RoomCombatMargin()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return 25;
+
+		return mode.KK_GetRoomCombatRange();
+	}
+
+	// The circle around the building's footprint, plus the CQB range.
+	// A clear and a garrison both take the room gun inside that circle.
+	static bool WithinBuildingReach(IEntity building, vector worldPosition)
+	{
+		if (!building)
+			return false;
+
+		if (PositionInside(building, worldPosition))
+			return true;
+
+		vector mins;
+		vector maxs;
+		building.GetBounds(mins, maxs);
+		vector center = building.CoordToParent((mins + maxs) * 0.5);
+		float dx = (maxs[0] - mins[0]) * 0.5;
+		float dz = (maxs[2] - mins[2]) * 0.5;
+		float reach = Math.Sqrt(dx * dx + dz * dz) + RoomCombatMargin();
+		vector flat = worldPosition - center;
+		flat[1] = 0;
+		return flat.Length() <= reach;
+	}
+
+	// Near the order's building, this soldier's gun is ours. The attack
 	// behavior can still stop him, but it does not decide the shot.
 	static bool OwnsShot(IEntity soldier)
 	{
@@ -3088,7 +3192,7 @@ class KK_GarrisonHold
 		if (!body || !s_Buildings.Contains(body))
 			return false;
 
-		return PositionInside(s_Buildings.Get(body), body.GetOrigin());
+		return WithinBuildingReach(s_Buildings.Get(body), body.GetOrigin());
 	}
 
 	// Below zero means this shot is not ours. Otherwise 0 is a quiet contact
@@ -3234,6 +3338,10 @@ class KK_GarrisonHold
 		if (clearing)
 		{
 			s_Clearing.Insert(body);
+			// Within range of the building, the route is the move and the
+			// room gun shoots. A combat move there is CRX's indoor strafe,
+			// so it is refused. Farther out, the attack still steps and fires.
+			LockClearMove(body, UseRoomCombat() && OwnsShot(body));
 			return;
 		}
 
@@ -3241,6 +3349,7 @@ class KK_GarrisonHold
 			return;
 
 		s_Clearing.RemoveItem(body);
+		LockClearMove(body, false);
 		// The clear lowered him on the way out. Forget the raise, or the
 		// next order thinks the rifle is still up and never sends it.
 		s_MoveWeaponKnown.RemoveItem(body);
@@ -3376,6 +3485,32 @@ class KK_GarrisonHold
 	static bool IsSprintMoveLocked(SCR_AICombatMoveState state)
 	{
 		return state && s_SprintMoveLock.Contains(state);
+	}
+
+	// Refuses the next combat move for a clearer. An already running one
+	// is dropped once, when the lock goes on, and not on later ticks.
+	static void LockClearMove(IEntity soldier, bool locked)
+	{
+		SCR_AIUtilityComponent utility = UtilityOf(soldier);
+		if (!utility || !utility.m_CombatMoveState)
+			return;
+
+		SCR_AICombatMoveState state = utility.m_CombatMoveState;
+		if (locked)
+		{
+			bool already = s_ClearMoveLock.Contains(state);
+			s_ClearMoveLock.Insert(state);
+			if (!already && state.IsExecutingRequest())
+				state.CancelRequest();
+			return;
+		}
+
+		s_ClearMoveLock.RemoveItem(state);
+	}
+
+	static bool IsClearMoveLocked(SCR_AICombatMoveState state)
+	{
+		return state && s_ClearMoveLock.Contains(state);
 	}
 
 	// Drops a combat move that is still steering him at a target. The sprint
@@ -3665,6 +3800,7 @@ class KK_GarrisonHold
 			s_CoverChecked.Remove(body);
 			s_CoverHidden.Remove(body);
 			ClearShot(body);
+			ReleaseStaleAim(body);
 			ReleaseLatentCombat(body);
 			DropStaleAlert(body);
 			return;
@@ -5028,6 +5164,17 @@ modded class SCR_AIAttackBehavior
 			return 0;
 		}
 
+		// Within range of the building, the route stays selected. The
+		// attack taking the body plants him, and the room gun fires
+		// without that behavior. Farther out, this attack still scores.
+		if (
+			(KK_GarrisonHold.IsClearing(character) && KK_GarrisonHold.OwnsShot(character)) ||
+			(KK_GarrisonHold.IsClearing(agentEntity) && KK_GarrisonHold.OwnsShot(agentEntity))
+		)
+		{
+			return 0;
+		}
+
 		// A remembered burst is not a target. The attack would keep firing
 		// at that spot after the body is gone.
 		bool onOrder =
@@ -5062,6 +5209,12 @@ modded class SCR_AIAttackBehavior
 		// A held post, a doorway, or a burst on the way in stands and shoots.
 		// A bound keeps the attack, and combat movement is forced on so the
 		// run toward the next step actually starts.
+		// Within range of the building, a clear does not take the combat
+		// step. That step is a short standing strafe, and the route never
+		// gets going. Farther out, the attack keeps the step.
+		bool clearingInside =
+			(KK_GarrisonHold.IsClearing(character) && KK_GarrisonHold.OwnsShot(character)) ||
+			(KK_GarrisonHold.IsClearing(agentEntity) && KK_GarrisonHold.OwnsShot(agentEntity));
 		bool pinned =
 			KK_GarrisonHold.IsPinned(character) ||
 			KK_GarrisonHold.IsPinned(agentEntity);
@@ -5074,7 +5227,7 @@ modded class SCR_AIAttackBehavior
 			KK_GarrisonHold.GetApproachGoal(character, approachGoal) ||
 			KK_GarrisonHold.GetApproachGoal(agentEntity, approachGoal);
 
-		if (pinned || doorFiring)
+		if (clearingInside || pinned || doorFiring)
 		{
 			m_bUseCombatMove = false;
 			if (KK_GarrisonHold.IsPinned(character))
@@ -5153,14 +5306,20 @@ modded class SCR_AICombatMoveLogicBase
 		// A raised threat keeps requesting a short strafe after the enemy
 		// is gone. Finishing the node lets that request start again, and
 		// the step-raise-stop is the shuffle. Hold the node instead.
+		// A clear does not sit in this loop. Its combat move is refused
+		// when CRX submits it.
 		bool onOrder =
 			KK_GarrisonHold.UseRoomCombat() &&
 			(
 				KK_GarrisonHold.HasBuilding(body) ||
 				KK_GarrisonHold.HasBuilding(owner)
 			);
+		bool clearing =
+			KK_GarrisonHold.IsClearing(body) ||
+			KK_GarrisonHold.IsClearing(owner);
 		if (
 			onOrder &&
+			!clearing &&
 			!KK_GarrisonHold.HasVisibleEnemy(body) &&
 			!KK_GarrisonHold.HasVisibleEnemy(owner)
 		)
@@ -5275,6 +5434,9 @@ modded class SCR_AIRetreatWhileLookAtBehavior
 {
 	override float CustomEvaluate()
 	{
+		if (KK_GarrisonHold.ClearerPushing(m_Utility))
+			return 0;
+
 		if (
 			m_Utility &&
 			(
@@ -5291,6 +5453,41 @@ modded class SCR_AIRetreatWhileLookAtBehavior
 		{
 			return 0;
 		}
+
+		return super.CustomEvaluate();
+	}
+}
+
+// Knowing a sector is hot, with nobody in sight, is enough for these to
+// take the body and hold. A clear keeps the route instead.
+modded class SCR_AIRetreatFromTargetBehavior
+{
+	override float CustomEvaluate()
+	{
+		if (KK_GarrisonHold.ClearerPushing(m_Utility))
+			return 0;
+
+		return super.CustomEvaluate();
+	}
+}
+
+modded class SCR_AIObserveThreatSystemBehavior
+{
+	override float CustomEvaluate()
+	{
+		if (KK_GarrisonHold.ClearerPushing(m_Utility))
+			return 0;
+
+		return super.CustomEvaluate();
+	}
+}
+
+modded class SCR_AIMoveFromDangerBehavior
+{
+	override float CustomEvaluate()
+	{
+		if (KK_GarrisonHold.ClearerPushing(m_Utility))
+			return 0;
 
 		return super.CustomEvaluate();
 	}
@@ -5668,11 +5865,18 @@ modded class SCR_AIMoveIndividuallyBehavior
 	override float CustomEvaluate()
 	{
 		float score = super.CustomEvaluate();
+		if (!m_Utility)
+			return score;
+
 		if (
-			m_Utility &&
+			KK_GarrisonHold.IsBoundSprint(m_Utility.m_OwnerEntity) ||
+			KK_GarrisonHold.IsBoundSprint(m_Utility.GetOwner()) ||
 			(
-				KK_GarrisonHold.IsBoundSprint(m_Utility.m_OwnerEntity) ||
-				KK_GarrisonHold.IsBoundSprint(m_Utility.GetOwner())
+				KK_GarrisonHold.UseRoomCombat() &&
+				(
+					KK_GarrisonHold.IsClearing(m_Utility.m_OwnerEntity) ||
+					KK_GarrisonHold.IsClearing(m_Utility.GetOwner())
+				)
 			)
 		)
 			m_bUseCombatMove = false;
@@ -5687,7 +5891,7 @@ modded class SCR_AICombatMoveState
 {
 	override void ApplyNewRequest(notnull SCR_AICombatMoveRequestBase request)
 	{
-		if (KK_GarrisonHold.IsSprintMoveLocked(this))
+		if (KK_GarrisonHold.IsSprintMoveLocked(this) || KK_GarrisonHold.IsClearMoveLocked(this))
 		{
 			request.m_eState = SCR_EAICombatMoveRequestState.CANCELED;
 			if (m_Request && m_Request.m_eState == SCR_EAICombatMoveRequestState.EXECUTING)
@@ -5703,7 +5907,13 @@ modded class SCR_AICombatMoveState
 
 	override void EnableAiming(bool enable)
 	{
-		if (enable && KK_GarrisonHold.IsSprintMoveLocked(this))
+		if (
+			enable &&
+			(
+				KK_GarrisonHold.IsSprintMoveLocked(this) ||
+				KK_GarrisonHold.IsClearMoveLocked(this)
+			)
+		)
 		{
 			m_bAimAtTarget = false;
 			return;
