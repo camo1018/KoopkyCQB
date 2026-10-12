@@ -152,6 +152,9 @@ modded class SCR_BaseGameMode
 	[Attribute("0.15", UIWidgets.EditBox, "Seconds from a clear sight to the shot, while clearing or garrisoning inside a building. 0 fires immediately.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_ShotDelay;
 
+	[Attribute("2", UIWidgets.EditBox, "Seconds the rifle stays on the last place a man was seen after the sight line breaks, while clearing or garrisoning. 0 looks back along the route immediately.", category: "Koopky CQB/Combat")]
+	protected float m_fKK_LostContactLook;
+
 	[Attribute("75", UIWidgets.EditBox, "How often a clearing or garrison soldier inside a building checks for a shot (ms). 50 to 100.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_ShotInterval;
 
@@ -360,6 +363,7 @@ modded class SCR_BaseGameMode
 			KK_ReadBool(context, "RoomCombat", m_bKK_RoomCombat);
 			KK_ReadFloat(context, "RoomCombatRange", m_fKK_RoomCombatRange);
 			KK_ReadFloat(context, "ShotDelay", m_fKK_ShotDelay);
+			KK_ReadFloat(context, "LostContactLook", m_fKK_LostContactLook);
 			KK_ReadFloat(context, "ShotInterval", m_fKK_ShotInterval);
 			m_fKK_ShotInterval = KK_ClampShotInterval(m_fKK_ShotInterval);
 			KK_ReadFloat(context, "ReloadRemainder", m_fKK_ReloadRemainder);
@@ -541,6 +545,7 @@ modded class SCR_BaseGameMode
 		context.WriteValue("RoomCombat", m_bKK_RoomCombat);
 		context.WriteValue("RoomCombatRange", KK_GetRoomCombatRange());
 		context.WriteValue("ShotDelay", m_fKK_ShotDelay);
+		context.WriteValue("LostContactLook", KK_GetLostContactLook());
 		context.WriteValue("ShotInterval", KK_GetShotInterval());
 		context.WriteValue("ReloadRemainder", m_fKK_ReloadRemainder);
 		context.WriteValue("OutOfSight", m_fKK_OutOfSight);
@@ -794,6 +799,11 @@ modded class SCR_BaseGameMode
 		return Math.Max(m_fKK_ShotDelay, 0);
 	}
 
+	float KK_GetLostContactLook()
+	{
+		return Math.Max(m_fKK_LostContactLook, 0);
+	}
+
 	float KK_GetShotInterval()
 	{
 		return KK_ClampShotInterval(m_fKK_ShotInterval);
@@ -960,6 +970,7 @@ modded class SCR_BaseGameMode
 	void KK_SetRoomCombat(bool value) { m_bKK_RoomCombat = value; }
 	void KK_SetRoomCombatRange(float value) { m_fKK_RoomCombatRange = Math.Max(value, 0); }
 	void KK_SetShotDelay(float value) { m_fKK_ShotDelay = Math.Max(value, 0); }
+	void KK_SetLostContactLook(float value) { m_fKK_LostContactLook = Math.Max(value, 0); }
 	void KK_SetShotInterval(float value) { m_fKK_ShotInterval = KK_ClampShotInterval(value); }
 	void KK_SetReloadRemainder(float value)
 	{

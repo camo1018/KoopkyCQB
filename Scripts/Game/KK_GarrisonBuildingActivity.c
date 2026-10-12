@@ -888,8 +888,75 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				);
 			}
 
+			ApplyGarrisonLook(assignment, settledAtPost);
 			i--;
 		}
+	}
+
+	// On the way in, the next uncleared node on the route. On the post,
+	// the authored facing. A reload sprint keeps its own head.
+	protected void ApplyGarrisonLook(
+		notnull KK_GarrisonAgentAssignment assignment,
+		bool settledAtPost)
+	{
+		if (!assignment.m_Agent || !assignment.m_Target)
+			return;
+
+		IEntity body = assignment.m_Agent.GetControlledEntity();
+		if (!body)
+			return;
+
+		if (
+			!KK_GarrisonHold.EngagingContact(body) &&
+			(
+				KK_GarrisonHold.SprintBeforeReload(body) ||
+				KK_GarrisonHold.IsReloadBashing(body)
+			)
+		)
+		{
+			KK_GarrisonHold.ClearPathLook(body);
+			return;
+		}
+
+		vector look;
+		if (settledAtPost && KK_HoldFacing.HasFacing(assignment.m_Target))
+			look = KK_AuthoredRouteHelper.FacingLook(
+				body.GetOrigin(),
+				assignment.m_Target
+			);
+		else
+			look = KK_AuthoredRouteHelper.UnclearedLook(
+				m_Plan,
+				assignment.m_Target,
+				assignment.m_aRouteGoals,
+				assignment.m_iRouteIndex
+			);
+
+		if (look == vector.Zero)
+		{
+			KK_GarrisonHold.ClearPathLook(body);
+			return;
+		}
+
+		vector flat = look - body.GetOrigin();
+		flat[1] = 0;
+		if (flat.Length() < 1.25)
+		{
+			vector ahead = body.GetOrigin() + body.VectorToParent(Vector(0, 0, 1)) * 8;
+			ahead[1] = body.GetOrigin()[1] + KK_AuthoredRouteHelper.LOOK_HEIGHT;
+			look = ahead;
+		}
+
+		// Line of sight. Steady shot and the fight window already plant
+		// him. The rifle stays on that man until the trace breaks.
+		vector contactAim;
+		if (KK_GarrisonHold.TakeContactLook(body, contactAim))
+		{
+			KK_GarrisonHold.HoldPathLook(body, look);
+			return;
+		}
+
+		KK_GarrisonHold.SetPathLook(body, look);
 	}
 
 	protected void FillAvailableAssignments(float currentTime)
@@ -1506,7 +1573,11 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			currentTime < assignment.m_fBoundUntil;
 		bool outside = !IsInsideBuilding(controlledEntity.GetOrigin());
 
-		if (boundRunning && outside && !waitingOnDoor && !passageBusy)
+		bool finishing =
+			!KK_GarrisonHold.CannotShoot(controlledEntity) &&
+			KK_GarrisonHold.VisibleContact(controlledEntity);
+
+		if (boundRunning && outside && !waitingOnDoor && !passageBusy && !finishing)
 		{
 			assignment.m_fSteadyUntil = 0;
 			KK_GarrisonHold.SetDoorFiring(controlledEntity, false);
@@ -1531,6 +1602,25 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			)
 		)
 		{
+			return;
+		}
+
+		// A man he can see, standing or downed, holds this spot until the
+		// sight line breaks or the body is dead. The burst window was
+		// sending him on while that man was still there.
+		if (finishing)
+		{
+			assignment.m_bBounding = false;
+			assignment.m_bHeldDoor = false;
+			assignment.m_fFireUntil = 0;
+			assignment.m_fBoundUntil = 0;
+			KK_GarrisonHold.ClearApproachGoal(controlledEntity);
+			KK_GarrisonHold.SetDoorFiring(controlledEntity, false);
+			KK_GarrisonHold.SetPinned(controlledEntity, true);
+			KK_AgentMove.SetWantedSpeed(
+				assignment.m_Agent,
+				EMovementType.IDLE
+			);
 			return;
 		}
 

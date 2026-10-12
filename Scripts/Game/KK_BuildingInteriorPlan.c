@@ -237,6 +237,19 @@ class KK_BuildingInteriorPlan
 		return m_mAuthoredWorldPositions.Find(authoredId, worldPosition);
 	}
 
+	// The clear point authored on this node, when the node is one.
+	KK_InteriorTarget GetTargetByAuthoredId(int authoredId)
+	{
+		int targetIndex;
+		if (!m_mAuthoredTargetIndex.Find(authoredId, targetIndex))
+			return null;
+
+		if (targetIndex < 0 || targetIndex >= m_aTargets.Count())
+			return null;
+
+		return m_aTargets[targetIndex];
+	}
+
 	bool HasReachableAuthoredChain(int fromAuthoredId, int toAuthoredId)
 	{
 		if (fromAuthoredId < 0 || toAuthoredId < 0)

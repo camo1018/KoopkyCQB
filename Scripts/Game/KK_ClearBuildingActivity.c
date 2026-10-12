@@ -99,9 +99,6 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 	// the soldier alerted the whole time. That is long enough to miss the
 	// node. A second covers a corner blocking the trace.
 	protected static const float CONTACT_GRACE_MS = 1000;
-	// A man he can see stops the route. The cap sends him on again so a
-	// figure in a window cannot hold the stack for the rest of the clear.
-	protected static const float PLANT_CAP_MS = 4000;
 
 	void KK_ClearBuildingActivity(
 		SCR_AIGroupUtilityComponent utility,
@@ -873,8 +870,89 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				continue;
 			}
 
+			ApplyClearLook(assignment);
 			i--;
 		}
+	}
+
+	// The next uncleared node on his route. A spare already on a faced
+	// post looks down that facing instead. A reload sprint keeps its own head.
+	protected void ApplyClearLook(notnull KK_InteriorAgentAssignment assignment)
+	{
+		if (!assignment.m_Agent || !assignment.m_Target)
+			return;
+
+		IEntity body = assignment.m_Agent.GetControlledEntity();
+		if (!body)
+			return;
+
+		if (
+			!KK_GarrisonHold.EngagingContact(body) &&
+			(
+				KK_GarrisonHold.SprintBeforeReload(body) ||
+				KK_GarrisonHold.IsReloadBashing(body)
+			)
+		)
+		{
+			KK_GarrisonHold.ClearPathLook(body);
+			return;
+		}
+
+		bool spareHold =
+			!assignment.m_bClearsPoint &&
+			KK_AuthoredRouteHelper.IsOnFinalGoal(
+				assignment.m_aRouteGoals,
+				assignment.m_iRouteIndex
+			) &&
+			vector.Distance(body.GetOrigin(), assignment.m_Target.m_vPosition) <=
+				m_ClearWaypoint.GetArrivalRadius();
+
+		vector look;
+		if (spareHold && KK_HoldFacing.HasFacing(assignment.m_Target))
+			look = KK_AuthoredRouteHelper.FacingLook(
+				body.GetOrigin(),
+				assignment.m_Target
+			);
+		else
+			look = KK_AuthoredRouteHelper.UnclearedLook(
+				m_Plan,
+				assignment.m_Target,
+				assignment.m_aRouteGoals,
+				assignment.m_iRouteIndex
+			);
+
+		if (look == vector.Zero)
+		{
+			KK_GarrisonHold.ClearPathLook(body);
+			return;
+		}
+
+		look = HoldLook(body, look);
+
+		// Line of sight. The plant already stopped his feet. The rifle
+		// goes to that man until the trace breaks, then back to the route.
+		vector contactAim;
+		if (KK_GarrisonHold.TakeContactLook(body, contactAim))
+		{
+			KK_GarrisonHold.HoldPathLook(body, look);
+			return;
+		}
+
+		KK_GarrisonHold.SetPathLook(body, look);
+	}
+
+	// A node he is already standing on sits under the muzzle. Keep the
+	// heading he arrived on, so a threat look still cannot turn him.
+	protected vector HoldLook(notnull IEntity body, vector look)
+	{
+		vector flat = look - body.GetOrigin();
+		flat[1] = 0;
+		if (flat.Length() >= 1.25)
+			return look;
+
+		vector ahead = body.GetOrigin() + body.VectorToParent(Vector(0, 0, 1)) * 8;
+		ahead[1] = body.GetOrigin()[1] + KK_AuthoredRouteHelper.LOOK_HEIGHT;
+		return ahead;
 	}
 
 	protected void FillAvailableAssignments(float currentTime)
@@ -2288,10 +2366,9 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		return false;
 	}
 
-	// The room gun has a living body it can shoot. Stop the route and fire
-	// from this spot. Threat with nobody in sight does not plant. The latch
-	// stays up through the contact grace, and the cap lets the clear go on
-	// while that same contact is still in front of him.
+	// The room gun has a body it can shoot, standing or downed. Stop the
+	// route and fire from this spot until that sight line breaks or the
+	// body is dead. Threat with nobody in sight does not plant.
 	protected bool HoldClearPlant(
 		notnull KK_InteriorAgentAssignment assignment,
 		bool contact,
@@ -2310,33 +2387,8 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			return false;
 		}
 
-		bool capSpent =
-			assignment.m_fPlantUntil > 0 &&
-			currentTime >= assignment.m_fPlantUntil;
-		if (capSpent)
-		{
-			bool wasPlanted = assignment.m_bPlanted;
-			if (wasPlanted)
-				EndClearPlant(assignment, false);
-
-			if (contact || wasPlanted)
-			{
-				resumeRoute = wasPlanted;
-				return false;
-			}
-
-			assignment.m_fPlantUntil = 0;
-		}
-
-		// A deadline left over from the last contact. Clearing it while he is
-		// still planted would let this shot run with no cap.
-		if (!contact && !assignment.m_bPlanted)
-			assignment.m_fPlantUntil = 0;
-
-		// The room gun drops its shot whenever the moving trace misses, so that
-		// shot is often already gone on this tick. A living enemy he can see
-		// right now is enough to stop. The grace after that only holds a
-		// plant that has already started.
+		// A living enemy, or a downed one still in sight. The trace going
+		// false is the sight line breaking.
 		bool seeing = HasLivingTarget(assignment.m_Agent);
 		if (!seeing && KK_GarrisonHold.VisibleContact(body))
 			seeing = true;
@@ -2349,8 +2401,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			KK_GarrisonHold.SetReloadCover(body, false);
 		}
 
-		bool want = seeing || KK_GarrisonHold.WantsSteadyShot(body);
-		bool hold = want || (assignment.m_bPlanted && contact);
+		bool hold = seeing || KK_GarrisonHold.WantsSteadyShot(body);
 		if (!hold)
 		{
 			resumeRoute = EndClearPlant(assignment, !contact);
@@ -2360,7 +2411,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		if (!assignment.m_bPlanted)
 		{
 			assignment.m_bPlanted = true;
-			assignment.m_fPlantUntil = currentTime + PLANT_CAP_MS;
+			assignment.m_fPlantUntil = 0;
 			assignment.m_bReloadMove = false;
 			assignment.m_bRunSet = false;
 			if (KK_GarrisonHold.OwnsShot(assignment.m_Agent))
@@ -2379,8 +2430,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		return true;
 	}
 
-	// Drops the plant. The cap deadline stays while this contact is still
-	// up, so the same man does not pin him again the next frame.
+	// Drops the plant. The route starts again on the next order.
 	protected bool EndClearPlant(
 		notnull KK_InteriorAgentAssignment assignment,
 		bool contactEnded)

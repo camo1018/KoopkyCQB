@@ -70,6 +70,7 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 16: return mode.KK_GetGarrisonMaximumRetries();
 			case 19: return mode.KK_GetPerceptionFactor();
 			case 29: return mode.KK_GetShotDelay();
+			case 42: return mode.KK_GetLostContactLook();
 			case 30: return mode.KK_GetShotInterval();
 			case 31: return mode.KK_GetReloadRemainder() * 100;
 			case 32: return mode.KK_GetOutOfSight();
@@ -119,6 +120,7 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 16: mode.KK_SetGarrisonMaximumRetries((int)Math.Round(value)); break;
 			case 19: mode.KK_SetPerceptionFactor(value); break;
 			case 29: mode.KK_SetShotDelay(value); break;
+			case 42: mode.KK_SetLostContactLook(value); break;
 			case 30: mode.KK_SetShotInterval(value); break;
 			case 31: mode.KK_SetReloadRemainder(value); break;
 			case 32: mode.KK_SetOutOfSight(value); break;
@@ -301,6 +303,8 @@ class KK_CQBAttrRoomCombat : KK_CQBBoolEditorAttribute {}
 class KK_CQBAttrRoomCombatRange : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrShotDelay : KK_CQBFloatEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrLostContactLook : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrShotInterval : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]

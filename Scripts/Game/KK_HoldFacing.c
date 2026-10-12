@@ -38,6 +38,13 @@ class KK_HoldFacing
 
 class KK_AuthoredRouteHelper
 {
+	// Chest height, so the rifle points into the space and not at the floor.
+	static const float LOOK_HEIGHT = 1.5;
+
+	// A route goal is the authored node itself. Farther than this, it is
+	// not that node.
+	static const float LOOK_NODE_MATCH = 2.5;
+
 	static void BuildGoals(
 		KK_BuildingInteriorPlan plan,
 		vector soldierPosition,
@@ -98,6 +105,71 @@ class KK_AuthoredRouteHelper
 			return true;
 
 		return routeIndex >= routeGoals.Count();
+	}
+
+	// First node still ahead on this route that has not been cleared.
+	// A graph corner with no clear point counts: that is the next space
+	// he is walking into. A point already visited is skipped.
+	static vector UnclearedLook(
+		KK_BuildingInteriorPlan plan,
+		KK_InteriorTarget target,
+		array<vector> routeGoals,
+		int routeIndex)
+	{
+		if (routeGoals)
+		{
+			for (int i = routeIndex; i < routeGoals.Count(); i++)
+			{
+				if (NodeCleared(plan, routeGoals[i]))
+					continue;
+
+				return routeGoals[i] + Vector(0, LOOK_HEIGHT, 0);
+			}
+		}
+
+		if (!target)
+			return vector.Zero;
+
+		return target.m_vPosition + Vector(0, LOOK_HEIGHT, 0);
+	}
+
+	// The hold direction, a few metres out at chest height.
+	static vector FacingLook(vector feet, notnull KK_InteriorTarget target)
+	{
+		vector flat = target.m_vFacing;
+		flat[1] = 0;
+		if (flat.Length() < 0.01)
+			return vector.Zero;
+
+		flat.Normalize();
+		vector look = feet + flat * 8;
+		look[1] = feet[1] + LOOK_HEIGHT;
+		return look;
+	}
+
+	protected static bool NodeCleared(
+		KK_BuildingInteriorPlan plan,
+		vector worldPosition)
+	{
+		if (!plan)
+			return false;
+
+		int authoredId = plan.FindNearestAuthoredId(worldPosition);
+		if (authoredId < 0)
+			return false;
+
+		vector authored;
+		if (!plan.GetAuthoredWorldPosition(authoredId, authored))
+			return false;
+
+		if (vector.Distance(authored, worldPosition) > LOOK_NODE_MATCH)
+			return false;
+
+		KK_InteriorTarget node = plan.GetTargetByAuthoredId(authoredId);
+		if (!node)
+			return false;
+
+		return node.IsFinished();
 	}
 
 }

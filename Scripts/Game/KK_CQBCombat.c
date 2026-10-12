@@ -237,7 +237,10 @@ modded class SCR_AICombatComponent
 		}
 
 		if (!KK_GarrisonHold.UseRoomCombat() || !KK_GarrisonHold.HasBuilding(GetOwner()))
+		{
+			KK_StampPathLook();
 			return;
+		}
 
 		// A lost body is not a target. A living one who is behind a wall this
 		// frame still is. The look is dropped so it does not turn against
@@ -281,14 +284,23 @@ modded class SCR_AICombatComponent
 
 		BaseTarget preferred = KK_GarrisonHold.ShotTarget(GetOwner());
 		if (!preferred || preferred == m_SelectedTarget)
+		{
+			KK_StampPathLook();
 			return;
+		}
 
 		if (!KK_GarrisonHold.ShotStillVisible(GetOwner()))
+		{
+			KK_StampPathLook();
 			return;
+		}
 
 		IEntity preferredEntity = preferred.GetTargetEntity();
 		if (!preferredEntity || !KK_GarrisonHold.IsFightable(preferredEntity))
+		{
+			KK_StampPathLook();
 			return;
+		}
 
 		// The selector stays on one enemy. In the building, the nearest one
 		// he can see replaces that fixation before the attack behavior runs.
@@ -301,6 +313,28 @@ modded class SCR_AICombatComponent
 			KK_GarrisonHold.ShotAimPoint(preferredEntity);
 		outCurrentTarget = preferred;
 		outSelectedTargetChanged = false;
+		KK_StampPathLook();
+	}
+
+	// The clear route owns the aim point. CRX writes the threat here on
+	// the same evaluation, and this puts the next uncleared node back.
+	// A living enemy he can see takes that point instead. The plant is
+	// already holding his feet.
+	protected void KK_StampPathLook()
+	{
+		vector contactAim;
+		if (KK_GarrisonHold.TakeContactLook(GetOwner(), contactAim))
+		{
+			m_SelectedTargetDestinationPos = contactAim;
+			return;
+		}
+
+		vector look;
+		if (!KK_GarrisonHold.GetPathLook(GetOwner(), look))
+			return;
+
+		m_SelectedTargetDestinationPos = look;
+		KK_GarrisonHold.RefreshPathLook(GetOwner());
 	}
 
 	// A held trigger cooks a frag. Room combat never releases it, so the
@@ -426,6 +460,8 @@ class KK_GarrisonHold
 	protected static ref set<AIAgent> s_OrderNoted = new set<AIAgent>();
 	protected static ref TraceParam s_SightTrace;
 	protected static IEntity s_SightViewer;
+	// The man this trace is trying to see. His own body is not a wall.
+	protected static IEntity s_SightTarget;
 	protected static ref map<IEntity, vector> s_ApproachGoals =
 		new map<IEntity, vector>();
 	protected static ref map<IEntity, IEntity> s_Buildings =
@@ -454,6 +490,17 @@ class KK_GarrisonHold
 	// between order updates, and this puts the lane back.
 	protected static ref map<IEntity, vector> s_SprintLook =
 		new map<IEntity, vector>();
+	// Where a clear or garrison is looking. While this is set, no other
+	// look is accepted.
+	protected static ref map<IEntity, vector> s_PathLook =
+		new map<IEntity, vector>();
+	// Last place a man was actually seen, and when that sight was lost.
+	protected static ref map<IEntity, vector> s_LostLook =
+		new map<IEntity, vector>();
+	protected static ref map<IEntity, float> s_LostLookAt =
+		new map<IEntity, float>();
+	protected static bool s_bPathLookWrite;
+	static const float PATH_LOOK_PRIORITY = 1000;
 	// An enemy already selected when the bound started. The sprint does not
 	// aim at him, and perception then drops him, so the stop had to spot
 	// him again. This puts that same target back.
@@ -3071,15 +3118,21 @@ class KK_GarrisonHold
 		return IsLivingTarget(utility.m_CombatComponent.GetCurrentTarget());
 	}
 
-	// A clearer with room combat keeps walking the route. Threat hide,
-	// retreat, and the attack would plant him once he knows someone is there.
+	// A clear or a garrison keeps the route. Threat hide, retreat, and
+	// observe would plant him once he knows someone is there.
 	static bool ClearerPushing(SCR_AIUtilityComponent utility)
 	{
 		if (!utility || !UseRoomCombat())
 			return false;
 
-		return IsClearing(utility.m_OwnerEntity) ||
-			IsClearing(utility.GetOwner());
+		return OnHouseOrder(utility.m_OwnerEntity) ||
+			OnHouseOrder(utility.GetOwner());
+	}
+
+	// Clearing a house, or holding one. Attack uses neither of these.
+	static bool OnHouseOrder(IEntity soldier)
+	{
+		return IsClearing(soldier) || HasBuilding(soldier);
 	}
 
 	static bool HasBuilding(IEntity soldier)
@@ -3133,7 +3186,7 @@ class KK_GarrisonHold
 		if (s_ShotLook.Contains(body))
 		{
 			IEntity shot = s_ShotLook.Get(body);
-			if (shot && IsLiving(shot) && PositionInside(building, shot.GetOrigin()))
+			if (shot && IsTargetable(shot) && PositionInside(building, shot.GetOrigin()))
 				return true;
 		}
 
@@ -3146,7 +3199,7 @@ class KK_GarrisonHold
 			return false;
 
 		IEntity enemy = target.GetTargetEntity();
-		if (!enemy || !IsLiving(enemy))
+		if (!enemy || !IsTargetable(enemy))
 			return false;
 
 		return PositionInside(building, enemy.GetOrigin());
@@ -3292,7 +3345,7 @@ class KK_GarrisonHold
 		if (s_ShotLook.Contains(body))
 			enemy = s_ShotLook.Get(body);
 
-		if (enemy && !IsLiving(enemy))
+		if (enemy && (!IsTargetable(enemy) || !IsHostile(body, enemy)))
 		{
 			ClearShot(body);
 			CancelLook(utility, body);
@@ -3325,7 +3378,7 @@ class KK_GarrisonHold
 		// The trace blocks the trigger. While he is alive the rifle stays
 		// on his eyes. With nobody left the look is dropped, so it does
 		// not turn against the hold facing.
-		if (enemy && IsLiving(enemy))
+		if (enemy && IsTargetable(enemy))
 			AimLook(utility, body, enemy);
 		else
 			CancelLook(utility, body);
@@ -3340,10 +3393,10 @@ class KK_GarrisonHold
 		if (clearing)
 		{
 			s_Clearing.Insert(body);
-			// Within range of the building, the route is the move and the
-			// room gun shoots. A combat move there is CRX's indoor strafe,
-			// so it is refused. Farther out, the attack still steps and fires.
-			LockClearMove(body, UseRoomCombat() && OwnsShot(body));
+			// The route is the move. A combat move is CRX's strafe at
+			// wherever it thinks the threat is, so it is refused for the
+			// whole clear.
+			LockClearMove(body, true);
 			return;
 		}
 
@@ -3352,6 +3405,7 @@ class KK_GarrisonHold
 
 		s_Clearing.RemoveItem(body);
 		LockClearMove(body, false);
+		ClearPathLook(body);
 		// The clear lowered him on the way out. Forget the raise, or the
 		// next order thinks the rifle is still up and never sends it.
 		s_MoveWeaponKnown.RemoveItem(body);
@@ -3561,6 +3615,207 @@ class KK_GarrisonHold
 
 		look = s_SprintLook.Get(body);
 		return true;
+	}
+
+	static void SetPathLook(IEntity soldier, vector look)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || look == vector.Zero)
+			return;
+
+		s_PathLook.Set(body, look);
+		RefreshPathLook(body);
+	}
+
+	// Remembers the route point while a contact look is using the head.
+	// Refreshing it here would turn him back off the man.
+	static void HoldPathLook(IEntity soldier, vector look)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || look == vector.Zero)
+			return;
+
+		s_PathLook.Set(body, look);
+	}
+
+	static void ClearPathLook(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		ForgetLostLook(body);
+		if (!body || !s_PathLook.Contains(body))
+			return;
+
+		s_PathLook.Remove(body);
+
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (!utility || !utility.m_LookAction)
+			return;
+
+		utility.m_LookAction.Cancel();
+	}
+
+	static bool GetPathLook(IEntity soldier, out vector look)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !s_PathLook.Contains(body))
+			return false;
+
+		look = s_PathLook.Get(body);
+		return look != vector.Zero;
+	}
+
+	static bool PathLookActive(SCR_AIUtilityComponent utility)
+	{
+		if (!utility)
+			return false;
+
+		vector look;
+		return GetPathLook(utility.m_OwnerEntity, look) ||
+			GetPathLook(utility.GetOwner(), look);
+	}
+
+	static bool IsPathLookWrite()
+	{
+		return s_bPathLookWrite;
+	}
+
+	// A living enemy this soldier can actually see. Last-seen points and
+	// a hot sector do not count. The plant uses the same sight.
+	static bool EngagingContact(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return false;
+
+		if (HasVisibleEnemy(body) || ShotStillVisible(body))
+			return true;
+
+		return VisibleContact(body) != null;
+	}
+
+	// Points the rifle at that man and reports the aim point. The route
+	// point stays stored. After the sight line breaks, the last place
+	// he was seen holds the rifle until the lost-contact time runs out.
+	static bool TakeContactLook(IEntity soldier, out vector aim)
+	{
+		aim = vector.Zero;
+
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return false;
+
+		if (!EngagingContact(body))
+			return LostContactLook(body, aim);
+
+		IEntity enemy = null;
+		if (ShotStillVisible(body) && s_ShotLook.Contains(body))
+			enemy = s_ShotLook.Get(body);
+
+		if (!enemy)
+		{
+			SCR_AIUtilityComponent utility = UtilityOf(body);
+			if (utility && utility.m_CombatComponent)
+			{
+				BaseTarget selected = utility.m_CombatComponent.GetCurrentTarget();
+				if (SeesTarget(body, selected))
+					enemy = selected.GetTargetEntity();
+			}
+		}
+
+		if (!enemy || !IsTargetable(enemy))
+			enemy = VisibleContact(body);
+
+		if (!enemy || !IsTargetable(enemy) || !IsHostile(body, enemy))
+			return false;
+
+		// The route point stays stored, so CRX still cannot write a look.
+		// This snap moves that look onto his eyes. When the trace breaks,
+		// the route point is put back.
+		aim = ShotAimPoint(enemy);
+		RememberLostLook(body, aim);
+		SnapLook(body, aim);
+		return true;
+	}
+
+	protected static void RememberLostLook(IEntity body, vector aim)
+	{
+		if (!body || aim == vector.Zero)
+			return;
+
+		s_LostLook.Set(body, aim);
+		s_LostLookAt.Set(body, WorldTime());
+	}
+
+	protected static void ForgetLostLook(IEntity body)
+	{
+		if (!body)
+			return;
+
+		s_LostLook.Remove(body);
+		s_LostLookAt.Remove(body);
+	}
+
+	// Seconds the rifle stays on the last seen point. 0 looks away at once.
+	static float LostContactLookSeconds()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return 2;
+
+		return mode.KK_GetLostContactLook();
+	}
+
+	protected static bool LostContactLook(IEntity body, out vector aim)
+	{
+		aim = vector.Zero;
+		if (!body || !s_LostLook.Contains(body) || !s_LostLookAt.Contains(body))
+			return false;
+
+		float holdMs = LostContactLookSeconds() * 1000;
+		if (holdMs <= 0 || WorldTime() - s_LostLookAt.Get(body) > holdMs)
+		{
+			ForgetLostLook(body);
+			return false;
+		}
+
+		aim = s_LostLook.Get(body);
+		SnapLook(body, aim);
+		return true;
+	}
+
+	protected static void SnapLook(IEntity body, vector aim)
+	{
+		if (!body || aim == vector.Zero)
+			return;
+
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (!utility || !utility.m_LookAction)
+			return;
+
+		s_bPathLookWrite = true;
+		utility.m_LookAction.KK_Snap(aim, PATH_LOOK_PRIORITY, SHOT_LOOK_DURATION);
+		s_bPathLookWrite = false;
+	}
+
+	// Puts the stored node back onto the head. Same priority only moves
+	// the point, so the turn he already started is not restarted.
+	static void RefreshPathLook(IEntity soldier)
+	{
+		vector look;
+		if (!GetPathLook(soldier, look))
+			return;
+
+		IEntity body = CharacterBody(soldier);
+		if (!body || SprintBeforeReload(body) || IsReloadBashing(body))
+			return;
+
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (!utility || !utility.m_LookAction)
+			return;
+
+		s_bPathLookWrite = true;
+		utility.m_LookAction.KK_Snap(look, PATH_LOOK_PRIORITY, 30);
+		s_bPathLookWrite = false;
 	}
 
 	// The man he was already on. Later frames overwrite this while the
@@ -3783,6 +4038,8 @@ class KK_GarrisonHold
 
 		if (!building)
 		{
+			ClearPathLook(body);
+			LockClearMove(body, false);
 			s_Buildings.Remove(body);
 			s_ReloadAt.Remove(body);
 			s_ToppingOff.RemoveItem(body);
@@ -3809,6 +4066,10 @@ class KK_GarrisonHold
 		}
 
 		s_Buildings.Set(body, building);
+		// Same refusal as a clear. A garrison that is still an attack
+		// soldier is not in this map.
+		if (!IsAdvancing(body))
+			LockClearMove(body, true);
 		EnsureShotTick();
 	}
 
@@ -3996,7 +4257,7 @@ class KK_GarrisonHold
 		s_Candidates.Clear();
 		s_CandidateDist.Clear();
 		s_CandidateKnown.Clear();
-		ConsiderIndoor(perception, body, building, ETargetCategory.ENEMY, false);
+		ConsiderIndoor(perception, body, building, ETargetCategory.ENEMY, true);
 		ConsiderIndoor(perception, body, building, ETargetCategory.DETECTED, true);
 		ConsiderIndoor(perception, body, building, ETargetCategory.UNKNOWN, true);
 		CollectRoom(body, building);
@@ -4017,7 +4278,7 @@ class KK_GarrisonHold
 			return;
 
 		IEntity enemy = selected.GetTargetEntity();
-		if (!enemy || !IsLiving(enemy))
+		if (!enemy || !IsTargetable(enemy) || !IsHostile(body, enemy))
 			return;
 
 		s_ShotLive.Insert(body);
@@ -4092,7 +4353,7 @@ class KK_GarrisonHold
 			return;
 		}
 
-		if (!previousLook || !IsLiving(previousLook))
+		if (!previousLook || !IsTargetable(previousLook))
 			return;
 
 		float seen = 0;
@@ -4149,7 +4410,7 @@ class KK_GarrisonHold
 			if (!character || character == body)
 				continue;
 
-			if (!IsLiving(character))
+			if (!IsTargetable(character))
 				continue;
 
 			if (requireHostile && !IsHostile(body, character))
@@ -4219,7 +4480,7 @@ class KK_GarrisonHold
 			if (!character || character == body)
 				continue;
 
-			if (!IsLiving(character))
+			if (!IsTargetable(character))
 				continue;
 
 			if (requireHostile && !IsHostile(body, character))
@@ -4270,11 +4531,26 @@ class KK_GarrisonHold
 
 		s_ScanSeen.Insert(character);
 
-		if (!IsLiving(character) || !IsHostile(s_ScanBody, character))
+		if (!IsTargetable(character) || !IsHostile(s_ScanBody, character))
 			return true;
 
-		if (!PositionInside(s_ScanBuilding, character.GetOrigin()))
+		// A downed man sinks. His head is the place to test, and the
+		// standing capsule is often still inside the shell.
+		vector place = character.GetOrigin();
+		if (IsDown(character))
+		{
+			vector eye = character.EyePosition();
+			if (eye != vector.Zero)
+				place = eye;
+		}
+
+		if (
+			!PositionInside(s_ScanBuilding, place) &&
+			!PositionInside(s_ScanBuilding, character.GetOrigin())
+		)
+		{
 			return true;
+		}
 
 		AddCandidate(
 			character,
@@ -4345,7 +4621,20 @@ class KK_GarrisonHold
 		return null;
 	}
 
-	// Dead and unconscious are not targets. Vanilla combat leaves both alone.
+	protected static bool SameCharacter(IEntity a, IEntity b)
+	{
+		if (!a || !b)
+			return false;
+
+		if (a == b)
+			return true;
+
+		ChimeraCharacter left = CharacterOf(a);
+		ChimeraCharacter right = CharacterOf(b);
+		return left && left == right;
+	}
+
+	// Dead and unconscious are not a standing fight. Vanilla combat leaves both alone.
 	protected static bool IsLiving(IEntity character)
 	{
 		CharacterControllerComponent controller = Controller(character);
@@ -4355,9 +4644,27 @@ class KK_GarrisonHold
 		return controller.GetLifeState() == ECharacterLifeState.ALIVE;
 	}
 
+	// Still a body to shoot. Unconscious and incapacitated count. Dead does not.
+	protected static bool IsTargetable(IEntity character)
+	{
+		CharacterControllerComponent controller = Controller(character);
+		if (!controller || controller.IsDead())
+			return false;
+
+		if (controller.IsUnconscious())
+			return true;
+
+		ECharacterLifeState life = controller.GetLifeState();
+		return life == ECharacterLifeState.ALIVE ||
+			life == ECharacterLifeState.INCAPACITATED;
+	}
+
 	protected static bool IsHostile(IEntity self, IEntity other)
 	{
 		if (!self || !other || self == other)
+			return false;
+
+		if (SharesGroup(self, other))
 			return false;
 
 		SCR_Faction mine = SCR_Faction.Cast(FactionOf(self));
@@ -4366,6 +4673,25 @@ class KK_GarrisonHold
 			return false;
 
 		return mine.IsFactionEnemy(theirs);
+	}
+
+	// The squad clearing the house, including the player's slave group.
+	protected static bool SharesGroup(IEntity self, IEntity other)
+	{
+		AIGroup mine = GroupOf(self);
+		AIGroup theirs = GroupOf(other);
+		if (!mine || !theirs)
+			return false;
+
+		if (mine == theirs)
+			return true;
+
+		SCR_AIGroup myGroup = SCR_AIGroup.Cast(mine);
+		SCR_AIGroup theirGroup = SCR_AIGroup.Cast(theirs);
+		if (!myGroup || !theirGroup)
+			return false;
+
+		return myGroup.GetSlave() == theirGroup || theirGroup.GetSlave() == myGroup;
 	}
 
 	protected static Faction FactionOf(IEntity entity)
@@ -4588,19 +4914,13 @@ class KK_GarrisonHold
 
 		NoteRoomLook(body);
 		vector point = ShotAimPoint(enemy);
-		bool same =
-			s_LookEntity.Contains(body) &&
-			s_LookEntity.Get(body) == enemy;
-
 		s_LookEntity.Set(body, enemy);
 
-		if (!same)
-		{
-			utility.m_LookAction.LookAt(point, 100, SHOT_LOOK_DURATION);
-			return;
-		}
-
-		utility.m_LookAction.KK_Track(point, 100, SHOT_LOOK_DURATION);
+		// Same priority as the route look, so this moves the point onto
+		// his eyes instead of losing to the node.
+		s_bPathLookWrite = true;
+		utility.m_LookAction.KK_Snap(point, PATH_LOOK_PRIORITY, SHOT_LOOK_DURATION);
+		s_bPathLookWrite = false;
 	}
 
 	protected static void NoteRoomLook(IEntity body)
@@ -4701,7 +5021,7 @@ class KK_GarrisonHold
 		for (int category = 0; category < 3; category++)
 		{
 			ETargetCategory kind = ETargetCategory.ENEMY;
-			bool requireHostile = false;
+			bool requireHostile = true;
 			if (category == 1)
 			{
 				kind = ETargetCategory.DETECTED;
@@ -4722,7 +5042,7 @@ class KK_GarrisonHold
 					continue;
 
 				IEntity enemy = candidate.GetTargetEntity();
-				if (!enemy || enemy == body || !IsLiving(enemy))
+				if (!enemy || enemy == body || !IsTargetable(enemy))
 					continue;
 
 				if (requireHostile && !IsHostile(body, enemy))
@@ -4752,7 +5072,7 @@ class KK_GarrisonHold
 			return false;
 
 		IEntity enemy = target.GetTargetEntity();
-		if (!enemy || !IsLiving(enemy))
+		if (!enemy || !IsTargetable(enemy))
 			return false;
 
 		return CanSeeEntity(body, enemy);
@@ -4760,10 +5080,34 @@ class KK_GarrisonHold
 
 	protected static bool CanSeeEntity(IEntity body, IEntity enemy)
 	{
-		if (!enemy || !IsLiving(enemy))
+		if (!body || !enemy || !IsTargetable(enemy))
 			return false;
 
-		return CanSeePoint(body, enemy.GetOrigin());
+		BaseWorld world = GetGame().GetWorld();
+		if (!world)
+			world = body.GetWorld();
+
+		if (!world)
+			return false;
+
+		vector eye = body.GetOrigin() + Vector(0, 1.6, 0);
+		vector aim = enemy.GetOrigin() + Vector(0, 0.35, 0);
+		ChimeraCharacter character = ChimeraCharacter.Cast(enemy);
+		if (character)
+		{
+			vector theirEye = character.EyePosition();
+			if (theirEye != vector.Zero)
+				aim = theirEye;
+		}
+
+		// His collider sits on the ray. Counting that hit as a block made
+		// a man on the ground invisible, so the finish never started.
+		s_SightTarget = enemy;
+		bool seen = SightClear(world, body, eye, aim);
+		if (!seen)
+			seen = SightClear(world, body, eye, enemy.GetOrigin() + Vector(0, 0.35, 0));
+		s_SightTarget = null;
+		return seen;
 	}
 
 	protected static bool CanSeePoint(IEntity body, vector feet)
@@ -4840,8 +5184,16 @@ class KK_GarrisonHold
 			if (current == s_SightViewer)
 				return false;
 
+			// Another soldier stops the ray. Passing through him made a
+			// clear shot at the man behind, and the bullets hit the man
+			// in front. The man being checked is not that wall.
 			if (ChimeraCharacter.Cast(current))
-				return false;
+			{
+				if (SameCharacter(current, s_SightTarget))
+					return false;
+
+				return true;
+			}
 
 			current = current.GetParent();
 			depth++;
@@ -5166,14 +5518,18 @@ modded class SCR_AIAttackBehavior
 			return 0;
 		}
 
-		// Within range of the building, the route stays selected. The
-		// attack taking the body plants him, and the room gun fires
-		// without that behavior. Farther out, this attack still scores.
+		// A clear and a garrison do not take this behavior. It walks and
+		// shoots. A man in sight stops him through the plant, and the
+		// room gun fires. This attack must not carry him forward.
 		if (
-			(KK_GarrisonHold.IsClearing(character) && KK_GarrisonHold.OwnsShot(character)) ||
-			(KK_GarrisonHold.IsClearing(agentEntity) && KK_GarrisonHold.OwnsShot(agentEntity))
+			KK_GarrisonHold.UseRoomCombat() &&
+			(
+				KK_GarrisonHold.OnHouseOrder(character) ||
+				KK_GarrisonHold.OnHouseOrder(agentEntity)
+			)
 		)
 		{
+			m_bUseCombatMove = false;
 			return 0;
 		}
 
@@ -5770,7 +6126,7 @@ modded class SCR_AILookAction
 	// and leave a restart that already started this look.
 	void KK_Track(vector pos, float priority, float duration)
 	{
-		if (SprintIgnoring() || SprintingToCover())
+		if (SprintIgnoring() || SprintingToCover() || PathLookBlocks())
 			return;
 
 		if (pos == vector.Zero)
@@ -5792,8 +6148,13 @@ modded class SCR_AILookAction
 	// lane. Later calls only move the point.
 	void KK_Snap(vector pos, float priority, float duration)
 	{
-		if (SprintIgnoring() || SprintingToCover())
+		if (
+			!KK_GarrisonHold.IsPathLookWrite() &&
+			(SprintIgnoring() || SprintingToCover() || PathLookBlocks())
+		)
+		{
 			return;
+		}
 
 		if (pos == vector.Zero)
 			return;
@@ -5818,6 +6179,9 @@ modded class SCR_AILookAction
 
 	override void LookAt(vector pos, float priority, float duration = 0.8)
 	{
+		if (!KK_GarrisonHold.IsPathLookWrite() && PathLookBlocks())
+			return;
+
 		if (SprintIgnoring() || SprintingToCover() || BoundSprinting())
 			return;
 
@@ -5826,10 +6190,28 @@ modded class SCR_AILookAction
 
 	override void LookAt(IEntity ent, float priority, float duration = 0.8)
 	{
+		if (PathLookBlocks())
+			return;
+
 		if (SprintIgnoring() || SprintingToCover() || BoundSprinting())
 			return;
 
 		super.LookAt(ent, priority, duration);
+	}
+
+	override void Cancel()
+	{
+		if (PathLookBlocks())
+			return;
+
+		super.Cancel();
+	}
+
+	// A clear or garrison look is already on this head. Anything else,
+	// including a threat look, is dropped.
+	protected bool PathLookBlocks()
+	{
+		return m_Utility && KK_GarrisonHold.PathLookActive(m_Utility);
 	}
 
 	protected bool SprintIgnoring()
@@ -5882,8 +6264,8 @@ modded class SCR_AIMoveIndividuallyBehavior
 			(
 				KK_GarrisonHold.UseRoomCombat() &&
 				(
-					KK_GarrisonHold.IsClearing(m_Utility.m_OwnerEntity) ||
-					KK_GarrisonHold.IsClearing(m_Utility.GetOwner())
+					KK_GarrisonHold.OnHouseOrder(m_Utility.m_OwnerEntity) ||
+					KK_GarrisonHold.OnHouseOrder(m_Utility.GetOwner())
 				)
 			)
 		)
