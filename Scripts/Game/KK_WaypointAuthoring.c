@@ -35,6 +35,9 @@ class KK_WaypointAuthoring
 	protected static int s_iLinkFromId = -1;
 	protected static bool s_bDebugDraw = true;
 	protected static ref array<ref Shape> s_aDebugShapes = {};
+	protected static Widget s_wOverlay;
+	protected static ref array<ref ImageWidget> s_aOverlayMarks = {};
+	protected static int s_iOverlayUsed;
 	protected static bool s_bDebugTicking;
 	protected static bool s_bSamplePending;
 	protected static bool s_bSampleAnnounce;
@@ -1027,22 +1030,26 @@ class KK_WaypointAuthoring
 	static void RefreshDebugDraw()
 	{
 		ClearDebugShapes();
+		BeginOverlay();
 
 		if (s_iHeightMode == HEIGHT_NONE && !s_bDebugDraw)
+		{
+			EndOverlay();
 			return;
+		}
 
 		if (!s_LockedBuilding)
+		{
+			EndOverlay();
 			return;
+		}
 
 		KK_PrefabWaypointSet prefabSet = GetLockedSet();
 		if (!prefabSet)
+		{
+			EndOverlay();
 			return;
-
-		ShapeFlags shapeFlags =
-			ShapeFlags.NOZBUFFER |
-			ShapeFlags.TRANSP |
-			ShapeFlags.NOOUTLINE |
-			ShapeFlags.VISIBLE;
+		}
 
 		foreach (KK_AuthoredBuildingWaypoint waypoint : prefabSet.m_aWaypoints)
 		{
@@ -1055,15 +1062,9 @@ class KK_WaypointAuthoring
 			int color = ColorForType(waypoint.m_eType);
 
 			if (waypoint.m_iId == s_iLinkFromId)
-			{
-				s_aDebugShapes.Insert(
-					Shape.CreateSphere(0xFFFFFF88, shapeFlags, marker, 0.48)
-				);
-			}
+				DrawSphere(marker, 0.48, 0xFFFFFF88);
 
-			s_aDebugShapes.Insert(
-				Shape.CreateSphere(color, shapeFlags, marker, 0.28)
-			);
+			DrawSphere(marker, 0.28, color);
 
 			vector facing =
 				KK_BuildingWaypointLibrary.LocalFacingToWorld(
@@ -1073,14 +1074,11 @@ class KK_WaypointAuthoring
 
 			if (facing.Length() > 0.01)
 			{
-				s_aDebugShapes.Insert(
-					Shape.CreateArrow(
-						marker,
-						marker + (facing * 1.4),
-						0.08,
-						color,
-						ShapeFlags.NOZBUFFER | ShapeFlags.VISIBLE
-					)
+				DrawArrow(
+					marker,
+					marker + (facing * 1.4),
+					0.08,
+					color
 				);
 			}
 
@@ -1098,14 +1096,11 @@ class KK_WaypointAuthoring
 				vector otherWorld =
 					s_LockedBuilding.CoordToParent(other.m_vLocalPosition);
 
-				s_aDebugShapes.Insert(
-					Shape.CreateArrow(
-						marker,
-						otherWorld + Vector(0, 0.35, 0),
-						0.1,
-						0xFFFFFF88,
-						ShapeFlags.NOZBUFFER | ShapeFlags.VISIBLE
-					)
+				DrawArrow(
+					marker,
+					otherWorld + Vector(0, 0.35, 0),
+					0.1,
+					0xFFFFFF88
 				);
 			}
 		}
@@ -1136,17 +1131,11 @@ class KK_WaypointAuthoring
 				markerRadius = 0.28;
 			}
 
-			s_aDebugShapes.Insert(
-				Shape.CreateSphere(
-					sampleColor,
-					shapeFlags,
-					marker,
-					markerRadius
-				)
-			);
+			DrawSphere(marker, markerRadius, sampleColor);
 		}
 
 		DrawStoredHeightLines(prefabSet);
+		EndOverlay();
 
 		if (s_bDebugDraw)
 			EnsureDebugTick();
@@ -1588,12 +1577,11 @@ class KK_WaypointAuthoring
 		vector b = s_LockedBuilding.CoordToParent(Vector(maxX, localY, minZ));
 		vector c = s_LockedBuilding.CoordToParent(Vector(maxX, localY, maxZ));
 		vector d = s_LockedBuilding.CoordToParent(Vector(minX, localY, maxZ));
-		int flags = ShapeFlags.NOZBUFFER | ShapeFlags.VISIBLE;
 
-		s_aDebugShapes.Insert(Shape.CreateArrow(a, b, 0.04, color, flags));
-		s_aDebugShapes.Insert(Shape.CreateArrow(b, c, 0.04, color, flags));
-		s_aDebugShapes.Insert(Shape.CreateArrow(c, d, 0.04, color, flags));
-		s_aDebugShapes.Insert(Shape.CreateArrow(d, a, 0.04, color, flags));
+		DrawArrow(a, b, 0.04, color);
+		DrawArrow(b, c, 0.04, color);
+		DrawArrow(c, d, 0.04, color);
+		DrawArrow(d, a, 0.04, color);
 	}
 
 	protected static string FormatMeters(float meters)
@@ -1753,13 +1741,231 @@ class KK_WaypointAuthoring
 		s_aDebugShapes.Clear();
 	}
 
+	// Shape draws stay in Workbench. A normal session has no debug-shape
+	// renderer, so the same marks are projected onto the local HUD.
+	protected static void DrawSphere(vector origin, float radius, int color)
+	{
+#ifdef WORKBENCH
+		ShapeFlags shapeFlags =
+			ShapeFlags.NOZBUFFER |
+			ShapeFlags.TRANSP |
+			ShapeFlags.NOOUTLINE |
+			ShapeFlags.VISIBLE;
+		s_aDebugShapes.Insert(Shape.CreateSphere(color, shapeFlags, origin, radius));
+#else
+		DrawScreenDisc(origin, radius, color);
+#endif
+	}
+
+	protected static void DrawArrow(vector from, vector to, float size, int color)
+	{
+#ifdef WORKBENCH
+		s_aDebugShapes.Insert(Shape.CreateArrow(
+			from,
+			to,
+			size,
+			color,
+			ShapeFlags.NOZBUFFER | ShapeFlags.VISIBLE
+		));
+#else
+		DrawScreenLine(from, to, color);
+#endif
+	}
+
+	protected static void BeginOverlay()
+	{
+#ifndef WORKBENCH
+		s_iOverlayUsed = 0;
+#endif
+	}
+
+	protected static void EndOverlay()
+	{
+#ifndef WORKBENCH
+		if (s_wOverlay)
+			s_wOverlay.SetVisible(s_iOverlayUsed > 0);
+
+		if (!s_aOverlayMarks)
+			return;
+
+		for (int i = s_iOverlayUsed; i < s_aOverlayMarks.Count(); i++)
+		{
+			ImageWidget mark = s_aOverlayMarks[i];
+			if (mark)
+				mark.SetVisible(false);
+		}
+#endif
+	}
+
+	protected static ImageWidget TakeOverlayMark()
+	{
+		WorkspaceWidget workspace = GetGame().GetWorkspace();
+		if (!workspace)
+			return null;
+
+		if (!s_wOverlay)
+		{
+			s_wOverlay = workspace.CreateWidget(
+				WidgetType.FrameWidgetTypeID,
+				WidgetFlags.VISIBLE | WidgetFlags.IGNORE_CURSOR | WidgetFlags.NOFOCUS,
+				Color.White,
+				1,
+				null
+			);
+			FrameSlot.SetAnchorMin(s_wOverlay, 0, 0);
+			FrameSlot.SetAnchorMax(s_wOverlay, 1, 1);
+			FrameSlot.SetOffsets(s_wOverlay, 0, 0, 0, 0);
+		}
+
+		s_wOverlay.SetVisible(true);
+
+		ImageWidget mark;
+		if (s_iOverlayUsed < s_aOverlayMarks.Count())
+		{
+			mark = s_aOverlayMarks[s_iOverlayUsed];
+		}
+		else
+		{
+			Widget created = workspace.CreateWidget(
+				WidgetType.ImageWidgetTypeID,
+				WidgetFlags.VISIBLE |
+					WidgetFlags.IGNORE_CURSOR |
+					WidgetFlags.NOFOCUS |
+					WidgetFlags.STRETCH |
+					WidgetFlags.BLEND,
+				Color.White,
+				s_iOverlayUsed,
+				s_wOverlay
+			);
+			mark = ImageWidget.Cast(created);
+			if (!mark)
+				return null;
+
+			mark.SetIsColorInherited(false);
+			s_aOverlayMarks.Insert(mark);
+		}
+
+		s_iOverlayUsed++;
+		mark.SetVisible(true);
+		mark.SetOpacity(0.85);
+		mark.SetRotation(0);
+		mark.SetPivot(0.5, 0.5);
+		mark.SetZOrder(s_iOverlayUsed);
+		return mark;
+	}
+
+	protected static bool ProjectToScreen(vector world, out float x, out float y)
+	{
+		x = 0;
+		y = 0;
+
+		WorkspaceWidget workspace = GetGame().GetWorkspace();
+		BaseWorld gameWorld = GetGame().GetWorld();
+		if (!workspace || !gameWorld)
+			return false;
+
+		vector screen = workspace.ProjWorldToScreen(world, gameWorld);
+		if (screen[2] <= 0.05)
+			return false;
+
+		x = screen[0];
+		y = screen[1];
+		return true;
+	}
+
+	protected static float ProjectedDiscSize(vector world, float radius)
+	{
+		CameraManager manager = GetGame().GetCameraManager();
+		vector right = Vector(1, 0, 0);
+		if (manager)
+		{
+			CameraBase camera = manager.CurrentCamera();
+			if (camera)
+			{
+				vector transform[4];
+				camera.GetWorldTransform(transform);
+				right = transform[0];
+			}
+		}
+
+		float x0;
+		float y0;
+		float x1;
+		float y1;
+		if (!ProjectToScreen(world, x0, y0))
+			return 8;
+
+		if (!ProjectToScreen(world + (right * radius), x1, y1))
+			return 8;
+
+		float dx = x1 - x0;
+		float dy = y1 - y0;
+		float size = Math.Sqrt((dx * dx) + (dy * dy)) * 2.0;
+		if (size < 6)
+			size = 6;
+		if (size > 96)
+			size = 96;
+		return size;
+	}
+
+	protected static void DrawScreenDisc(vector world, float radius, int color)
+	{
+		float x;
+		float y;
+		if (!ProjectToScreen(world, x, y))
+			return;
+
+		ImageWidget mark = TakeOverlayMark();
+		if (!mark)
+			return;
+
+		float size = ProjectedDiscSize(world, radius);
+		mark.SetColorInt(color);
+		FrameSlot.SetAlignment(mark, 0.5, 0.5);
+		FrameSlot.SetSize(mark, size, size);
+		FrameSlot.SetPos(mark, x, y);
+	}
+
+	protected static void DrawScreenLine(vector from, vector to, int color)
+	{
+		float x1;
+		float y1;
+		float x2;
+		float y2;
+		if (!ProjectToScreen(from, x1, y1))
+			return;
+		if (!ProjectToScreen(to, x2, y2))
+			return;
+
+		float dx = x2 - x1;
+		float dy = y2 - y1;
+		float length = Math.Sqrt((dx * dx) + (dy * dy));
+		if (length < 1 || length > 4000)
+			return;
+
+		ImageWidget mark = TakeOverlayMark();
+		if (!mark)
+			return;
+
+		mark.SetColorInt(color);
+		mark.SetPivot(0, 0.5);
+		FrameSlot.SetAlignment(mark, 0, 0.5);
+		FrameSlot.SetSize(mark, length, 3);
+		FrameSlot.SetPos(mark, x1, y1);
+		mark.SetRotation(Math.Atan2(dy, dx) * Math.RAD2DEG);
+	}
+
 	protected static void EnsureDebugTick()
 	{
 		if (s_bDebugTicking)
 			return;
 
 		s_bDebugTicking = true;
+#ifdef WORKBENCH
 		GetGame().GetCallqueue().CallLater(DebugTick, 500, true);
+#else
+		GetGame().GetCallqueue().CallLater(DebugTick, 16, false);
+#endif
 	}
 
 	protected static void DebugTick()
@@ -1767,7 +1973,7 @@ class KK_WaypointAuthoring
 		if (!s_bDebugDraw)
 		{
 			if (s_iHeightMode == HEIGHT_NONE)
-				ClearDebugShapes();
+				RefreshDebugDraw();
 
 			GetGame().GetCallqueue().Remove(DebugTick);
 			s_bDebugTicking = false;
@@ -1775,6 +1981,11 @@ class KK_WaypointAuthoring
 		}
 
 		RefreshDebugDraw();
+
+#ifndef WORKBENCH
+		if (s_bDebugTicking)
+			GetGame().GetCallqueue().CallLater(DebugTick, 16, false);
+#endif
 	}
 
 }
