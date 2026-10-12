@@ -35,9 +35,8 @@ class KK_WaypointAuthoring
 	protected static int s_iLinkFromId = -1;
 	protected static bool s_bDebugDraw = true;
 	protected static ref array<ref Shape> s_aDebugShapes = {};
-	protected static Widget s_wOverlay;
-	protected static ref array<ref ImageWidget> s_aOverlayMarks = {};
-	protected static int s_iOverlayUsed;
+	protected static CanvasWidget s_wOverlay;
+	protected static ref array<ref CanvasWidgetCommand> s_aOverlayCommands = {};
 	protected static bool s_bDebugTicking;
 	protected static bool s_bSamplePending;
 	protected static bool s_bSampleAnnounce;
@@ -1775,83 +1774,66 @@ class KK_WaypointAuthoring
 	protected static void BeginOverlay()
 	{
 #ifndef WORKBENCH
-		s_iOverlayUsed = 0;
+		s_aOverlayCommands = new array<ref CanvasWidgetCommand>();
 #endif
 	}
 
 	protected static void EndOverlay()
 	{
 #ifndef WORKBENCH
-		if (s_wOverlay)
-			s_wOverlay.SetVisible(s_iOverlayUsed > 0);
-
-		if (!s_aOverlayMarks)
+		if (!s_wOverlay)
 			return;
 
-		for (int i = s_iOverlayUsed; i < s_aOverlayMarks.Count(); i++)
-		{
-			ImageWidget mark = s_aOverlayMarks[i];
-			if (mark)
-				mark.SetVisible(false);
-		}
+		bool any = s_aOverlayCommands && !s_aOverlayCommands.IsEmpty();
+		s_wOverlay.SetVisible(any);
+		if (s_aOverlayCommands)
+			s_wOverlay.SetDrawCommands(s_aOverlayCommands);
 #endif
 	}
 
-	protected static ImageWidget TakeOverlayMark()
+	protected static bool EnsureOverlay()
+	{
+		if (s_wOverlay)
+			return true;
+
+		WorkspaceWidget workspace = GetGame().GetWorkspace();
+		if (!workspace)
+			return false;
+
+		Widget created = workspace.CreateWidget(
+			WidgetType.CanvasWidgetTypeID,
+			WidgetFlags.VISIBLE | WidgetFlags.IGNORE_CURSOR | WidgetFlags.NOFOCUS | WidgetFlags.BLEND,
+			Color.White,
+			1,
+			null
+		);
+		s_wOverlay = CanvasWidget.Cast(created);
+		if (!s_wOverlay)
+			return false;
+
+		FrameSlot.SetAnchorMin(s_wOverlay, 0, 0);
+		FrameSlot.SetAnchorMax(s_wOverlay, 1, 1);
+		FrameSlot.SetOffsets(s_wOverlay, 0, 0, 0, 0);
+		return true;
+	}
+
+	protected static int OverlayColor(int color)
+	{
+		return (color & 0x00FFFFFF) | 0xD8000000;
+	}
+
+	protected static void ToScreenPixels(float x, float y, out float pixelX, out float pixelY)
 	{
 		WorkspaceWidget workspace = GetGame().GetWorkspace();
 		if (!workspace)
-			return null;
-
-		if (!s_wOverlay)
 		{
-			s_wOverlay = workspace.CreateWidget(
-				WidgetType.FrameWidgetTypeID,
-				WidgetFlags.VISIBLE | WidgetFlags.IGNORE_CURSOR | WidgetFlags.NOFOCUS,
-				Color.White,
-				1,
-				null
-			);
-			FrameSlot.SetAnchorMin(s_wOverlay, 0, 0);
-			FrameSlot.SetAnchorMax(s_wOverlay, 1, 1);
-			FrameSlot.SetOffsets(s_wOverlay, 0, 0, 0, 0);
+			pixelX = x;
+			pixelY = y;
+			return;
 		}
 
-		s_wOverlay.SetVisible(true);
-
-		ImageWidget mark;
-		if (s_iOverlayUsed < s_aOverlayMarks.Count())
-		{
-			mark = s_aOverlayMarks[s_iOverlayUsed];
-		}
-		else
-		{
-			Widget created = workspace.CreateWidget(
-				WidgetType.ImageWidgetTypeID,
-				WidgetFlags.VISIBLE |
-					WidgetFlags.IGNORE_CURSOR |
-					WidgetFlags.NOFOCUS |
-					WidgetFlags.STRETCH |
-					WidgetFlags.BLEND,
-				Color.White,
-				s_iOverlayUsed,
-				s_wOverlay
-			);
-			mark = ImageWidget.Cast(created);
-			if (!mark)
-				return null;
-
-			mark.SetIsColorInherited(false);
-			s_aOverlayMarks.Insert(mark);
-		}
-
-		s_iOverlayUsed++;
-		mark.SetVisible(true);
-		mark.SetOpacity(0.85);
-		mark.SetRotation(0);
-		mark.SetPivot(0.5, 0.5);
-		mark.SetZOrder(s_iOverlayUsed);
-		return mark;
+		pixelX = workspace.DPIScale(x);
+		pixelY = workspace.DPIScale(y);
 	}
 
 	protected static bool ProjectToScreen(vector world, out float x, out float y)
@@ -1910,24 +1892,54 @@ class KK_WaypointAuthoring
 
 	protected static void DrawScreenDisc(vector world, float radius, int color)
 	{
+		if (!EnsureOverlay() || !s_aOverlayCommands)
+			return;
+
 		float x;
 		float y;
 		if (!ProjectToScreen(world, x, y))
 			return;
 
-		ImageWidget mark = TakeOverlayMark();
-		if (!mark)
-			return;
+		float pixelX;
+		float pixelY;
+		ToScreenPixels(x, y, pixelX, pixelY);
 
-		float size = ProjectedDiscSize(world, radius);
-		mark.SetColorInt(color);
-		FrameSlot.SetAlignment(mark, 0.5, 0.5);
-		FrameSlot.SetSize(mark, size, size);
-		FrameSlot.SetPos(mark, x, y);
+		WorkspaceWidget workspace = GetGame().GetWorkspace();
+		float pixelRadius = ProjectedDiscSize(world, radius) * 0.5;
+		if (workspace)
+			pixelRadius = workspace.DPIScale(pixelRadius);
+
+		const int SEGMENTS = 16;
+		TriMeshDrawCommand disc = new TriMeshDrawCommand();
+		disc.m_Vertices = new array<float>();
+		disc.m_Indices = new array<int>();
+		disc.m_iColor = OverlayColor(color);
+
+		disc.m_Vertices.Insert(pixelX);
+		disc.m_Vertices.Insert(pixelY);
+
+		for (int i = 0; i <= SEGMENTS; i++)
+		{
+			float angle = (Math.PI2 * i) / SEGMENTS;
+			disc.m_Vertices.Insert(pixelX + (Math.Cos(angle) * pixelRadius));
+			disc.m_Vertices.Insert(pixelY + (Math.Sin(angle) * pixelRadius));
+		}
+
+		for (int i = 0; i < SEGMENTS; i++)
+		{
+			disc.m_Indices.Insert(0);
+			disc.m_Indices.Insert(i + 1);
+			disc.m_Indices.Insert(i + 2);
+		}
+
+		s_aOverlayCommands.Insert(disc);
 	}
 
 	protected static void DrawScreenLine(vector from, vector to, int color)
 	{
+		if (!EnsureOverlay() || !s_aOverlayCommands)
+			return;
+
 		float x1;
 		float y1;
 		float x2;
@@ -1943,16 +1955,28 @@ class KK_WaypointAuthoring
 		if (length < 1 || length > 4000)
 			return;
 
-		ImageWidget mark = TakeOverlayMark();
-		if (!mark)
-			return;
+		float pixelX1;
+		float pixelY1;
+		float pixelX2;
+		float pixelY2;
+		ToScreenPixels(x1, y1, pixelX1, pixelY1);
+		ToScreenPixels(x2, y2, pixelX2, pixelY2);
 
-		mark.SetColorInt(color);
-		mark.SetPivot(0, 0.5);
-		FrameSlot.SetAlignment(mark, 0, 0.5);
-		FrameSlot.SetSize(mark, length, 3);
-		FrameSlot.SetPos(mark, x1, y1);
-		mark.SetRotation(Math.Atan2(dy, dx) * Math.RAD2DEG);
+		WorkspaceWidget workspace = GetGame().GetWorkspace();
+		float width = 3;
+		if (workspace)
+			width = workspace.DPIScale(width);
+
+		LineDrawCommand line = new LineDrawCommand();
+		line.m_Vertices = new array<float>();
+		line.m_Vertices.Insert(pixelX1);
+		line.m_Vertices.Insert(pixelY1);
+		line.m_Vertices.Insert(pixelX2);
+		line.m_Vertices.Insert(pixelY2);
+		line.m_fWidth = width;
+		line.m_iColor = OverlayColor(color);
+		line.m_bShouldEnclose = false;
+		s_aOverlayCommands.Insert(line);
 	}
 
 	protected static void EnsureDebugTick()
