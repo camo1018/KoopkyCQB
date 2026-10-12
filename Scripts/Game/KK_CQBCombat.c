@@ -71,6 +71,15 @@ modded class SCR_AICombatComponent
 		PerceptionComponent perceptionComp,
 		SCR_AIThreatSystem threatSystem)
 	{
+		KK_WriteHousePerception(perceptionComp, threatSystem);
+	}
+
+	// Recognition rates for a house order. Compat calls this and skips the
+	// other addon, whose super would replace these rates.
+	void KK_WriteHousePerception(
+		PerceptionComponent perceptionComp,
+		SCR_AIThreatSystem threatSystem)
+	{
 		if (KK_GarrisonHold.IsIgnoringTargets(GetOwner()))
 		{
 			if (perceptionComp)
@@ -104,7 +113,7 @@ modded class SCR_AICombatComponent
 			!KK_PerceptionBoost.UseSharpCombat()
 		)
 		{
-			super.UpdatePerceptionFactor(perceptionComp, threatSystem);
+			vanilla.UpdatePerceptionFactor(perceptionComp, threatSystem);
 			return;
 		}
 
@@ -137,6 +146,26 @@ modded class SCR_AICombatComponent
 		out bool outRetreatTargetChanged,
 		out bool outCompartmentChanged)
 	{
+		KK_EvaluateHouseOrder(
+			outWeaponEvent,
+			outSelectedTargetChanged,
+			outPrevTarget,
+			outCurrentTarget,
+			outRetreatTargetChanged,
+			outCompartmentChanged
+		);
+	}
+
+	// Target and aim for a house order. Compat calls this so the other
+	// addon's pass, which rewrites the aim, does not run.
+	void KK_EvaluateHouseOrder(
+		out bool outWeaponEvent,
+		out bool outSelectedTargetChanged,
+		out BaseTarget outPrevTarget,
+		out BaseTarget outCurrentTarget,
+		out bool outRetreatTargetChanged,
+		out bool outCompartmentChanged)
+	{
 		if (KK_GarrisonHold.IsIgnoringTargets(GetOwner()))
 		{
 			KK_ClearTarget();
@@ -152,7 +181,7 @@ modded class SCR_AICombatComponent
 		BaseWeaponComponent previousWeapon = m_SelectedWeaponComp;
 		int previousMuzzle = m_iSelectedMuzzle;
 
-		super.EvaluateWeaponAndTarget(
+		vanilla.EvaluateWeaponAndTarget(
 			outWeaponEvent,
 			outSelectedTargetChanged,
 			outPrevTarget,
@@ -3125,14 +3154,45 @@ class KK_GarrisonHold
 		if (!utility || !UseRoomCombat())
 			return false;
 
-		return OnHouseOrder(utility.m_OwnerEntity) ||
-			OnHouseOrder(utility.GetOwner());
+		return OrderOwnsBehavior(utility.m_OwnerEntity) ||
+			OrderOwnsBehavior(utility.GetOwner());
 	}
+
+	// Set the moment a clear or garrison is selected, before a route exists.
+	protected static ref set<IEntity> s_OrderBehavior = new set<IEntity>();
 
 	// Clearing a house, or holding one. Attack uses neither of these.
 	static bool OnHouseOrder(IEntity soldier)
 	{
 		return IsClearing(soldier) || HasBuilding(soldier);
+	}
+
+	// The clear or garrison owns movement, aim, and the rifle. Perception
+	// still runs. This is on outside the building too.
+	static void SetOrderBehavior(IEntity soldier, bool active)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		if (active)
+		{
+			s_OrderBehavior.Insert(body);
+			LockClearMove(body, true);
+			return;
+		}
+
+		s_OrderBehavior.RemoveItem(body);
+		LockClearMove(body, false);
+	}
+
+	static bool OrderOwnsBehavior(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return false;
+
+		return s_OrderBehavior.Contains(body) || OnHouseOrder(body);
 	}
 
 	static bool HasBuilding(IEntity soldier)
@@ -3205,17 +3265,18 @@ class KK_GarrisonHold
 		return PositionInside(building, enemy.GetOrigin());
 	}
 
-	static float RoomCombatMargin()
+	// How far a clear or garrison plants and shoots. Attack waypoints
+	// keep ATTACK_CONTACT_RANGE.
+	static float OrderContactRange()
 	{
 		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
 		if (!mode)
-			return 25;
+			return 50;
 
 		return mode.KK_GetRoomCombatRange();
 	}
 
 	// The circle around the building's footprint, plus the CQB range.
-	// A clear and a garrison both take the room gun inside that circle.
 	static bool WithinBuildingReach(IEntity building, vector worldPosition)
 	{
 		if (!building)
@@ -3230,24 +3291,20 @@ class KK_GarrisonHold
 		vector center = building.CoordToParent((mins + maxs) * 0.5);
 		float dx = (maxs[0] - mins[0]) * 0.5;
 		float dz = (maxs[2] - mins[2]) * 0.5;
-		float reach = Math.Sqrt(dx * dx + dz * dz) + RoomCombatMargin();
+		float reach = Math.Sqrt(dx * dx + dz * dz) + OrderContactRange();
 		vector flat = worldPosition - center;
 		flat[1] = 0;
 		return flat.Length() <= reach;
 	}
 
-	// Near the order's building, this soldier's gun is ours. The attack
+	// The whole clear or garrison, including the walk in. The attack
 	// behavior can still stop him, but it does not decide the shot.
 	static bool OwnsShot(IEntity soldier)
 	{
 		if (!UseRoomCombat())
 			return false;
 
-		IEntity body = CharacterBody(soldier);
-		if (!body || !s_Buildings.Contains(body))
-			return false;
-
-		return WithinBuildingReach(s_Buildings.Get(body), body.GetOrigin());
+		return OrderOwnsBehavior(soldier);
 	}
 
 	// Below zero means this shot is not ours. Otherwise 0 is a quiet contact
@@ -3687,10 +3744,33 @@ class KK_GarrisonHold
 		if (!body)
 			return false;
 
-		if (HasVisibleEnemy(body) || ShotStillVisible(body))
-			return true;
+		if (ShotStillVisible(body) && s_ShotLook.Contains(body))
+		{
+			IEntity shot = s_ShotLook.Get(body);
+			if (shot && !PastOrderContact(body, shot))
+				return true;
+		}
 
-		return VisibleContact(body) != null;
+		if (HasVisibleEnemy(body))
+		{
+			IEntity seen = null;
+			SCR_AIUtilityComponent utility = UtilityOf(body);
+			if (utility && utility.m_CombatComponent)
+			{
+				BaseTarget current = utility.m_CombatComponent.GetCurrentTarget();
+				if (current)
+					seen = current.GetTargetEntity();
+			}
+
+			if (seen && !PastOrderContact(body, seen))
+				return true;
+		}
+
+		float range = ATTACK_CONTACT_RANGE;
+		if (UseRoomCombat() && OrderOwnsBehavior(body))
+			range = OrderContactRange();
+
+		return VisibleContact(body, range) != null;
 	}
 
 	// Points the rifle at that man and reports the aim point. The route
@@ -3890,13 +3970,13 @@ class KK_GarrisonHold
 		return body && s_Recalled.Contains(body);
 	}
 
-	// A clear holds the rifle up. These are the lowers that still win:
-	// the approach sprint, the reload sprint, a bash, an empty gun, a
-	// reload already playing, and a frag in hand.
+	// A clear or garrison holds the rifle up, including the walk in.
+	// These are the lowers that still win: the reload sprint, a bash,
+	// an empty gun, a reload already playing, and a frag in hand.
 	static bool ClearWeaponStaysUp(IEntity soldier)
 	{
 		IEntity body = CharacterBody(soldier);
-		if (!IsClearing(body))
+		if (!UseRoomCombat() || !OrderOwnsBehavior(body))
 			return false;
 
 		if (IsIgnoringTargets(body))
@@ -4231,11 +4311,15 @@ class KK_GarrisonHold
 
 		if (!building || !PositionInside(building, body.GetOrigin()))
 		{
+			// Outside, the route still owns the feet. Anyone he can see
+			// is still a shot. Perception already has them.
+			if (UseRoomCombat() && OrderOwnsBehavior(body))
+				ConsiderOpen(body, perception, true);
 			// A jog has no building, and the selected target may be empty.
 			// Reaper often keeps a sector there instead of a body. The
 			// perceived enemies are still the ones he can shoot.
-			if (IsMoveFire(body))
-				ConsiderOpen(body, perception);
+			else if (IsMoveFire(body))
+				ConsiderOpen(body, perception, false);
 
 			if (!s_ShotLive.Contains(body))
 				ConsiderSelected(body, selected);
@@ -4279,6 +4363,9 @@ class KK_GarrisonHold
 
 		IEntity enemy = selected.GetTargetEntity();
 		if (!enemy || !IsTargetable(enemy) || !IsHostile(body, enemy))
+			return;
+
+		if (PastOrderContact(body, enemy))
 			return;
 
 		s_ShotLive.Insert(body);
@@ -4368,7 +4455,10 @@ class KK_GarrisonHold
 		s_ShotLean.Set(body, previousLean);
 	}
 
-	protected static void ConsiderOpen(IEntity body, PerceptionComponent perception)
+	protected static void ConsiderOpen(
+		IEntity body,
+		PerceptionComponent perception,
+		bool enemiesMustBeHostile)
 	{
 		if (!body)
 			return;
@@ -4383,7 +4473,12 @@ class KK_GarrisonHold
 		s_Candidates.Clear();
 		s_CandidateDist.Clear();
 		s_CandidateKnown.Clear();
-		ConsiderOpenCategory(perception, body, ETargetCategory.ENEMY, false);
+		ConsiderOpenCategory(
+			perception,
+			body,
+			ETargetCategory.ENEMY,
+			enemiesMustBeHostile
+		);
 		ConsiderOpenCategory(perception, body, ETargetCategory.DETECTED, true);
 		ConsiderOpenCategory(perception, body, ETargetCategory.UNKNOWN, true);
 		CommitNearestShot(body, perception);
@@ -4435,6 +4530,9 @@ class KK_GarrisonHold
 				continue;
 
 			float lean;
+			if (PastOrderContact(body, enemy))
+				continue;
+
 			if (!CanEngage(body, enemy, lean))
 				continue;
 
@@ -4703,6 +4801,19 @@ class KK_GarrisonHold
 			return null;
 
 		return affiliation.GetAffiliatedFaction();
+	}
+
+	// A clear or garrison does not plant or shoot past CQB range.
+	// Attack waypoints are not in this.
+	static bool PastOrderContact(IEntity body, IEntity enemy)
+	{
+		if (!body || !enemy)
+			return false;
+
+		if (!UseRoomCombat() || !OrderOwnsBehavior(body))
+			return false;
+
+		return vector.Distance(body.GetOrigin(), enemy.GetOrigin()) > OrderContactRange();
 	}
 
 	protected static bool CanEngage(IEntity body, IEntity enemy, out float lean)
@@ -5003,7 +5114,7 @@ class KK_GarrisonHold
 	// Nearest living enemy perception has already started on, and this
 	// order can trace. Identified, detected, and unknown all count.
 	// Far contacts stay on the lane look.
-	static IEntity VisibleContact(IEntity soldier)
+	static IEntity VisibleContact(IEntity soldier, float maxRange = ATTACK_CONTACT_RANGE)
 	{
 		IEntity body = CharacterBody(soldier);
 		if (!body)
@@ -5016,7 +5127,7 @@ class KK_GarrisonHold
 			return null;
 
 		IEntity nearest = null;
-		float best = ATTACK_CONTACT_RANGE;
+		float best = maxRange;
 
 		for (int category = 0; category < 3; category++)
 		{
@@ -5055,7 +5166,7 @@ class KK_GarrisonHold
 					body.GetOrigin(),
 					enemy.GetOrigin()
 				);
-				if (distance >= best)
+				if (distance > best)
 					continue;
 
 				best = distance;
@@ -5524,8 +5635,8 @@ modded class SCR_AIAttackBehavior
 		if (
 			KK_GarrisonHold.UseRoomCombat() &&
 			(
-				KK_GarrisonHold.OnHouseOrder(character) ||
-				KK_GarrisonHold.OnHouseOrder(agentEntity)
+				KK_GarrisonHold.OrderOwnsBehavior(character) ||
+				KK_GarrisonHold.OrderOwnsBehavior(agentEntity)
 			)
 		)
 		{
@@ -5640,6 +5751,22 @@ modded class SCR_AICombatMoveLogicBase
 		if (owner)
 			body = owner.GetControlledEntity();
 
+		// The route is the move for the whole clear or garrison, outside
+		// as well. A combat-move step is the strafe.
+		if (
+			KK_GarrisonHold.UseRoomCombat() &&
+			(
+				KK_GarrisonHold.OrderOwnsBehavior(body) ||
+				KK_GarrisonHold.OrderOwnsBehavior(owner)
+			)
+		)
+		{
+			if (m_State && m_State.IsExecutingRequest())
+				m_State.CancelRequest();
+
+			return ENodeResult.RUNNING;
+		}
+
 		if (
 			KK_GarrisonHold.SprintBeforeReload(body) ||
 			KK_GarrisonHold.SprintBeforeReload(owner) ||
@@ -5724,6 +5851,9 @@ modded class SCR_AIAvoidCharacterBehavior
 {
 	override float CustomEvaluate()
 	{
+		if (KK_GarrisonHold.ClearerPushing(m_Utility))
+			return 0;
+
 		if (DoorFiring() || RunningToReloadNode() || BashingReload() || HeldInCover())
 			return 0;
 
@@ -5771,6 +5901,9 @@ modded class SCR_AIThrowGrenadeToBehavior
 {
 	override float CustomEvaluate()
 	{
+		if (KK_GarrisonHold.ClearerPushing(m_Utility))
+			return 0;
+
 		if (
 			m_Utility &&
 			(
@@ -5959,6 +6092,13 @@ modded class SCR_AIUtilityComponent
 {
 	override SCR_AIBehaviorBase EvaluateBehavior(BaseTarget unknownTarget)
 	{
+		return KK_SelectHouseBehavior(unknownTarget);
+	}
+
+	// Behavior pick for a house order. Compat calls this and skips the
+	// other addon's selector.
+	SCR_AIBehaviorBase KK_SelectHouseBehavior(BaseTarget unknownTarget)
+	{
 		bool ignore =
 			KK_GarrisonHold.IsIgnoringTargets(m_OwnerEntity) ||
 			KK_GarrisonHold.IsIgnoringTargets(GetOwner());
@@ -5984,9 +6124,9 @@ modded class SCR_AIUtilityComponent
 
 		SCR_AIBehaviorBase result;
 		if (ignore || staleUnknown)
-			result = super.EvaluateBehavior(null);
+			result = vanilla.EvaluateBehavior(null);
 		else
-			result = super.EvaluateBehavior(unknownTarget);
+			result = vanilla.EvaluateBehavior(unknownTarget);
 
 		if (ignore)
 			KK_GarrisonHold.EnforceSprintIgnore(this);
@@ -6264,8 +6404,8 @@ modded class SCR_AIMoveIndividuallyBehavior
 			(
 				KK_GarrisonHold.UseRoomCombat() &&
 				(
-					KK_GarrisonHold.OnHouseOrder(m_Utility.m_OwnerEntity) ||
-					KK_GarrisonHold.OnHouseOrder(m_Utility.GetOwner())
+					KK_GarrisonHold.OrderOwnsBehavior(m_Utility.m_OwnerEntity) ||
+					KK_GarrisonHold.OrderOwnsBehavior(m_Utility.GetOwner())
 				)
 			)
 		)

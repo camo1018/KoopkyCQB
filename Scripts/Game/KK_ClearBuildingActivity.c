@@ -149,6 +149,51 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			);
 
 		KK_GarrisonHold.NoteOrderGroup(m_Group);
+		HoldSquadClearing();
+	}
+
+	// Every soldier on this squad, before a route exists. Planning can
+	// take a second, and a player command is already moving them.
+	protected void HoldSquadClearing()
+	{
+		if (!m_Group)
+			return;
+
+		array<AIAgent> agents = {};
+		m_Group.GetAgents(agents);
+		foreach (AIAgent agent : agents)
+		{
+			if (!agent)
+				continue;
+
+			IEntity body = agent.GetControlledEntity();
+			if (!body)
+				continue;
+
+			KK_GarrisonHold.SetClearing(body, true);
+			KK_GarrisonHold.SetOrderBehavior(body, true);
+		}
+	}
+
+	protected void ReleaseSquadClearing()
+	{
+		if (!m_Group)
+			return;
+
+		array<AIAgent> agents = {};
+		m_Group.GetAgents(agents);
+		foreach (AIAgent agent : agents)
+		{
+			if (!agent)
+				continue;
+
+			IEntity body = agent.GetControlledEntity();
+			if (!body)
+				continue;
+
+			KK_GarrisonHold.SetClearing(body, false);
+			KK_GarrisonHold.SetOrderBehavior(body, false);
+		}
 	}
 	
 	override float CustomEvaluate()
@@ -174,6 +219,11 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 		if (!m_bPlanReady)
 		{
+			// A player command is already a high-priority move, and CRX
+			// turns that into a strafe as soon as someone is in sight.
+			// Assignments do not exist yet, so the lock has to land here.
+			HoldSquadClearing();
+
 			if (
 				currentTime - m_fLastPlanningAttempt >=
 				PLANNING_INTERVAL_MS
@@ -2390,7 +2440,18 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		// A living enemy, or a downed one still in sight. The trace going
 		// false is the sight line breaking.
 		bool seeing = HasLivingTarget(assignment.m_Agent);
-		if (!seeing && KK_GarrisonHold.VisibleContact(body))
+		if (seeing)
+		{
+			BaseTarget held = CurrentTarget(assignment.m_Agent);
+			IEntity heldEnemy = null;
+			if (held)
+				heldEnemy = held.GetTargetEntity();
+
+			if (heldEnemy && KK_GarrisonHold.PastOrderContact(body, heldEnemy))
+				seeing = false;
+		}
+
+		if (!seeing && KK_GarrisonHold.VisibleContact(body, KK_GarrisonHold.OrderContactRange()))
 			seeing = true;
 
 		// A reload sprint lowers the rifle and clears the shot. He can still
@@ -3429,6 +3490,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 		m_bCancelled = true;
 
+		ReleaseSquadClearing();
 		KK_GarrisonHold.ReleaseOrderGroup(m_Group);
 		SendCancelMessagesToAllAgents();
 		ReleaseOrderBuildings();
@@ -3464,6 +3526,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 	
 		m_bFinished = true;
 
+		ReleaseSquadClearing();
 		KK_GarrisonHold.ReleaseOrderGroup(m_Group);
 		SendCancelMessagesToAllAgents();
 		ReleaseOrderBuildings();

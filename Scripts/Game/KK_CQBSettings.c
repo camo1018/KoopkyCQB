@@ -143,10 +143,10 @@ modded class SCR_BaseGameMode
 	[Attribute("1", UIWidgets.CheckBox, "While clearing, garrisoning, or on an attack waypoint, suppression does not slow recognition and the first shot does not wait. An attack stays at the alerted rate for the whole order.", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_SharpCombat;
 
-	[Attribute("1", UIWidgets.CheckBox, "While clearing or garrisoning, shoot the nearest visible enemy in the building instead of staying on one target", category: "Koopky CQB/Combat")]
+	[Attribute("1", UIWidgets.CheckBox, "While clearing or garrisoning, shoot the nearest enemy he can see instead of staying on one target", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_RoomCombat;
 
-	[Attribute("25", UIWidgets.EditBox, "Meters past the building footprint where that shot turns on. The footprint is the circle around the bounding box. 0 starts at the circle.", category: "Koopky CQB/Combat")]
+	[Attribute("50", UIWidgets.EditBox, "Meters within which a clearing or garrison soldier plants and shoots a man he can see. Attack waypoints are not affected. 0 does not plant or shoot on sight.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_RoomCombatRange;
 
 	[Attribute("0.15", UIWidgets.EditBox, "Seconds from a clear sight to the shot, while clearing or garrisoning inside a building. 0 fires immediately.", category: "Koopky CQB/Combat")]

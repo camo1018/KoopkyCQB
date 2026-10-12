@@ -142,6 +142,52 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			);
 
 		KK_GarrisonHold.NoteOrderGroup(m_Group);
+		HoldSquadOrder();
+	}
+
+	// On from the moment the order is selected, including outside and
+	// while the building is still being planned.
+	protected void HoldSquadOrder()
+	{
+		if (!m_Group)
+			return;
+
+		array<AIAgent> agents = {};
+		m_Group.GetAgents(agents);
+		foreach (AIAgent agent : agents)
+		{
+			if (!agent)
+				continue;
+
+			IEntity body = agent.GetControlledEntity();
+			if (!body)
+				continue;
+
+			KK_GarrisonHold.SetOrderBehavior(body, true);
+			if (m_Building)
+				KK_GarrisonHold.SetGarrisonBuilding(body, m_Building);
+		}
+	}
+
+	protected void ReleaseSquadOrder()
+	{
+		if (!m_Group)
+			return;
+
+		array<AIAgent> agents = {};
+		m_Group.GetAgents(agents);
+		foreach (AIAgent agent : agents)
+		{
+			if (!agent)
+				continue;
+
+			IEntity body = agent.GetControlledEntity();
+			if (!body)
+				continue;
+
+			KK_GarrisonHold.SetGarrisonBuilding(body, null);
+			KK_GarrisonHold.SetOrderBehavior(body, false);
+		}
 	}
 
 	override float CustomEvaluate()
@@ -167,6 +213,8 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 		if (!m_bPlanReady)
 		{
+			HoldSquadOrder();
+
 			if (
 				currentTime - m_fLastPlanningAttempt >=
 				PLANNING_INTERVAL_MS
@@ -1575,7 +1623,10 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 		bool finishing =
 			!KK_GarrisonHold.CannotShoot(controlledEntity) &&
-			KK_GarrisonHold.VisibleContact(controlledEntity);
+			KK_GarrisonHold.VisibleContact(
+				controlledEntity,
+				KK_GarrisonHold.OrderContactRange()
+			);
 
 		if (boundRunning && outside && !waitingOnDoor && !passageBusy && !finishing)
 		{
@@ -2480,6 +2531,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 		m_bCancelled = true;
 
+		ReleaseSquadOrder();
 		KK_GarrisonHold.ReleaseOrderGroup(m_Group);
 		SendCancelMessagesToAllAgents();
 		UnpinAssignments();
@@ -2514,6 +2566,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 		m_bFinished = true;
 
+		ReleaseSquadOrder();
 		KK_GarrisonHold.ReleaseOrderGroup(m_Group);
 		SendCancelMessagesToAllAgents();
 		UnpinAssignments();
@@ -2545,6 +2598,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			return;
 
 		m_bFinished = true;
+		ReleaseSquadOrder();
 		KK_GarrisonHold.ReleaseOrderGroup(m_Group);
 		SendCancelMessagesToAllAgents();
 		UnpinAssignments();
