@@ -172,6 +172,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 			KK_GarrisonHold.SetClearing(body, true);
 			KK_GarrisonHold.SetOrderBehavior(body, true);
+			KK_AgentMove.KeepSolo(m_Group, agent, m_mSoloHandlers);
 		}
 	}
 
@@ -219,9 +220,9 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 		if (!m_bPlanReady)
 		{
-			// A player command is already a high-priority move, and CRX
-			// turns that into a strafe as soon as someone is in sight.
-			// Assignments do not exist yet, so the lock has to land here.
+			// A player command is already a high-priority move on the
+			// follow slot. That slot is a short step. Assignments do
+			// not exist yet, so the lock has to land here.
 			HoldSquadClearing();
 
 			if (
@@ -919,6 +920,9 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				i = m_aAssignments.Count() - 1;
 				continue;
 			}
+
+			if (assignment.m_Agent)
+				KK_AgentMove.KeepSolo(m_Group, assignment.m_Agent, m_mSoloHandlers);
 
 			ApplyClearLook(assignment);
 			i--;
@@ -2580,7 +2584,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				)
 			);
 		if (stepOver)
-			priority = KK_AgentMove.EnterBuildingPriorityLevel();
+			priority = KK_AgentMove.OrderPriorityLevel();
 
 		KK_AgentMove.Issue(
 			this,
