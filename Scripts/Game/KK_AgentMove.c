@@ -67,19 +67,6 @@ class KK_AgentMove
 			+ 1;
 	}
 
-	// A player command already has a move at player priority. That move
-	// keeps the formation slot, and the slot is only a short step ahead.
-	// The route has to outrank it. A placed waypoint never sends that move.
-	static float OrderPriorityLevel()
-	{
-		float priority = EnterBuildingPriorityLevel();
-		float playerOrder = SCR_AIActionBase.PRIORITY_LEVEL_PLAYER + 1;
-		if (playerOrder > priority)
-			priority = playerOrder;
-
-		return priority;
-	}
-
 	// A target counts as seen only from inside the space being cleared.
 	// CRX observe turns the head and would otherwise finish nodes through a doorway.
 	static const float SIGHT_VISIT_RANGE = 8.0;
@@ -211,14 +198,6 @@ class KK_AgentMove
 		soloHandlers.Clear();
 	}
 
-	static void KeepSolo(
-		SCR_AIGroup group,
-		notnull AIAgent agent,
-		map<AIAgent, ref KK_FormationSplit> soloHandlers)
-	{
-		ClaimSoloHandler(group, agent, soloHandlers);
-	}
-
 	protected static void ClaimSoloHandler(
 		SCR_AIGroup group,
 		notnull AIAgent agent,
@@ -241,13 +220,25 @@ class KK_AgentMove
 			if (currentHandler == split.m_iSolo)
 				return;
 
-			// Pulled back onto the player follow slot. That slot only
-			// ever asks for a short step. Make another handler.
+			// Combat AI merged him off the handler this order created.
 			RemoveHandler(movement, split.m_iSolo, split.m_iHome);
 			split.m_iSolo = -1;
 			currentHandler = movement.GetAgentMoveHandlerId(agent);
 			if (currentHandler < 0)
 				return;
+
+			if (movement.GetMoveHandlerAgentCount(currentHandler) <= 1)
+			{
+				// Still off the squad formation. Remember where he is so
+				// the order can put him back on the one he left.
+				split.m_iSolo = currentHandler;
+				return;
+			}
+		}
+		else if (movement.GetMoveHandlerAgentCount(currentHandler) <= 1)
+		{
+			// Already separated from the formation, so CRX will treat him as a leader.
+			return;
 		}
 
 		int createdHandler = movement.CreateGroupMoveHandler("Column");
