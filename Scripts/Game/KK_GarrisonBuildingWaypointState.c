@@ -53,6 +53,10 @@ class KK_GarrisonBuildingWaypointState : SCR_AIWaypointState
 			return;
 		}
 
+		// A placed waypoint otherwise keeps the prefab values. A player
+		// order already copies the scenario settings onto its waypoint.
+		waypoint.ApplyScenarioSettings();
+
 		m_Activity = new KK_GarrisonBuildingActivity(
 			m_Utility,
 			waypoint

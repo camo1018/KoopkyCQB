@@ -53,6 +53,10 @@ class KK_ClearBuildingWaypointState : SCR_AIWaypointState
 			return;
 		}
 
+		// A placed waypoint otherwise keeps the prefab split. A player
+		// order already copies the scenario setting onto its waypoint.
+		waypoint.ApplyScenarioSettings();
+
 		m_Activity = new KK_ClearBuildingActivity(
 			m_Utility,
 			waypoint
