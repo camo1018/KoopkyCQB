@@ -84,6 +84,8 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 36: return mode.KK_GetAttackArrivalRadius();
 			case 37: return mode.KK_GetTakeCoverReturn();
 			case 41: return mode.KK_GetRoomCombatRange();
+			case 43: return mode.KK_GetBarrelStuck();
+			case 44: return mode.KK_GetBarrelCool();
 		}
 
 		return mode.KK_GetHorizontalSpacing();
@@ -134,6 +136,8 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 36: mode.KK_SetAttackArrivalRadius(value); break;
 			case 37: mode.KK_SetTakeCoverReturn(value); break;
 			case 41: mode.KK_SetRoomCombatRange(value); break;
+			case 43: mode.KK_SetBarrelStuck(value); break;
+			case 44: mode.KK_SetBarrelCool(value); break;
 			default: mode.KK_SetHorizontalSpacing(value); break;
 		}
 	}
@@ -198,6 +202,8 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 18: return mode.KK_GetSidearmThenRelease();
 			case 19: return mode.KK_GetStartFromOrder();
 			case 21: return mode.KK_GetTakeCoverAttack();
+			case 22: return mode.KK_GetSnapAim();
+			case 23: return mode.KK_GetSnapAimError();
 		}
 
 		return mode.KK_GetGarrisonAfterClear();
@@ -226,6 +232,8 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 18: mode.KK_SetSidearmThenRelease(value); break;
 			case 19: mode.KK_SetStartFromOrder(value); break;
 			case 21: mode.KK_SetTakeCoverAttack(value); break;
+			case 22: mode.KK_SetSnapAim(value); break;
+			case 23: mode.KK_SetSnapAimError(value); break;
 			default: mode.KK_SetGarrisonAfterClear(value); break;
 		}
 	}
@@ -303,6 +311,14 @@ class KK_CQBAttrRoomCombat : KK_CQBBoolEditorAttribute {}
 class KK_CQBAttrRoomCombatRange : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrShotDelay : KK_CQBFloatEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrSnapAim : KK_CQBBoolEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrSnapAimError : KK_CQBBoolEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrBarrelStuck : KK_CQBFloatEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrBarrelCool : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrLostContactLook : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]

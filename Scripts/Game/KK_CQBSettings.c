@@ -152,6 +152,18 @@ modded class SCR_BaseGameMode
 	[Attribute("0.15", UIWidgets.EditBox, "Seconds from a clear sight to the shot, while clearing or garrisoning inside a building. 0 fires immediately.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_ShotDelay;
 
+	[Attribute("0", UIWidgets.CheckBox, "Experimental. While he is aiming at a man, snap his heading and weapon aim onto that point instead of turning at the normal rate.", category: "Koopky CQB/Combat")]
+	protected bool m_bKK_SnapAim;
+
+	[Attribute("1", UIWidgets.CheckBox, "Snap aim scatters around the aim point by skill, distance, weapon, and light. Off puts the snap on the point itself.", category: "Koopky CQB/Combat")]
+	protected bool m_bKK_SnapAimError;
+
+	[Attribute("1", UIWidgets.EditBox, "Seconds he keeps engaging a man he can see while the barrel cannot hit him. Then he moves until the barrel can. 0 moves as soon as the barrel is blocked.", category: "Koopky CQB/Combat")]
+	protected float m_fKK_BarrelStuck;
+
+	[Attribute("2", UIWidgets.EditBox, "Seconds after that move starts before he will stand and try an eyes-only shot again.", category: "Koopky CQB/Combat")]
+	protected float m_fKK_BarrelCool;
+
 	[Attribute("2", UIWidgets.EditBox, "Seconds the rifle stays on the last place a man was seen after the sight line breaks, while clearing or garrisoning. 0 looks back along the route immediately.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_LostContactLook;
 
@@ -197,7 +209,7 @@ modded class SCR_BaseGameMode
 	[Attribute("0.4", UIWidgets.EditBox, "Distance moved before another door search (m)", category: "Koopky CQB/Combat")]
 	protected float m_fKK_DoorSearchDistance;
 
-	[Attribute("0", UIWidgets.CheckBox, "Draw interior points while playing from Workbench", category: "Koopky CQB/Debug")]
+	[Attribute("0", UIWidgets.CheckBox, "Draw interior points for the latest clear or garrison order", category: "Koopky CQB/Debug")]
 	protected bool m_bKK_DebugDraw;
 
 	[Attribute("0", UIWidgets.CheckBox, "Write KK log lines. Off skips those calls.", category: "Koopky CQB/Debug")]
@@ -363,6 +375,10 @@ modded class SCR_BaseGameMode
 			KK_ReadBool(context, "RoomCombat", m_bKK_RoomCombat);
 			KK_ReadFloat(context, "RoomCombatRange", m_fKK_RoomCombatRange);
 			KK_ReadFloat(context, "ShotDelay", m_fKK_ShotDelay);
+			KK_ReadBool(context, "SnapAim", m_bKK_SnapAim);
+			KK_ReadBool(context, "SnapAimError", m_bKK_SnapAimError);
+			KK_ReadFloat(context, "BarrelStuck", m_fKK_BarrelStuck);
+			KK_ReadFloat(context, "BarrelCool", m_fKK_BarrelCool);
 			KK_ReadFloat(context, "LostContactLook", m_fKK_LostContactLook);
 			KK_ReadFloat(context, "ShotInterval", m_fKK_ShotInterval);
 			m_fKK_ShotInterval = KK_ClampShotInterval(m_fKK_ShotInterval);
@@ -545,6 +561,10 @@ modded class SCR_BaseGameMode
 		context.WriteValue("RoomCombat", m_bKK_RoomCombat);
 		context.WriteValue("RoomCombatRange", KK_GetRoomCombatRange());
 		context.WriteValue("ShotDelay", m_fKK_ShotDelay);
+		context.WriteValue("SnapAim", m_bKK_SnapAim);
+		context.WriteValue("SnapAimError", m_bKK_SnapAimError);
+		context.WriteValue("BarrelStuck", KK_GetBarrelStuck());
+		context.WriteValue("BarrelCool", KK_GetBarrelCool());
 		context.WriteValue("LostContactLook", KK_GetLostContactLook());
 		context.WriteValue("ShotInterval", KK_GetShotInterval());
 		context.WriteValue("ReloadRemainder", m_fKK_ReloadRemainder);
@@ -799,6 +819,26 @@ modded class SCR_BaseGameMode
 		return Math.Max(m_fKK_ShotDelay, 0);
 	}
 
+	bool KK_GetSnapAim()
+	{
+		return m_bKK_SnapAim;
+	}
+
+	bool KK_GetSnapAimError()
+	{
+		return m_bKK_SnapAimError;
+	}
+
+	float KK_GetBarrelStuck()
+	{
+		return Math.Max(m_fKK_BarrelStuck, 0);
+	}
+
+	float KK_GetBarrelCool()
+	{
+		return Math.Max(m_fKK_BarrelCool, 0);
+	}
+
 	float KK_GetLostContactLook()
 	{
 		return Math.Max(m_fKK_LostContactLook, 0);
@@ -970,6 +1010,10 @@ modded class SCR_BaseGameMode
 	void KK_SetRoomCombat(bool value) { m_bKK_RoomCombat = value; }
 	void KK_SetRoomCombatRange(float value) { m_fKK_RoomCombatRange = Math.Max(value, 0); }
 	void KK_SetShotDelay(float value) { m_fKK_ShotDelay = Math.Max(value, 0); }
+	void KK_SetSnapAim(bool value) { m_bKK_SnapAim = value; }
+	void KK_SetSnapAimError(bool value) { m_bKK_SnapAimError = value; }
+	void KK_SetBarrelStuck(float value) { m_fKK_BarrelStuck = Math.Max(value, 0); }
+	void KK_SetBarrelCool(float value) { m_fKK_BarrelCool = Math.Max(value, 0); }
 	void KK_SetLostContactLook(float value) { m_fKK_LostContactLook = Math.Max(value, 0); }
 	void KK_SetShotInterval(float value) { m_fKK_ShotInterval = KK_ClampShotInterval(value); }
 	void KK_SetReloadRemainder(float value)

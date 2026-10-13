@@ -1001,6 +1001,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 			if (LookAtHostile(agent))
 				continue;
 
+			KK_GarrisonHold.SnapAimPose(agent.GetControlledEntity(), vector.Zero);
 			vector eye = agent.GetControlledEntity().GetOrigin();
 			eye = eye + Vector(0, 1.6, 0);
 			LookAt(agent, eye + (direction * distance), LANE_LOOK);
@@ -1014,7 +1015,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 			if (!agent || IsReleased(agent))
 				continue;
 
-			LookAtHostile(agent);
+			if (!LookAtHostile(agent))
+				KK_GarrisonHold.SnapAimPose(agent.GetControlledEntity(), vector.Zero);
 		}
 	}
 
@@ -1048,7 +1050,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 			}
 		}
 
-		LookAt(agent, KK_GarrisonHold.ShotAimPoint(enemy), CONTACT_LOOK);
+		vector aimPoint = KK_GarrisonHold.ShotAimPoint(agent.GetControlledEntity(), enemy);
+		LookAt(agent, aimPoint, CONTACT_LOOK);
+		KK_GarrisonHold.SnapAimPose(agent.GetControlledEntity(), aimPoint);
 		return true;
 	}
 
@@ -1240,6 +1244,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 		if (soldier.m_UtilityComponent.m_LookAction)
 			soldier.m_UtilityComponent.m_LookAction.Cancel();
+
+		KK_GarrisonHold.SnapAimPose(agent.GetControlledEntity(), vector.Zero);
 	}
 
 	protected bool Reached(notnull KK_AttackPair pair)
@@ -1705,6 +1711,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 		}
 
 		bool shooting = CanReturnFire(agent);
+		if (shooting && KK_GarrisonHold.BarrelWantsMove(agent))
+			shooting = false;
+
 		KK_GarrisonHold.SetReturnFire(agent, shooting);
 		if (!shooting)
 			return false;

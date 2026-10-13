@@ -10,6 +10,7 @@ class KK_InteriorAgentAssignment
 	vector m_vStillPosition;
 	IEntity m_DoorEntity;
 	bool m_bClearsPoint;
+	bool m_bHoldsDoor;
 	bool m_bFacingApplied;
 	bool m_bWeaponUp;
 	bool m_bRunSet;
@@ -81,6 +82,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		new map<AIAgent, float>();
 
 	protected ref array<ref Shape> m_aDebugShapes = {};
+	protected int m_iDebugToken;
 	protected ref TraceParam m_SightTrace;
 	protected IEntity m_SightViewer;
 
@@ -149,6 +151,8 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			);
 
 		KK_GarrisonHold.NoteOrderGroup(m_Group);
+		if (m_iDebugToken == 0)
+			m_iDebugToken = KK_InteriorDebugOverlay.Claim(m_Group);
 		HoldSquadClearing();
 	}
 
@@ -172,7 +176,6 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 			KK_GarrisonHold.SetClearing(body, true);
 			KK_GarrisonHold.SetOrderBehavior(body, true);
-			KK_AgentMove.KeepSolo(m_Group, agent, m_mSoloHandlers);
 		}
 	}
 
@@ -220,9 +223,9 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 		if (!m_bPlanReady)
 		{
-			// A player command is already a high-priority move on the
-			// follow slot. That slot is a short step. Assignments do
-			// not exist yet, so the lock has to land here.
+			// A player command is already a high-priority move, and CRX
+			// turns that into a strafe as soon as someone is in sight.
+			// Assignments do not exist yet, so the lock has to land here.
 			HoldSquadClearing();
 
 			if (
@@ -265,12 +268,13 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			return 0;
 		}
 
-#ifdef WORKBENCH
-		if (m_ClearWaypoint.GetDebugDraw())
+		if (
+			m_ClearWaypoint.GetDebugDraw() &&
+			KK_InteriorDebugOverlay.Owns(m_iDebugToken)
+		)
 			DrawDebug();
 		else
 			ClearDebug();
-#endif
 
 		return GetPriority();
 	}
@@ -468,6 +472,17 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				assignment.m_Agent.GetControlledEntity()
 			)
 			{
+				if (KK_GarrisonHold.IsDown(assignment.m_Agent.GetControlledEntity()))
+				{
+					KK_GarrisonHold.PauseDownedCQB(assignment.m_Agent);
+					assignment.m_fStartedAt = currentTime;
+					assignment.m_fStillSince = currentTime;
+					assignment.m_fLastTimerUpdate = currentTime;
+					assignment.m_fLastOrderAt = currentTime;
+					i--;
+					continue;
+				}
+
 				KK_PerceptionBoost.Apply(
 					assignment.m_Agent,
 					m_mPerceptionFactors
@@ -505,11 +520,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			}
 			else if (
 				!assignment.m_bClearsPoint &&
-				(
-					assignment.m_Target.IsFinished() ||
-					assignment.m_Target.m_eState ==
-						KK_EInteriorTargetState.DEFERRED
-				)
+				SpareHoldExpired(assignment.m_Target)
 			)
 			{
 				ReleaseAssignment(i);
@@ -863,11 +874,8 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				)
 				{
 					if (SCR_BaseGameMode.KK_LogEnabled())
-						PrintFormat(
-							"KK: Unit stood still for %1s heading to interior target %2, move goal %3, %4m away",
-							m_ClearWaypoint.GetStuckTimeout(),
-							assignment.m_Target.m_vPosition,
-							moveGoal,
+						LogStillUnit(
+							assignment,
 							distanceToTarget
 						);
 
@@ -920,9 +928,6 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				i = m_aAssignments.Count() - 1;
 				continue;
 			}
-
-			if (assignment.m_Agent)
-				KK_AgentMove.KeepSolo(m_Group, assignment.m_Agent, m_mSoloHandlers);
 
 			ApplyClearLook(assignment);
 			i--;
@@ -1051,25 +1056,52 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				openPoints
 			);
 
-			if (
-				!openPoints.IsEmpty() &&
-				CountClearers(floors[activeIndex], clusters[activeIndex]) < 2
-			)
+			// A previous-room hold keeps its post, so an empty
+			// clearer slot never refills on its own. Pull only
+			// as many as this room still has points for, and
+			// only when nobody is already free to take them.
+			int roomClearers = CountClearers(
+				floors[activeIndex],
+				clusters[activeIndex]
+			);
+			array<AIAgent> idle = {};
+			CollectFreeAgents(idle);
+			int pull = 2 - roomClearers;
+
+			if (pull > openPoints.Count())
+				pull = openPoints.Count();
+
+			pull = pull - idle.Count();
+
+			if (pull > 0)
 			{
-				ReleaseSparesInRoom(
+				vector pullFrom = anchor;
+				KK_InteriorTarget nearOpen = NearestTo(openPoints, anchor);
+				if (nearOpen)
+					pullFrom = nearOpen.m_vPosition;
+
+				ReleaseSparesForClearers(
 					floors[activeIndex],
-					clusters[activeIndex]
+					clusters[activeIndex],
+					pull,
+					pullFrom
 				);
 			}
 
-			RetargetSpares(
-				mode,
-				activeIndex,
-				floors,
-				clusters,
-				anchor,
-				currentTime
-			);
+			// Previous-room holders are spread after the lead pair
+			// has taken its points. Other spare modes still
+			// retarget here.
+			if (mode != KK_EClearSpareMode.PREVIOUS_ROOM)
+			{
+				RetargetSpares(
+					mode,
+					activeIndex,
+					floors,
+					clusters,
+					anchor,
+					currentTime
+				);
+			}
 		}
 
 		array<AIAgent> free = {};
@@ -1126,6 +1158,42 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			currentTime,
 			anchor
 		);
+
+		if (mode == KK_EClearSpareMode.PREVIOUS_ROOM)
+		{
+			// A small room has no second waiting point, so the
+			// other man of the pair would never be sent. Hold him
+			// on the doorway instead of leaving the lead alone.
+			if (
+				CountClearers(
+					floors[activeIndex],
+					clusters[activeIndex]
+				) == 1
+			)
+			{
+				PostDoorTrailer(
+					activeIndex,
+					floors,
+					clusters,
+					anchor,
+					currentTime
+				);
+			}
+			else
+			{
+				ReleaseDoorTrailers();
+			}
+
+			PostClearedRooms(
+				activeIndex,
+				floors,
+				clusters,
+				anchor,
+				free,
+				currentTime
+			);
+			return;
+		}
 
 		KK_InteriorTarget post = FindSparePost(
 			mode,
@@ -1719,6 +1787,8 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 			if (lead && pending.Count() > 1)
 				target = FarthestFrom(pending, anchor);
+			else if (!lead)
+				target = NearestTo(pending, ClearerPoint(floor, cluster, anchor));
 			else
 				target = NearestTo(pending, anchor);
 
@@ -1735,6 +1805,517 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				role = "lead";
 
 			AssignClearer(agent, target, currentTime, role);
+		}
+	}
+
+	// The other man in the clearing pair. His point is the open
+	// node nearest the lead, so he moves in beside him.
+	protected vector ClearerPoint(int floor, int cluster, vector fallback)
+	{
+		foreach (KK_InteriorAgentAssignment assignment : m_aAssignments)
+		{
+			if (
+				!assignment ||
+				!assignment.m_bClearsPoint ||
+				!assignment.m_Target ||
+				assignment.m_Target.m_iFloor != floor ||
+				assignment.m_Target.m_iCluster != cluster
+			)
+			{
+				continue;
+			}
+
+			return assignment.m_Target.m_vPosition;
+		}
+
+		return fallback;
+	}
+
+	// The pair's second man, posted on the way into the room the
+	// lead is clearing. A visited doorway still counts. He stays
+	// there until a second clearer exists or the lead is done.
+	protected void PostDoorTrailer(
+		int activeIndex,
+		notnull array<int> floors,
+		notnull array<int> clusters,
+		vector anchor,
+		float currentTime)
+	{
+		int floor = floors[activeIndex];
+		int cluster = clusters[activeIndex];
+		KK_InteriorTarget door = DoorPoint(
+			activeIndex,
+			floors,
+			clusters,
+			anchor
+		);
+
+		if (!door)
+			return;
+
+		foreach (KK_InteriorAgentAssignment assignment : m_aAssignments)
+		{
+			if (!assignment || !assignment.m_bHoldsDoor)
+				continue;
+
+			if (assignment.m_Target == door)
+				return;
+
+			assignment.m_bHoldsDoor = true;
+			m_mSparePost.Set(assignment.m_Agent, door);
+			RetargetAssignment(assignment, door, currentTime);
+			LogDoorTrailer(assignment.m_Agent, door);
+			return;
+		}
+
+		array<AIAgent> idle = {};
+		CollectFreeAgents(idle);
+		AIAgent agent = TakeClosestAgent(idle, door.m_vPosition);
+
+		if (!agent)
+		{
+			agent = ClosestSpare(door.m_vPosition);
+			if (!agent)
+				return;
+
+			ReleaseSpareAgent(agent);
+		}
+
+		AssignSpare(agent, door, currentTime);
+
+		foreach (KK_InteriorAgentAssignment created : m_aAssignments)
+		{
+			if (!created || created.m_Agent != agent)
+				continue;
+
+			created.m_bHoldsDoor = true;
+			break;
+		}
+
+		LogDoorTrailer(agent, door);
+	}
+
+	protected KK_InteriorTarget DoorPoint(
+		int activeIndex,
+		notnull array<int> floors,
+		notnull array<int> clusters,
+		vector anchor)
+	{
+		vector activeCenter = RoomCenter(
+			floors[activeIndex],
+			clusters[activeIndex],
+			anchor
+		);
+		vector approach = anchor;
+		array<int> cleared = {};
+		CollectClearedRooms(
+			activeIndex,
+			floors,
+			clusters,
+			activeCenter,
+			cleared
+		);
+
+		if (!cleared.IsEmpty())
+		{
+			approach = RoomCenter(
+				floors[cleared[0]],
+				clusters[cleared[0]],
+				anchor
+			);
+		}
+
+		array<KK_InteriorTarget> room = {};
+		CollectTargetsInRoom(
+			floors[activeIndex],
+			clusters[activeIndex],
+			room
+		);
+
+		KK_InteriorTarget leadTarget;
+		vector leadPoint = ClearerPoint(
+			floors[activeIndex],
+			clusters[activeIndex],
+			approach
+		);
+
+		foreach (KK_InteriorTarget target : room)
+		{
+			if (!target)
+				continue;
+
+			if (vector.Distance(target.m_vPosition, leadPoint) > 0.35)
+				continue;
+
+			leadTarget = target;
+			break;
+		}
+
+		KK_InteriorTarget door = NearestOther(room, approach, leadTarget);
+		if (door)
+			return door;
+
+		return NearestTo(room, approach);
+	}
+
+	protected KK_InteriorTarget NearestOther(
+		notnull array<KK_InteriorTarget> targets,
+		vector anchor,
+		KK_InteriorTarget skip)
+	{
+		KK_InteriorTarget best;
+		float bestDistance = float.MAX;
+
+		foreach (KK_InteriorTarget target : targets)
+		{
+			if (!target || target == skip)
+				continue;
+
+			float distance = vector.Distance(anchor, target.m_vPosition);
+			if (distance >= bestDistance)
+				continue;
+
+			bestDistance = distance;
+			best = target;
+		}
+
+		return best;
+	}
+
+	protected AIAgent ClosestSpare(vector position)
+	{
+		AIAgent best;
+		float bestDistance = float.MAX;
+
+		foreach (KK_InteriorAgentAssignment assignment : m_aAssignments)
+		{
+			if (
+				!assignment ||
+				assignment.m_bClearsPoint ||
+				assignment.m_bHoldsDoor ||
+				!assignment.m_Agent ||
+				!assignment.m_Agent.GetControlledEntity()
+			)
+			{
+				continue;
+			}
+
+			float distance = vector.Distance(
+				assignment.m_Agent.GetControlledEntity().GetOrigin(),
+				position
+			);
+
+			if (distance >= bestDistance)
+				continue;
+
+			bestDistance = distance;
+			best = assignment.m_Agent;
+		}
+
+		return best;
+	}
+
+	protected void ReleaseDoorTrailers()
+	{
+		for (int i = m_aAssignments.Count() - 1; i >= 0; i--)
+		{
+			KK_InteriorAgentAssignment assignment = m_aAssignments[i];
+			if (!assignment || !assignment.m_bHoldsDoor)
+				continue;
+
+			ReleaseAssignment(i);
+		}
+	}
+
+	protected void LogDoorTrailer(AIAgent agent, KK_InteriorTarget door)
+	{
+		if (!agent || !door || !SCR_BaseGameMode.KK_LogEnabled())
+			return;
+
+		PrintFormat(
+			"KK: Unit %1 door target %2 floor=%3 cluster=%4",
+			agent,
+			door.m_vPosition,
+			door.m_iFloor,
+			door.m_iCluster
+		);
+	}
+
+	// One holder per node in the closest cleared room. A full room
+	// spills into the next closest cleared room. Extras are not
+	// stacked on a node that already has someone.
+	protected void PostClearedRooms(
+		int activeIndex,
+		notnull array<int> floors,
+		notnull array<int> clusters,
+		vector anchor,
+		notnull array<AIAgent> free,
+		float currentTime)
+	{
+		vector activeCenter = RoomCenter(
+			floors[activeIndex],
+			clusters[activeIndex],
+			anchor
+		);
+		array<int> roomOrder = {};
+		CollectClearedRooms(
+			activeIndex,
+			floors,
+			clusters,
+			activeCenter,
+			roomOrder
+		);
+
+		array<KK_InteriorTarget> slots = {};
+
+		foreach (int roomIndex : roomOrder)
+		{
+			CollectTargetsInRoom(
+				floors[roomIndex],
+				clusters[roomIndex],
+				slots
+			);
+		}
+
+		if (slots.IsEmpty())
+			return;
+
+		array<AIAgent> idle = {};
+		CollectFreeAgents(idle);
+		int men = idle.Count();
+
+		foreach (KK_InteriorAgentAssignment assignment : m_aAssignments)
+		{
+			if (
+				!assignment ||
+				assignment.m_bClearsPoint ||
+				assignment.m_bHoldsDoor ||
+				!assignment.m_Agent ||
+				!assignment.m_Agent.GetControlledEntity()
+			)
+			{
+				continue;
+			}
+
+			men++;
+		}
+
+		array<AIAgent> staying = {};
+		array<KK_InteriorTarget> kept = {};
+		int seatsLeft = men;
+
+		foreach (int roomIndex : roomOrder)
+		{
+			array<KK_InteriorTarget> nodes = {};
+			CollectTargetsInRoom(
+				floors[roomIndex],
+				clusters[roomIndex],
+				nodes
+			);
+
+			int roomSeats = nodes.Count();
+			if (roomSeats > seatsLeft)
+				roomSeats = seatsLeft;
+
+			seatsLeft = seatsLeft - roomSeats;
+			int keptHere = 0;
+
+			foreach (KK_InteriorAgentAssignment assignment : m_aAssignments)
+			{
+				if (
+				!assignment ||
+				assignment.m_bClearsPoint ||
+				assignment.m_bHoldsDoor ||
+				!assignment.m_Agent ||
+				!assignment.m_Target ||
+				keptHere >= roomSeats ||
+					staying.Find(assignment.m_Agent) >= 0 ||
+					nodes.Find(assignment.m_Target) < 0 ||
+					kept.Find(assignment.m_Target) >= 0
+				)
+				{
+					continue;
+				}
+
+				kept.Insert(assignment.m_Target);
+				staying.Insert(assignment.m_Agent);
+				m_mSparePost.Set(assignment.m_Agent, assignment.m_Target);
+				keptHere++;
+			}
+		}
+
+		array<AIAgent> pool = {};
+
+		foreach (KK_InteriorAgentAssignment assignment : m_aAssignments)
+		{
+			if (
+				!assignment ||
+				assignment.m_bClearsPoint ||
+				assignment.m_bHoldsDoor ||
+				!assignment.m_Agent ||
+				!assignment.m_Agent.GetControlledEntity() ||
+				staying.Find(assignment.m_Agent) >= 0
+			)
+			{
+				continue;
+			}
+
+			pool.Insert(assignment.m_Agent);
+		}
+
+		foreach (AIAgent agent : idle)
+		{
+			if (!agent || !agent.GetControlledEntity())
+				continue;
+
+			pool.Insert(agent);
+		}
+
+		foreach (KK_InteriorTarget slot : slots)
+		{
+			if (!slot || kept.Find(slot) >= 0 || pool.IsEmpty())
+				continue;
+
+			AIAgent agent = TakeClosestAgent(pool, slot.m_vPosition);
+			if (!agent)
+				return;
+
+			kept.Insert(slot);
+			PlaceSpare(agent, slot, currentTime);
+		}
+
+		for (int i = pool.Count() - 1; i >= 0; i--)
+		{
+			if (!pool[i])
+				continue;
+
+			ReleaseSpareAgent(pool[i]);
+		}
+	}
+
+	protected void CollectClearedRooms(
+		int activeIndex,
+		notnull array<int> floors,
+		notnull array<int> clusters,
+		vector activeCenter,
+		notnull array<int> outRooms)
+	{
+		array<int> remaining = {};
+
+		for (int i = 0; i < activeIndex; i++)
+		{
+			if (!RoomIsFinished(floors[i], clusters[i]))
+				continue;
+
+			remaining.Insert(i);
+		}
+
+		while (!remaining.IsEmpty())
+		{
+			int bestList = 0;
+			float bestDistance = float.MAX;
+
+			for (int n = 0; n < remaining.Count(); n++)
+			{
+				vector center = RoomCenter(
+					floors[remaining[n]],
+					clusters[remaining[n]],
+					activeCenter
+				);
+				float distance = vector.Distance(center, activeCenter);
+
+				if (distance >= bestDistance)
+					continue;
+
+				bestDistance = distance;
+				bestList = n;
+			}
+
+			outRooms.Insert(remaining[bestList]);
+			remaining.Remove(bestList);
+		}
+	}
+
+	protected vector RoomCenter(int floor, int cluster, vector fallback)
+	{
+		array<KK_InteriorTarget> room = {};
+		CollectTargetsInRoom(floor, cluster, room);
+
+		if (room.IsEmpty())
+			return fallback;
+
+		vector sum = vector.Zero;
+
+		foreach (KK_InteriorTarget target : room)
+		{
+			if (!target)
+				continue;
+
+			sum += target.m_vPosition;
+		}
+
+		return sum / room.Count();
+	}
+
+	protected void CollectTargetsInRoom(
+		int floor,
+		int cluster,
+		notnull array<KK_InteriorTarget> outTargets)
+	{
+		array<ref KK_InteriorTarget> targets = m_Plan.GetTargets();
+
+		foreach (KK_InteriorTarget target : targets)
+		{
+			if (
+				!target ||
+				target.m_iFloor != floor ||
+				target.m_iCluster != cluster
+			)
+			{
+				continue;
+			}
+
+			outTargets.Insert(target);
+		}
+	}
+
+	protected void PlaceSpare(
+		notnull AIAgent agent,
+		notnull KK_InteriorTarget target,
+		float currentTime)
+	{
+		foreach (KK_InteriorAgentAssignment assignment : m_aAssignments)
+		{
+			if (!assignment || assignment.m_Agent != agent)
+				continue;
+
+			if (assignment.m_Target == target)
+			{
+				m_mSparePost.Set(agent, target);
+				return;
+			}
+
+			m_mSparePost.Set(agent, target);
+			RetargetAssignment(assignment, target, currentTime);
+			return;
+		}
+
+		AssignSpare(agent, target, currentTime);
+	}
+
+	protected void ReleaseSpareAgent(notnull AIAgent agent)
+	{
+		for (int i = m_aAssignments.Count() - 1; i >= 0; i--)
+		{
+			KK_InteriorAgentAssignment assignment = m_aAssignments[i];
+			if (!assignment || assignment.m_Agent != agent)
+				continue;
+
+			if (assignment.m_bClearsPoint)
+				return;
+
+			ReleaseAssignment(i);
+			return;
 		}
 	}
 
@@ -1886,23 +2467,70 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		}
 	}
 
-	protected void ReleaseSparesInRoom(int floor, int cluster)
+	// Prefer a spare already standing in the room being cleared,
+	// then the one closest to the point that still needs a man.
+	protected void ReleaseSparesForClearers(
+		int floor,
+		int cluster,
+		int needed,
+		vector anchor)
 	{
-		for (int i = m_aAssignments.Count() - 1; i >= 0; i--)
+		while (needed > 0)
 		{
-			KK_InteriorAgentAssignment assignment = m_aAssignments[i];
-			if (
-				!assignment ||
-				assignment.m_bClearsPoint ||
-				!assignment.m_Target ||
-				assignment.m_Target.m_iFloor != floor ||
-				assignment.m_Target.m_iCluster != cluster
-			)
+			int bestIndex = -1;
+			float bestDistance = float.MAX;
+			bool bestInRoom = false;
+
+			for (int i = 0; i < m_aAssignments.Count(); i++)
 			{
-				continue;
+				KK_InteriorAgentAssignment assignment = m_aAssignments[i];
+				if (
+					!assignment ||
+					assignment.m_bClearsPoint ||
+					!assignment.m_Agent ||
+					!assignment.m_Agent.GetControlledEntity()
+				)
+				{
+					continue;
+				}
+
+				bool inRoom =
+					assignment.m_Target &&
+					assignment.m_Target.m_iFloor == floor &&
+					assignment.m_Target.m_iCluster == cluster;
+				float distance = vector.Distance(
+					assignment.m_Agent.GetControlledEntity().GetOrigin(),
+					anchor
+				);
+
+				if (
+					bestIndex >= 0 &&
+					bestInRoom &&
+					!inRoom
+				)
+				{
+					continue;
+				}
+
+				if (
+					bestIndex >= 0 &&
+					inRoom == bestInRoom &&
+					distance >= bestDistance
+				)
+				{
+					continue;
+				}
+
+				bestIndex = i;
+				bestDistance = distance;
+				bestInRoom = inRoom;
 			}
 
-			ReleaseAssignment(i);
+			if (bestIndex < 0)
+				return;
+
+			ReleaseAssignment(bestIndex);
+			needed--;
 		}
 	}
 
@@ -2072,18 +2700,39 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		return held;
 	}
 
+	// A hold on a cleared-room node stays until that room is no
+	// longer where the extras belong. Any other spare loses a
+	// point once it has been cleared.
+	protected bool SpareHoldExpired(KK_InteriorTarget target)
+	{
+		if (!target)
+			return true;
+
+		if (target.m_eState == KK_EInteriorTargetState.DEFERRED)
+			return true;
+
+		if (target.m_eState == KK_EInteriorTargetState.UNREACHABLE)
+			return true;
+
+		if (!target.IsFinished())
+			return false;
+
+		return !HoldingClearedRoom();
+	}
+
+	protected bool HoldingClearedRoom()
+	{
+		return m_ClearWaypoint &&
+			m_ClearWaypoint.GetSpareMode() ==
+				KK_EClearSpareMode.PREVIOUS_ROOM;
+	}
+
 	protected bool SparePostAcceptable(
 		KK_InteriorTarget held,
 		KK_InteriorTarget desired)
 	{
-		if (
-			!held ||
-			held.IsFinished() ||
-			held.m_eState == KK_EInteriorTargetState.DEFERRED
-		)
-		{
+		if (!held || SpareHoldExpired(held))
 			return false;
-		}
 
 		if (!desired || held == desired)
 			return true;
@@ -2093,6 +2742,12 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 		if (held.m_iCluster == desired.m_iCluster)
 			return true;
+
+		// A cleared-room hold moves when that room is no longer the
+		// one behind the sweep, not when the squad center wobbles
+		// onto a neighboring node.
+		if (HoldingClearedRoom())
+			return false;
 
 		return vector.Distance(held.m_vPosition, desired.m_vPosition) <= 6;
 	}
@@ -2467,6 +3122,11 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		}
 
 		bool hold = seeing || KK_GarrisonHold.WantsSteadyShot(body);
+		// Eyes past a sill keep him planted on a shot the barrel cannot
+		// make. After the try, the route has to move him.
+		if (hold && KK_GarrisonHold.BarrelWantsMove(body))
+			hold = false;
+
 		if (!hold)
 		{
 			resumeRoute = EndClearPlant(assignment, !contact);
@@ -2536,6 +3196,59 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		);
 	}
 
+	// The move goal is already set. This records which behavior owns the
+	// body once he has failed to leave for it.
+	protected void LogStillUnit(
+		notnull KK_InteriorAgentAssignment assignment,
+		float distanceToTarget)
+	{
+		string behavior = "none";
+		string formationLeader = "no";
+		int handlerId = -1;
+		int displacement = -1;
+
+		SCR_ChimeraAIAgent chimera =
+			SCR_ChimeraAIAgent.Cast(assignment.m_Agent);
+		if (chimera && chimera.m_UtilityComponent)
+		{
+			SCR_AIBehaviorBase current =
+				chimera.m_UtilityComponent.m_CurrentBehavior;
+			if (current)
+				behavior = current.ClassName();
+
+			if (chimera.m_UtilityComponent.IsSubformationLeader())
+				formationLeader = "yes";
+		}
+
+		if (m_Group && assignment.m_Agent)
+		{
+			AIGroupMovementComponent movement =
+				AIGroupMovementComponent.Cast(
+					m_Group.FindComponent(AIGroupMovementComponent)
+				);
+			if (movement)
+			{
+				handlerId = movement.GetAgentMoveHandlerId(
+					assignment.m_Agent
+				);
+				if (handlerId >= 0)
+					displacement = movement.GetFormationDisplacement(
+						handlerId
+					);
+			}
+		}
+
+		PrintFormat(
+			"KK: Unit stood still for %1s, %2m from the goal, behavior %3, formation leader %4, handler %5 displacement %6",
+			m_ClearWaypoint.GetStuckTimeout(),
+			distanceToTarget,
+			behavior,
+			formationLeader,
+			handlerId,
+			displacement
+		);
+	}
+
 	protected void IssueMoveOrder(
 		notnull AIAgent agent,
 		vector position,
@@ -2584,7 +3297,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				)
 			);
 		if (stepOver)
-			priority = KK_AgentMove.OrderPriorityLevel();
+			priority = KK_AgentMove.EnterBuildingPriorityLevel();
 
 		KK_AgentMove.Issue(
 			this,
@@ -3903,13 +4616,11 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		if (!m_Plan)
 			return;
 
-		ClearDebug();
-
-		ShapeFlags shapeFlags =
-			ShapeFlags.NOZBUFFER |
-			ShapeFlags.TRANSP |
-			ShapeFlags.NOOUTLINE |
-			ShapeFlags.VISIBLE;
+#ifdef WORKBENCH
+		m_aDebugShapes.Clear();
+#else
+		KK_InteriorDebugOverlay.Begin();
+#endif
 
 		array<ref KK_InteriorTarget> targets =
 			m_Plan.GetTargets();
@@ -3940,14 +4651,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			vector markerPosition =
 				target.m_vPosition + Vector(0, 0.35, 0);
 
-			m_aDebugShapes.Insert(
-				Shape.CreateSphere(
-					color,
-					shapeFlags,
-					markerPosition,
-					radius
-				)
-			);
+			DebugSphere(markerPosition, radius, color);
 		}
 
 		foreach (
@@ -3969,22 +4673,58 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				assignment.m_Agent.GetControlledEntity().GetOrigin() +
 				Vector(0, 1.6, 0);
 
-			m_aDebugShapes.Insert(
-				Shape.CreateArrow(
-					unitPosition,
-					assignment.m_Target.m_vPosition +
-						Vector(0, 0.35, 0),
-					0.15,
-					0xFFFFFF00,
-					ShapeFlags.NOZBUFFER | ShapeFlags.VISIBLE
-				)
+			DebugArrow(
+				unitPosition,
+				assignment.m_Target.m_vPosition + Vector(0, 0.35, 0),
+				0xFFFFFF00
 			);
 		}
+
+#ifndef WORKBENCH
+		KK_InteriorDebugOverlay.Commit();
+#endif
+	}
+
+	protected void DebugSphere(vector origin, float radius, int color)
+	{
+#ifdef WORKBENCH
+		ShapeFlags shapeFlags =
+			ShapeFlags.NOZBUFFER |
+			ShapeFlags.TRANSP |
+			ShapeFlags.NOOUTLINE |
+			ShapeFlags.VISIBLE;
+		m_aDebugShapes.Insert(
+			Shape.CreateSphere(color, shapeFlags, origin, radius)
+		);
+#else
+		KK_InteriorDebugOverlay.Disc(origin, radius, color);
+#endif
+	}
+
+	protected void DebugArrow(vector from, vector to, int color)
+	{
+#ifdef WORKBENCH
+		m_aDebugShapes.Insert(
+			Shape.CreateArrow(
+				from,
+				to,
+				0.15,
+				color,
+				ShapeFlags.NOZBUFFER | ShapeFlags.VISIBLE
+			)
+		);
+#else
+		KK_InteriorDebugOverlay.Line(from, to, color);
+#endif
 	}
 
 	protected void ClearDebug()
 	{
 		m_aDebugShapes.Clear();
+#ifndef WORKBENCH
+		if (KK_InteriorDebugOverlay.Owns(m_iDebugToken))
+			KK_InteriorDebugOverlay.Hide();
+#endif
 	}
 
 	protected int GetDebugColor(notnull KK_InteriorTarget target)

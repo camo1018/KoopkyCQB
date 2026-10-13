@@ -63,7 +63,7 @@ modded class SCR_AICombatComponent
 
 		m_SelectedTarget = known;
 		m_SelectedTargetVisible = true;
-		m_SelectedTargetDestinationPos = KK_GarrisonHold.ShotAimPoint(enemy);
+		m_SelectedTargetDestinationPos = KK_GarrisonHold.ShotAimPoint(GetOwner(), enemy);
 		outCurrentTarget = known;
 	}
 
@@ -178,6 +178,22 @@ modded class SCR_AICombatComponent
 			return;
 		}
 
+		// Downed men stay on the order. This pass does not aim, swap, or shoot.
+		if (
+			KK_GarrisonHold.IsDown(GetOwner()) &&
+			KK_GarrisonHold.OnHouseOrder(GetOwner())
+		)
+		{
+			KK_GarrisonHold.PauseDownedCQB(GetOwner());
+			outWeaponEvent = false;
+			outSelectedTargetChanged = false;
+			outPrevTarget = null;
+			outCurrentTarget = null;
+			outRetreatTargetChanged = false;
+			outCompartmentChanged = false;
+			return;
+		}
+
 		BaseWeaponComponent previousWeapon = m_SelectedWeaponComp;
 		int previousMuzzle = m_iSelectedMuzzle;
 
@@ -202,7 +218,13 @@ modded class SCR_AICombatComponent
 			outWeaponEvent = false;
 		}
 
-		if (KK_KeepSidearm())
+		if (KK_HoldFightWeapon())
+		{
+			// Hands and the selector stay on the gun that can actually fire.
+			// Publishing another weapon here would pull that gun back out.
+			outWeaponEvent = false;
+		}
+		else if (KK_KeepSidearm())
 		{
 			// The empty rifle must not be published. That swap would put it
 			// back in his hands before the sidearm can fire.
@@ -296,14 +318,14 @@ modded class SCR_AICombatComponent
 			IEntity hiddenBody = selected.GetTargetEntity();
 			if (hiddenBody)
 				m_SelectedTargetDestinationPos =
-					KK_GarrisonHold.ShotAimPoint(hiddenBody);
+					KK_GarrisonHold.ShotAimPoint(GetOwner(), hiddenBody);
 		}
 		else if (selected)
 		{
 			IEntity seenBody = selected.GetTargetEntity();
 			if (seenBody)
 				m_SelectedTargetDestinationPos =
-					KK_GarrisonHold.ShotAimPoint(seenBody);
+					KK_GarrisonHold.ShotAimPoint(GetOwner(), seenBody);
 		}
 
 		PerceptionComponent perception = PerceptionComponent.Cast(
@@ -339,7 +361,7 @@ modded class SCR_AICombatComponent
 		m_SelectedTarget = preferred;
 		m_SelectedTargetVisible = true;
 		m_SelectedTargetDestinationPos =
-			KK_GarrisonHold.ShotAimPoint(preferredEntity);
+			KK_GarrisonHold.ShotAimPoint(GetOwner(), preferredEntity);
 		outCurrentTarget = preferred;
 		outSelectedTargetChanged = false;
 		KK_StampPathLook();
@@ -410,6 +432,54 @@ modded class SCR_AICombatComponent
 		return true;
 	}
 
+	// The gun he can shoot, in his hands and on the selector. Primary when
+	// a magazine for it has rounds. A sidearm when the primary is empty.
+	// After he gets up the current weapon is often missing, so this puts
+	// it back. False when the selector was already on that gun.
+	protected bool KK_HoldFightWeapon()
+	{
+		if (!KK_GarrisonHold.RunningCQB(GetOwner()))
+			return false;
+
+		BaseWeaponComponent want = KK_GarrisonHold.WeaponToHold(GetOwner());
+		if (!want)
+			return false;
+
+		bool changed = m_SelectedWeaponComp != want;
+		if (!changed)
+		{
+			KK_GarrisonHold.SwitchToWeapon(GetOwner(), want);
+			return false;
+		}
+
+		m_SelectedWeaponComp = want;
+		m_iSelectedMuzzle = 0;
+		m_SelectedMagazineComp = null;
+		m_fSelectedWeaponMinDist = 0;
+		m_fSelectedWeaponMaxDist = 800;
+		m_bSelectedWeaponDirectDamage = true;
+
+		EMuzzleType muzzleType = EMuzzleType.MT_BaseMuzzle;
+		array<BaseMuzzleComponent> muzzles = {};
+		want.GetMuzzlesList(muzzles);
+		if (muzzles.Count() > 0 && muzzles[0])
+		{
+			m_SelectedMagazineComp = muzzles[0].GetMagazine();
+			muzzleType = muzzles[0].GetMuzzleType();
+		}
+
+		if (m_ConfigComponent)
+		{
+			m_SelectedWeaponResource = m_ConfigComponent.GetTreeNameForWeaponType(
+				want.GetWeaponType(),
+				muzzleType
+			);
+		}
+
+		KK_GarrisonHold.SwitchToWeapon(GetOwner(), want);
+		return true;
+	}
+
 	// Primary is empty and another gun has rounds. The selector stays on
 	// that gun, or the empty rifle is equipped again on the next evaluation.
 	protected bool KK_KeepSidearm()
@@ -466,6 +536,14 @@ modded class SCR_AICombatComponent
 		BaseMuzzleComponent muzzle = muzzles[m_iSelectedMuzzle];
 		return muzzle && muzzle.GetMagazine() == m_SelectedMagazineComp;
 	}
+}
+
+// The pose a snap round is launched along from the fire callback.
+class KK_SnapShotAim
+{
+	IEntity m_Shooter;
+	vector m_Origin;
+	vector m_Direction;
 }
 
 class KK_GarrisonHold
@@ -529,6 +607,27 @@ class KK_GarrisonHold
 	protected static ref map<IEntity, float> s_LostLookAt =
 		new map<IEntity, float>();
 	protected static bool s_bPathLookWrite;
+	// Point the experimental snap keeps writing. The look solver eases the
+	// rifle off a single write before the next shot check.
+	protected static ref map<IEntity, vector> s_SnapAim =
+		new map<IEntity, vector>();
+	protected static ref set<SCR_AICombatMoveState> s_SnapTurn =
+		new set<SCR_AICombatMoveState>();
+	protected static bool s_bSnapAimPumping;
+	// Set while a snap round is launched, so that launch's own fire callback
+	// does not launch the same round again.
+	protected static bool s_bSnapShotApply;
+	// The skill scatter is held, or a new roll every frame shakes the rifle.
+	protected static ref map<IEntity, vector> s_SnapError =
+		new map<IEntity, vector>();
+	protected static ref map<IEntity, float> s_SnapErrorAt =
+		new map<IEntity, float>();
+	protected static ref map<IEntity, IEntity> s_SnapErrorEnemy =
+		new map<IEntity, IEntity>();
+	protected static ref map<IEntity, float> s_SnapLogAt =
+		new map<IEntity, float>();
+	protected static const float SNAP_AIM_ERROR_MS = 400;
+	protected static const float SNAP_AIM_LOG_MS = 1000;
 	static const float PATH_LOOK_PRIORITY = 1000;
 	// An enemy already selected when the bound started. The sprint does not
 	// aim at him, and perception then drops him, so the stop had to spot
@@ -545,6 +644,14 @@ class KK_GarrisonHold
 	protected static ref map<IEntity, ref BaseTarget> s_ShotBase =
 		new map<IEntity, ref BaseTarget>();
 	protected static ref set<IEntity> s_ShotLive = new set<IEntity>();
+	// Eyes can see him and the barrel cannot. The try starts here. After it
+	// runs out, he moves, and the cool-off is when that try may start again.
+	protected static ref map<IEntity, float> s_BarrelBlockedSince =
+		new map<IEntity, float>();
+	protected static ref map<IEntity, IEntity> s_BarrelBlockedTarget =
+		new map<IEntity, IEntity>();
+	protected static ref map<IEntity, float> s_BarrelCoolUntil =
+		new map<IEntity, float>();
 	protected static ref set<IEntity> s_RoomFire = new set<IEntity>();
 	protected static ref array<BaseTarget> s_Perceived = new array<BaseTarget>();
 	protected static ref array<IEntity> s_Candidates = new array<IEntity>();
@@ -562,6 +669,10 @@ class KK_GarrisonHold
 	protected static const float LEAN_OFFSET = 0.4;
 	// Origin is the feet. A look at that point from arm's length points the rifle down.
 	protected static const float SHOT_AIM_HEIGHT = 1.5;
+	// Chest first. The head is used only when the chest is behind cover.
+	// The head point is the skull, not the eyes.
+	protected static const float CHEST_AIM_HEIGHT = 1.2;
+	protected static const float HEAD_AIM_HEIGHT = 1.5;
 	// Long enough that a fight does not reissue the look and restart the turn.
 	protected static const float SHOT_LOOK_DURATION = 30;
 	// The post facing waits this long after the room gun last looked at him.
@@ -672,6 +783,27 @@ class KK_GarrisonHold
 		return controller.GetLifeState() == ECharacterLifeState.INCAPACITATED;
 	}
 
+	// The assignment stays. The shot, the plant, the raised rifle, and the
+	// move lock do not. The next pass after he is up puts those back.
+	static void PauseDownedCQB(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		AbortShot(UtilityOf(body), body);
+		SetPinned(body, false);
+		SetMoveFire(body, false);
+		SetDoorFiring(body, false);
+		SetReturnFire(body, false);
+		SetIgnoringTargets(body, false);
+		SetBoundSprint(body, false);
+		ClearApproachGoal(body);
+		LockClearMove(body, false);
+		ClearPathLook(body);
+		DropRememberedAim(body);
+	}
+
 	// Alive and on his feet. A downed enemy is not a reason to hold the route.
 	static bool IsFightable(IEntity character)
 	{
@@ -725,6 +857,7 @@ class KK_GarrisonHold
 		SetFireWanted(body, false);
 		s_MoveFiring.RemoveItem(body);
 		ClearAim(body);
+		ClearSnapAim(body);
 
 		SCR_AIUtilityComponent utility = UtilityOf(body);
 		CancelLook(utility, body);
@@ -1007,6 +1140,15 @@ class KK_GarrisonHold
 				dryBody = dryAgent.GetControlledEntity();
 		}
 
+		// Down, or no gun left that can fire. The move stays, the shot does not.
+		if (IsDown(dryBody) || !HasGunAmmo(dryBody))
+		{
+			AbortShot(utility, dryBody);
+			return;
+		}
+
+		EnsureHeldGun(dryBody);
+
 		// An empty gun does not cancel the move to stand and shoot.
 		if (CannotShoot(dryBody))
 		{
@@ -1074,6 +1216,11 @@ class KK_GarrisonHold
 			if (!canShoot && lean != 0)
 				canShoot = SideStillClear(body, lookAt, lean);
 		}
+
+		// His eyes can be past a sill the barrel still hits. He tries, then
+		// the plant drops so the route can find a place the barrel can use.
+		if (canShoot)
+			canShoot = BarrelShotReady(body, lookAt);
 
 		float command = 0;
 		if (canShoot)
@@ -1345,6 +1492,51 @@ class KK_GarrisonHold
 		return best;
 	}
 
+	// On a clear, a garrison, or a move-and-shoot. Attack lane looks are not this.
+	static bool RunningCQB(IEntity soldier)
+	{
+		return OrderOwnsBehavior(soldier) ||
+			IsMoveFire(soldier) ||
+			IsRoomFire(soldier);
+	}
+
+	// Primary when a magazine for it still has rounds, including a spare.
+	// An empty magazine is not enough. A sidearm only when that primary
+	// cannot be fed and the sidearm option is on. Null while he is down.
+	static BaseWeaponComponent WeaponToHold(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || IsDown(body))
+			return null;
+
+		BaseWeaponComponent primary = PrimarySlotWeapon(body);
+		if (!primary)
+			primary = PrimaryWeapon(body);
+
+		if (primary && AvailableAmmo(body, primary) > 0)
+			return primary;
+
+		if (!SidearmThenReleaseEnabled() || !HasBuilding(body))
+			return null;
+
+		return BestSidearm(body);
+	}
+
+	// Puts that gun in his hands. A repeat while the swap is playing waits.
+	// False when there is nothing he should be holding.
+	static bool EnsureHeldGun(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		BaseWeaponComponent want = WeaponToHold(body);
+		if (!want)
+			return false;
+
+		if (CurrentWeapon(body) != want)
+			SwitchToWeapon(body, want);
+
+		return true;
+	}
+
 	// Primary cannot be fed, and a sidearm can. The selector holds that gun.
 	static BaseWeaponComponent ForcedSidearm(IEntity soldier)
 	{
@@ -1371,33 +1563,14 @@ class KK_GarrisonHold
 		if (controller && controller.IsReloading())
 			return false;
 
-		BaseWeaponComponent primary = PrimarySlotWeapon(body);
-		if (!primary)
-			return !HasGunAmmo(body);
-
-		if (AvailableAmmo(body, primary) > 0)
-		{
-			BaseWeaponComponent current = CurrentWeapon(body);
-			if (
-				current &&
-				current != primary &&
-				!IsThrowableType(current.GetWeaponType())
-			)
-			{
-				SwitchToWeapon(body, primary);
-			}
-
+		// The swap does not take while he is down. Checked again once he is up.
+		if (IsDown(body))
 			return false;
-		}
 
-		BaseWeaponComponent sidearm = BestSidearm(body);
-		if (sidearm)
-		{
-			SwitchToWeapon(body, sidearm);
+		if (EnsureHeldGun(body))
 			return false;
-		}
 
-		return true;
+		return !HasGunAmmo(body);
 	}
 
 	// Released men stay out until gun ammo has been back for the wait.
@@ -2015,7 +2188,7 @@ class KK_GarrisonHold
 			return;
 
 		soldier.m_UtilityComponent.m_LookAction.KK_Track(
-			ShotAimPoint(enemy),
+			ShotAimPoint(body, enemy),
 			100,
 			SHOT_LOOK_DURATION
 		);
@@ -3189,7 +3362,7 @@ class KK_GarrisonHold
 	static bool OrderOwnsBehavior(IEntity soldier)
 	{
 		IEntity body = CharacterBody(soldier);
-		if (!body)
+		if (!body || IsDown(body))
 			return false;
 
 		return s_OrderBehavior.Contains(body) || OnHouseOrder(body);
@@ -3348,6 +3521,14 @@ class KK_GarrisonHold
 				body = agent.GetControlledEntity();
 		}
 
+		// Unconscious still owns the order. The shot, the lean, and the snap
+		// do not. A body on the ground was being turned onto the target.
+		if (IsDown(body))
+		{
+			AbortShot(utility, body);
+			return;
+		}
+
 		if (SprintBeforeReload(body))
 		{
 			RememberPressure(body);
@@ -3365,6 +3546,14 @@ class KK_GarrisonHold
 			ReleaseLook(utility, body);
 			return;
 		}
+
+		if (!HasGunAmmo(body))
+		{
+			AbortShot(utility, body);
+			return;
+		}
+
+		EnsureHeldGun(body);
 
 		// An empty gun does not get a firing pose. The route and the reload
 		// can run instead of a stand-and-shoot.
@@ -3417,6 +3606,9 @@ class KK_GarrisonHold
 		bool canShoot = center;
 		if (!canShoot && lean != 0)
 			canShoot = SideStillClear(body, enemy, lean);
+
+		if (canShoot && enemy)
+			canShoot = BarrelShotReady(body, enemy);
 
 		float command = 0;
 		if (canShoot)
@@ -3781,7 +3973,7 @@ class KK_GarrisonHold
 		aim = vector.Zero;
 
 		IEntity body = CharacterBody(soldier);
-		if (!body)
+		if (!body || IsDown(body) || !HasGunAmmo(body))
 			return false;
 
 		if (!EngagingContact(body))
@@ -3811,7 +4003,7 @@ class KK_GarrisonHold
 		// The route point stays stored, so CRX still cannot write a look.
 		// This snap moves that look onto his eyes. When the trace breaks,
 		// the route point is put back.
-		aim = ShotAimPoint(enemy);
+		aim = ShotAimPoint(body, enemy);
 		RememberLostLook(body, aim);
 		SnapLook(body, aim);
 		return true;
@@ -3875,6 +4067,7 @@ class KK_GarrisonHold
 		s_bPathLookWrite = true;
 		utility.m_LookAction.KK_Snap(aim, PATH_LOOK_PRIORITY, SHOT_LOOK_DURATION);
 		s_bPathLookWrite = false;
+		SnapAimPose(body, aim);
 	}
 
 	// Puts the stored node back onto the head. Same priority only moves
@@ -3979,6 +4172,9 @@ class KK_GarrisonHold
 		if (!UseRoomCombat() || !OrderOwnsBehavior(body))
 			return false;
 
+		if (IsDown(body))
+			return false;
+
 		if (IsIgnoringTargets(body))
 			return false;
 
@@ -3999,7 +4195,7 @@ class KK_GarrisonHold
 	static bool AttackWeaponStaysUp(IEntity soldier)
 	{
 		IEntity body = CharacterBody(soldier);
-		if (!IsAdvancing(body))
+		if (!IsAdvancing(body) || IsDown(body))
 			return false;
 
 		// A bound sprint lowers the rifle so he can run. Walk and jog stay up.
@@ -4259,7 +4455,11 @@ class KK_GarrisonHold
 		if (utility)
 			ApplyRoomShot(utility);
 
-		return body && s_ShotLive.Contains(body);
+		if (!body || !s_ShotLive.Contains(body))
+			return false;
+
+		// The route stays free while he is walking for a barrel line.
+		return !BarrelWantsMove(body);
 	}
 
 	// The selected target is one enemy. Inside, check every perceived enemy
@@ -4400,6 +4600,20 @@ class KK_GarrisonHold
 		}
 	}
 
+	// Drops the room shot and the snap. Used when he is down or no gun
+	// he is carrying can fire. The order itself is released separately.
+	protected static void AbortShot(SCR_AIUtilityComponent utility, IEntity body)
+	{
+		if (!body)
+			return;
+
+		ClearShot(body);
+		RememberLean(body, 0);
+		ReleaseLean(body);
+		CancelLook(utility, body);
+		SetFireWanted(body, false);
+	}
+
 	protected static void ClearShot(IEntity body)
 	{
 		if (!body)
@@ -4412,6 +4626,7 @@ class KK_GarrisonHold
 		s_ShotLean.Remove(body);
 		s_ShotLive.RemoveItem(body);
 		s_MoveShotSeen.Remove(body);
+		ForgetBarrelBlock(body);
 		s_RoomFire.RemoveItem(body);
 		ClearAim(body);
 		ReleaseLean(body);
@@ -5024,7 +5239,7 @@ class KK_GarrisonHold
 			return;
 
 		NoteRoomLook(body);
-		vector point = ShotAimPoint(enemy);
+		vector point = ShotAimPoint(body, enemy);
 		s_LookEntity.Set(body, enemy);
 
 		// Same priority as the route look, so this moves the point onto
@@ -5032,6 +5247,7 @@ class KK_GarrisonHold
 		s_bPathLookWrite = true;
 		utility.m_LookAction.KK_Snap(point, PATH_LOOK_PRIORITY, SHOT_LOOK_DURATION);
 		s_bPathLookWrite = false;
+		SnapAimPose(body, point);
 	}
 
 	protected static void NoteRoomLook(IEntity body)
@@ -5053,16 +5269,1070 @@ class KK_GarrisonHold
 		return WorldTime() - s_RoomLookAt.Get(body) < ROOM_LOOK_HOLD_MS;
 	}
 
+	// The look point only asks him to turn. With snap aim on, the heading
+	// and the weapon angle are written onto the point, so the rifle does
+	// not ease there. A sprint still owns the body.
+	static void SnapAimPose(IEntity soldier, vector point)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		// The contact look runs for every soldier. The snap is the clear
+		// and the garrison only. A man on the ground, or with no gun left
+		// that can fire, does not get it.
+		if (
+			!SnapAimEnabled() ||
+			!OwnsShot(body) ||
+			point == vector.Zero ||
+			IsDown(body) ||
+			!HasGunAmmo(body) ||
+			IsBoundSprint(body) ||
+			SprintBeforeReload(body)
+		)
+		{
+			ClearSnapAim(body);
+			return;
+		}
+
+		s_SnapAim.Set(body, point);
+		ApplySnapAim(body, point);
+		HoldSnapLook(body, SnapPosePoint(body, point));
+		EnsureSnapAimPump();
+	}
+
+	protected static void ClearSnapAim(IEntity body)
+	{
+		if (!body)
+			return;
+
+		s_SnapAim.Remove(body);
+		s_SnapError.Remove(body);
+		s_SnapErrorAt.Remove(body);
+		s_SnapErrorEnemy.Remove(body);
+		s_SnapLogAt.Remove(body);
+		DropSnapTurn(body);
+	}
+
+	protected static void EnsureSnapAimPump()
+	{
+		if (s_bSnapAimPumping || !GetGame())
+			return;
+
+		s_bSnapAimPumping = true;
+		GetGame().GetCallqueue().CallLater(SnapAimPump, 0, false);
+	}
+
+	static void SnapAimPump()
+	{
+		if (!GetGame() || s_SnapAim.Count() == 0 || !SnapAimEnabled())
+		{
+			s_SnapAim.Clear();
+			s_SnapError.Clear();
+			s_SnapErrorAt.Clear();
+			s_SnapErrorEnemy.Clear();
+			s_SnapLogAt.Clear();
+			s_SnapTurn.Clear();
+			s_bSnapAimPumping = false;
+			return;
+		}
+
+		array<IEntity> bodies = {};
+		for (int i = 0; i < s_SnapAim.Count(); i++)
+			bodies.Insert(s_SnapAim.GetKey(i));
+
+		foreach (IEntity body : bodies)
+		{
+			if (!body || !s_SnapAim.Contains(body))
+			{
+				ClearSnapAim(body);
+				continue;
+			}
+
+			if (
+				!OwnsShot(body) ||
+				IsDown(body) ||
+				!HasGunAmmo(body) ||
+				IsBoundSprint(body) ||
+				SprintBeforeReload(body)
+			)
+			{
+				ClearSnapAim(body);
+				continue;
+			}
+
+			// The stored point is only a fallback. While the man is still the
+			// target, follow his body. Gating that on the sight trace left
+			// the rifle on the last place the trace succeeded.
+			vector point = s_SnapAim.Get(body);
+			IEntity enemy = EngagedEnemy(body);
+			if (enemy && IsTargetable(enemy))
+			{
+				vector live = ShotAimPoint(body, enemy);
+				if (live != vector.Zero)
+				{
+					point = live;
+					s_SnapAim.Set(body, point);
+				}
+			}
+
+			ApplySnapAim(body, point);
+		}
+
+		if (s_SnapAim.Count() == 0 || !GetGame())
+		{
+			s_bSnapAimPumping = false;
+			return;
+		}
+
+		GetGame().GetCallqueue().CallLater(SnapAimPump, 0, false);
+	}
+
+	protected static void ApplySnapAim(IEntity body, vector point)
+	{
+		CharacterControllerComponent controller = Controller(body);
+		if (!controller || IsDown(body))
+			return;
+
+		vector pose = SnapPosePoint(body, point);
+		vector flat = pose - body.GetOrigin();
+		flat[1] = 0;
+		if (flat.Length() < 0.05)
+			return;
+
+		flat.Normalize();
+		float heading = flat.ToYaw();
+		StopSnapTurn(body);
+		SnapFacing(body, controller, heading);
+		// The weapon is parented to the facing he has now. Using the heading
+		// just requested aims the barrel off to the side until that turn lands.
+		float bodyYaw = body.GetYawPitchRoll()[0];
+		vector muzzle = MuzzlePosition(body, 0);
+		WriteAimAt(controller.GetAimingComponent(), muzzle, pose, bodyYaw);
+		HoldSnapLook(body, pose);
+		LogSnapAim(body, controller, pose, muzzle, heading, bodyYaw);
+	}
+
+	// Combat movement also requests an aim turn. That request is dropped
+	// while the snap holds him. The weapon bone stays with the animation
+	// graph; the shot is aimed on its own.
+	protected static void StopSnapTurn(IEntity body)
+	{
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (!utility || !utility.m_CombatMoveState)
+			return;
+
+		utility.m_CombatMoveState.KK_StopAimTurn();
+		s_SnapTurn.Insert(utility.m_CombatMoveState);
+	}
+
+	protected static void DropSnapTurn(IEntity body)
+	{
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (!utility || !utility.m_CombatMoveState)
+			return;
+
+		s_SnapTurn.RemoveItem(utility.m_CombatMoveState);
+	}
+
+	static bool SnapTurnHeld(SCR_AICombatMoveState state)
+	{
+		return state && s_SnapTurn.Contains(state);
+	}
+
+	protected static void SnapFacing(
+		IEntity body,
+		CharacterControllerComponent controller,
+		float headingDeg)
+	{
+		vector angles = body.GetYawPitchRoll();
+		angles[0] = headingDeg;
+		body.SetYawPitchRoll(angles);
+
+		CharacterInputContext input = controller.GetInputContext();
+		if (input)
+			input.SetHeadingAngle(HeadingRadians(headingDeg));
+	}
+
+	protected static float HeadingRadians(float headingDeg)
+	{
+		float radians = headingDeg * Math.DEG2RAD;
+		while (radians < 0)
+			radians = radians + Math.PI2;
+		while (radians >= Math.PI2)
+			radians = radians - Math.PI2;
+
+		return radians;
+	}
+
+	// The look behavior keeps the last point it was given. Write the pose
+	// every frame, and restart only when that point has moved.
+	protected static void HoldSnapLook(IEntity body, vector pose)
+	{
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (!utility || !utility.m_LookAction || pose == vector.Zero)
+			return;
+
+		utility.m_LookAction.KK_HoldSnapPoint(pose);
+	}
+
+	// Once a second, the pose we wrote against the direction the rifle reports.
+	protected static void LogSnapAim(
+		IEntity body,
+		CharacterControllerComponent controller,
+		vector pose,
+		vector muzzle,
+		float headingDeg,
+		float bodyYaw)
+	{
+		if (!SCR_BaseGameMode.KK_LogEnabled())
+			return;
+
+		float now = WorldTime();
+		if (s_SnapLogAt.Contains(body) && now - s_SnapLogAt.Get(body) < SNAP_AIM_LOG_MS)
+			return;
+
+		s_SnapLogAt.Set(body, now);
+
+		vector want = pose - muzzle;
+		vector wantAng = vector.Zero;
+		if (want.Length() > 0.05)
+			wantAng = want.VectorToAngles();
+
+		vector haveAng = vector.Zero;
+		vector rotation = vector.Zero;
+		AimingComponent aiming = controller.GetAimingComponent();
+		if (aiming)
+		{
+			vector dir = aiming.GetAimingDirectionWorld();
+			if (dir.Length() > 0.01)
+				haveAng = dir.VectorToAngles();
+
+			rotation = aiming.GetAimingRotation();
+		}
+
+		float yawErr = wantAng[0] - haveAng[0];
+		while (yawErr > 180)
+			yawErr = yawErr - 360;
+		while (yawErr < -180)
+			yawErr = yawErr + 360;
+
+		vector look = vector.Zero;
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (utility && utility.m_LookAction)
+			look = utility.m_LookAction.KK_LookPosition();
+
+		string note = string.Format(
+			"%1 pose=%2 look=%3 muzzle=%4",
+			body.GetName(),
+			pose,
+			look,
+			muzzle
+		);
+		note = note + string.Format(
+			" wantYaw=%1 wantPitch=%2 dirYaw=%3 dirPitch=%4 yawErr=%5 pitchErr=%6",
+			wantAng[0],
+			wantAng[1],
+			haveAng[0],
+			haveAng[1],
+			yawErr,
+			wantAng[1] - haveAng[1]
+		);
+		note = note + string.Format(" rot=%1 cmd=%2 body=%3", rotation, headingDeg, bodyYaw);
+		PrintFormat("KK: Snap %1", note);
+	}
+
+	// Aim point plus the held skill offset. The look, the heading, and the
+	// rifle all use this, so the offset is not a second point beside the look.
+	static vector SnapPosePoint(IEntity soldier, vector point)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return point;
+
+		if (point == vector.Zero && s_SnapAim.Contains(body))
+			point = s_SnapAim.Get(body);
+
+		if (point == vector.Zero)
+			return point;
+
+		return point + SnapAimError(body, point);
+	}
+
+	// Yaw is the gap between the heading and the line from the muzzle to the
+	// pose. Pitch is that line's own pitch. Negative pitch is up.
+	protected static void WriteAimAt(AimingComponent aiming, vector from, vector point, float headingDeg)
+	{
+		vector dir = point - from;
+		if (dir.Length() < 0.05)
+			return;
+
+		vector angles = dir.VectorToAngles();
+		float yaw = angles[0] - headingDeg;
+		while (yaw > 180)
+			yaw = yaw - 360;
+		while (yaw < -180)
+			yaw = yaw + 360;
+
+		WriteAimRotation(aiming, yaw, angles[1]);
+	}
+
+	// Held offset around the aim point. A new man, or the hold running
+	// out, rolls again. The axes and the scales match the aim-error node.
+	protected static vector SnapAimError(IEntity body, vector point)
+	{
+		if (!SnapAimErrorEnabled())
+			return vector.Zero;
+
+		IEntity enemy = EngagedEnemy(body);
+		float now = WorldTime();
+		bool held =
+			s_SnapError.Contains(body) &&
+			s_SnapErrorAt.Contains(body) &&
+			now - s_SnapErrorAt.Get(body) < SNAP_AIM_ERROR_MS &&
+			(
+				!enemy ||
+				(s_SnapErrorEnemy.Contains(body) && s_SnapErrorEnemy.Get(body) == enemy)
+			);
+		if (held)
+			return s_SnapError.Get(body);
+
+		vector offset = ComputeSnapAimError(body, enemy, point);
+		s_SnapError.Set(body, offset);
+		s_SnapErrorAt.Set(body, now);
+		if (enemy)
+			s_SnapErrorEnemy.Set(body, enemy);
+		else
+			s_SnapErrorEnemy.Remove(body);
+
+		return offset;
+	}
+
+	protected static vector ComputeSnapAimError(IEntity body, IEntity enemy, vector point)
+	{
+		ChimeraCharacter character = ChimeraCharacter.Cast(body);
+		vector eye = body.GetOrigin() + Vector(0, 1.6, 0);
+		if (character)
+			eye = character.EyePosition();
+
+		vector join = point - eye;
+		float distance = join.Length();
+		if (distance < 0.05)
+			return vector.Zero;
+
+		vector joinNorm = join * (1 / distance);
+		vector axisX = vector.Up * joinNorm;
+		if (axisX.Length() < 0.01)
+			axisX = Vector(1, 0, 0);
+		axisX.Normalize();
+		vector axisY = joinNorm * axisX;
+		if (axisY.Length() < 0.01)
+			return vector.Zero;
+		axisY.Normalize();
+
+		float span = AimErrorSpan(enemy, point);
+		float scale = SnapDistanceFactor(distance) * SnapWeaponFactor(body) * SnapIllumination(body);
+		EAISkill skill = SnapSkill(body);
+		vector offset =
+			(axisX * (span * SkillAimScatter(skill) * scale)) +
+			(axisY * (span * SkillAimScatter(skill) * scale));
+		return offset;
+	}
+
+	protected static EAISkill SnapSkill(IEntity body)
+	{
+		SCR_AICombatComponent combat = SCR_AICombatComponent.Cast(
+			body.FindComponent(SCR_AICombatComponent)
+		);
+		if (!combat)
+			return EAISkill.REGULAR;
+
+		return combat.GetAISkill();
+	}
+
+	// Diameters the aim node scatters across. Two times the aim point radius.
+	protected static float AimErrorSpan(IEntity enemy, vector point)
+	{
+		float fallback = 0.45;
+		if (!enemy)
+			return fallback;
+
+		PerceivableComponent perceivable = PerceivableComponent.Cast(
+			enemy.FindComponent(PerceivableComponent)
+		);
+		if (!perceivable)
+			return fallback;
+
+		array<ref AimPoint> points = {};
+		EAimPointType types[3];
+		types[0] = EAimPointType.NORMAL;
+		types[1] = EAimPointType.WEAK;
+		types[2] = EAimPointType.INCAPACITATE;
+
+		AimPoint nearest;
+		float best = 4;
+		for (int t = 0; t < 3; t++)
+		{
+			points.Clear();
+			perceivable.GetAimpointsOfType(points, types[t]);
+			foreach (AimPoint candidate : points)
+			{
+				if (!candidate)
+					continue;
+
+				float gap = vector.Distance(candidate.GetPosition(), point);
+				if (gap >= best)
+					continue;
+
+				best = gap;
+				nearest = candidate;
+			}
+		}
+
+		if (!nearest || nearest.GetDimension() <= 0)
+			return fallback;
+
+		return 2 * nearest.GetDimension();
+	}
+
+	// Close range keeps a small share of the scatter. Past 15 m it grows.
+	protected static float SnapDistanceFactor(float distance)
+	{
+		if (distance < 15)
+			return Math.Map(distance, 0, 15, 0.05, 0.4);
+
+		float along = Math.Clamp((distance - 15) / 200, 0, 1);
+		return Math.Lerp(0.4, 1.4, along);
+	}
+
+	protected static float SnapWeaponFactor(IEntity body)
+	{
+		BaseWeaponComponent weapon = CurrentWeapon(body);
+		if (weapon && weapon.GetWeaponType() == EWeaponType.WT_ROCKETLAUNCHER)
+			return 0;
+
+		return 1;
+	}
+
+	protected static float SnapIllumination(IEntity body)
+	{
+		BaseTarget target = ShotTarget(body);
+		if (!target)
+			return 1;
+
+		PerceivableComponent perceivable = target.GetPerceivableComponent();
+		if (!perceivable)
+			return 1;
+
+		if (perceivable.GetIlluminationFactor() < 0.5)
+			return 2;
+
+		return 1;
+	}
+
+	// The aim node's skill roll. A cylon does not miss. The CQB threat
+	// scale is not applied: it is what pulls a threatened shot to zero.
+	protected static float SkillAimScatter(EAISkill skill)
+	{
+		if (skill == EAISkill.CYLON)
+			return 0;
+
+		float sigma = 1;
+		switch (skill)
+		{
+			case EAISkill.NOOB:
+				sigma = 4;
+				break;
+			case EAISkill.ROOKIE:
+				sigma = 2;
+				break;
+			case EAISkill.VETERAN:
+				sigma = 0.5;
+				break;
+			case EAISkill.EXPERT:
+				sigma = 0.25;
+				break;
+		}
+
+		return Math.RandomGaussFloat(sigma, 0);
+	}
+
+	// Debug log only. The barrel, the aiming component, the pose, and the
+	// round's velocity. The next line is the velocity after the engine has
+	// launched the round. Nothing here changes the shot.
+	static void LogSnapShot(
+		IEntity effectEntity,
+		BaseMuzzleComponent muzzle,
+		IEntity projectileEntity)
+	{
+		if (!SCR_BaseGameMode.KK_LogEnabled())
+			return;
+
+		IEntity shooter = SnapLogShooter(effectEntity, muzzle);
+		if (!shooter || !s_SnapAim.Contains(shooter))
+			return;
+
+		PrintSnapShot(shooter, projectileEntity, "now");
+		if (GetGame() && projectileEntity)
+			GetGame().GetCallqueue().CallLater(LogSnapShotLater, 0, false, shooter, projectileEntity);
+	}
+
+	static void LogSnapShotLater(IEntity shooter, IEntity projectileEntity)
+	{
+		if (!shooter || !SCR_BaseGameMode.KK_LogEnabled())
+			return;
+
+		PrintSnapShot(shooter, projectileEntity, "next");
+	}
+
+	protected static void PrintSnapShot(IEntity shooter, IEntity projectileEntity, string when)
+	{
+		vector barrelPos;
+		vector barrelDir;
+		bool haveBarrel = SnapBarrel(shooter, barrelPos, barrelDir);
+
+		vector aimDir = vector.Zero;
+		CharacterControllerComponent controller = Controller(shooter);
+		if (controller)
+		{
+			AimingComponent aiming = controller.GetAimingComponent();
+			if (aiming)
+				aimDir = aiming.GetAimingDirectionWorld();
+		}
+
+		vector pose = SnapPosePoint(shooter, vector.Zero);
+		vector poseDir = vector.Zero;
+		if (pose != vector.Zero && haveBarrel)
+			poseDir = pose - barrelPos;
+
+		vector bulletDir = vector.Zero;
+		float speed = 0;
+		if (projectileEntity)
+		{
+			ProjectileMoveComponent move = ProjectileMoveComponent.Cast(
+				projectileEntity.FindComponent(ProjectileMoveComponent)
+			);
+			if (move)
+			{
+				bulletDir = move.GetVelocity();
+				speed = bulletDir.Length();
+			}
+		}
+
+		string note = string.Format(
+			"%1 %2 barrel=%3 aim=%4 pose=%5",
+			when,
+			shooter.GetName(),
+			YawPitchOf(barrelDir),
+			YawPitchOf(aimDir),
+			YawPitchOf(poseDir)
+		);
+		note = note + string.Format(
+			" bullet=%1 offBarrel=%2 offPose=%3 offAim=%4 spd=%5",
+			YawPitchOf(bulletDir),
+			YawGap(barrelDir, bulletDir),
+			YawGap(poseDir, bulletDir),
+			YawGap(aimDir, bulletDir),
+			speed
+		);
+		PrintFormat("KK: Shot %1", note);
+	}
+
+	protected static bool SnapBarrel(IEntity shooter, out vector position, out vector direction)
+	{
+		position = vector.Zero;
+		direction = vector.Zero;
+
+		BaseWeaponManagerComponent manager = WeaponManager(shooter);
+		if (!manager)
+			return false;
+
+		vector muzzle[4];
+		if (!manager.GetCurrentMuzzleTransform(muzzle))
+			return false;
+
+		position = muzzle[3];
+		direction = muzzle[2];
+		return direction.Length() > 0.01;
+	}
+
+	protected static IEntity SnapLogShooter(IEntity effectEntity, BaseMuzzleComponent muzzle)
+	{
+		IEntity cursor = effectEntity;
+		while (cursor)
+		{
+			if (ChimeraCharacter.Cast(cursor))
+				return cursor;
+
+			cursor = cursor.GetParent();
+		}
+
+		if (!muzzle)
+			return null;
+
+		cursor = muzzle.GetOwner();
+		while (cursor)
+		{
+			if (ChimeraCharacter.Cast(cursor))
+				return cursor;
+
+			cursor = cursor.GetParent();
+		}
+
+		return null;
+	}
+
+	protected static vector YawPitchOf(vector direction)
+	{
+		if (direction.Length() < 0.01)
+			return vector.Zero;
+
+		vector angles = direction.VectorToAngles();
+		float pitch = angles[1];
+		while (pitch > 180)
+			pitch = pitch - 360;
+		while (pitch < -180)
+			pitch = pitch + 360;
+
+		return Vector(angles[0], pitch, 0);
+	}
+
+	// Signed yaw from the first direction to the second. Positive is to the right.
+	protected static float YawGap(vector from, vector to)
+	{
+		if (from.Length() < 0.01 || to.Length() < 0.01)
+			return 0;
+
+		vector fromAng = from.VectorToAngles();
+		vector toAng = to.VectorToAngles();
+		float gap = toAng[0] - fromAng[0];
+		while (gap > 180)
+			gap = gap - 360;
+		while (gap < -180)
+			gap = gap + 360;
+
+		return gap;
+	}
+
+	// Launch along the pose from the fire callback. The flag is held across
+	// the launch so the callback that launch raises does not launch again.
+	static void QueueSnapShot(
+		IEntity effectEntity,
+		BaseMuzzleComponent muzzle,
+		IEntity projectileEntity)
+	{
+		if (s_bSnapShotApply || !projectileEntity)
+			return;
+
+		IEntity shooter = SnapLogShooter(effectEntity, muzzle);
+		if (!shooter || !s_SnapAim.Contains(shooter))
+			return;
+
+		vector origin;
+		vector barrelDir;
+		if (!SnapBarrel(shooter, origin, barrelDir))
+			return;
+
+		vector pose = SnapPosePoint(shooter, vector.Zero);
+		vector direction = pose - origin;
+		if (direction.Length() < 0.05)
+			return;
+
+		direction.Normalize();
+		KK_SnapShotAim shot = new KK_SnapShotAim();
+		shot.m_Shooter = shooter;
+		shot.m_Origin = origin;
+		shot.m_Direction = direction;
+
+		s_bSnapShotApply = true;
+		LaunchSnapShot(projectileEntity, shot);
+		s_bSnapShotApply = false;
+	}
+
+	protected static void LaunchSnapShot(IEntity projectile, KK_SnapShotAim shot)
+	{
+		if (!projectile || !shot || shot.m_Direction.Length() < 0.01)
+			return;
+
+		ProjectileMoveComponent move = ProjectileMoveComponent.Cast(
+			projectile.FindComponent(ProjectileMoveComponent)
+		);
+		if (!move)
+			return;
+
+		projectile.SetYawPitchRoll(shot.m_Direction.VectorToAngles());
+		projectile.SetOrigin(shot.m_Origin);
+		move.Launch(
+			shot.m_Direction,
+			vector.Zero,
+			1,
+			projectile,
+			shot.m_Shooter,
+			shot.m_Shooter,
+			null,
+			null
+		);
+	}
+
+	static bool SnapAimClaimed(IEntity soldier)
+	{
+		if (!SnapAimEnabled())
+			return false;
+
+		IEntity body = CharacterBody(soldier);
+		if (
+			!body ||
+			!OwnsShot(body) ||
+			IsDown(body) ||
+			!HasGunAmmo(body) ||
+			!s_SnapAim.Contains(body)
+		)
+		{
+			return false;
+		}
+
+		IEntity enemy = EngagedEnemy(body);
+		return enemy && CanSeeEntity(body, enemy);
+	}
+
+	protected static bool SnapAimEnabled()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return false;
+
+		return mode.KK_GetSnapAim();
+	}
+
+	protected static bool SnapAimErrorEnabled()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return true;
+
+		return mode.KK_GetSnapAimError();
+	}
+
+	// GetAimingRotation is degrees. SetAimingRotation takes radians.
+	// Limits follow whichever unit their magnitude is in.
+	protected static void WriteAimRotation(AimingComponent aiming, float yawDeg, float pitchDeg)
+	{
+		if (!aiming)
+			return;
+
+		// VectorToAngles pitch for a nearly level shot is just under 360.
+		// The weapon limit is about -80 to 80, so that value clamps to the
+		// top and the rifle stays pitched at the limit.
+		while (yawDeg > 180)
+			yawDeg = yawDeg - 360;
+		while (yawDeg < -180)
+			yawDeg = yawDeg + 360;
+		while (pitchDeg > 180)
+			pitchDeg = pitchDeg - 360;
+		while (pitchDeg < -180)
+			pitchDeg = pitchDeg + 360;
+
+		vector limitsH;
+		vector limitsV;
+		aiming.GetAimingLimits(limitsH, limitsV);
+		bool hasLimits = limitsH[0] != 0 || limitsH[1] != 0 || limitsV[0] != 0 || limitsV[1] != 0;
+		if (hasLimits)
+		{
+			bool degrees = Math.AbsFloat(limitsH[1]) > 6.5 || Math.AbsFloat(limitsV[1]) > 6.5;
+			if (degrees)
+			{
+				yawDeg = Math.Clamp(yawDeg, limitsH[0], limitsH[1]);
+				pitchDeg = Math.Clamp(pitchDeg, limitsV[0], limitsV[1]);
+			}
+			else
+			{
+				yawDeg = Math.Clamp(yawDeg * Math.DEG2RAD, limitsH[0], limitsH[1]) / Math.DEG2RAD;
+				pitchDeg = Math.Clamp(pitchDeg * Math.DEG2RAD, limitsV[0], limitsV[1]) / Math.DEG2RAD;
+			}
+		}
+
+		vector rotation = Vector(yawDeg, pitchDeg, 0) * Math.DEG2RAD;
+		aiming.SetAimingRotation(rotation);
+		aiming.SetAimingRotationWanted(rotation);
+	}
+
+	static vector ShotAimPoint(IEntity shooter, IEntity enemy)
+	{
+		vector chest = ChestPoint(enemy);
+		if (!shooter || chest == vector.Zero)
+			return chest;
+
+		vector head = HeadPoint(enemy);
+		if (PointVisible(shooter, enemy, chest))
+			return chest;
+
+		if (PointVisible(shooter, enemy, head))
+			return head;
+
+		return chest;
+	}
+
+	// Chest unless the caller has no body to test. The eyes sit above the
+	// barrel and were the miss.
 	static vector ShotAimPoint(IEntity enemy)
+	{
+		return ChestPoint(enemy);
+	}
+
+	protected static vector ChestPoint(IEntity enemy)
+	{
+		return BodyPoint(enemy, "Spine2", CHEST_AIM_HEIGHT);
+	}
+
+	protected static vector HeadPoint(IEntity enemy)
+	{
+		return BodyPoint(enemy, "Head", HEAD_AIM_HEIGHT);
+	}
+
+	protected static vector BodyPoint(IEntity enemy, string bone, float height)
 	{
 		if (!enemy)
 			return vector.Zero;
 
-		ChimeraCharacter character = ChimeraCharacter.Cast(enemy);
-		if (character)
-			return character.EyePosition();
+		vector fallback = enemy.GetOrigin() + Vector(0, height, 0);
+		Animation anim = enemy.GetAnimation();
+		if (!anim)
+			return fallback;
 
-		return ShotAimPoint(enemy.GetOrigin());
+		int index = anim.GetBoneIndex(bone);
+		if (index < 0)
+			return fallback;
+
+		vector mat[4];
+		anim.GetBoneMatrix(index, mat);
+		vector point = enemy.CoordToParent(mat[3]);
+		if (point == vector.Zero)
+			return fallback;
+
+		return point;
+	}
+
+	protected static bool PointVisible(IEntity shooter, IEntity enemy, vector point)
+	{
+		if (!shooter || point == vector.Zero)
+			return false;
+
+		BaseWorld world = GetGame().GetWorld();
+		if (!world)
+			world = shooter.GetWorld();
+
+		if (!world)
+			return false;
+
+		ChimeraCharacter character = ChimeraCharacter.Cast(shooter);
+		vector eye = shooter.GetOrigin() + Vector(0, 1.6, 0);
+		if (character)
+			eye = character.EyePosition();
+
+		s_SightTarget = enemy;
+		bool clear = SightClear(world, shooter, eye, point);
+		s_SightTarget = null;
+		return clear;
+	}
+
+	// True while he should leave the plant. The barrel cannot hit the man,
+	// and the try at the blocked shot has already run out.
+	static bool BarrelWantsMove(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		IEntity enemy = EngagedEnemy(body);
+		if (!body || !enemy || !CanSeeEntity(body, enemy))
+			return false;
+
+		return !BarrelShotReady(body, enemy);
+	}
+
+	protected static IEntity EngagedEnemy(IEntity body)
+	{
+		if (!body)
+			return null;
+
+		if (s_ShotLook.Contains(body))
+		{
+			IEntity shot = s_ShotLook.Get(body);
+			if (shot && IsTargetable(shot))
+				return shot;
+		}
+
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (!utility || !utility.m_CombatComponent)
+			return null;
+
+		BaseTarget target = utility.m_CombatComponent.GetCurrentTarget();
+		if (!target)
+			return null;
+
+		return target.GetTargetEntity();
+	}
+
+	// The barrel has to be able to reach the same point the rifle is aimed
+	// at. A blocked barrel still gets one try. After that he moves, and
+	// that try stays off through the cool-off.
+	protected static bool BarrelShotReady(IEntity body, IEntity enemy)
+	{
+		if (!body || !enemy)
+			return false;
+
+		vector point = ShotAimPoint(body, enemy);
+		float side;
+		if (BarrelClear(body, enemy, point, side))
+		{
+			if (side != 0)
+				s_ShotLean.Set(body, side);
+
+			ForgetBarrelBlock(body);
+			return true;
+		}
+
+		float stuckMs = BarrelStuckMs();
+		if (stuckMs <= 0)
+			return false;
+
+		float now = WorldTime();
+		if (s_BarrelCoolUntil.Contains(body) && now < s_BarrelCoolUntil.Get(body))
+			return false;
+
+		bool same =
+			s_BarrelBlockedSince.Contains(body) &&
+			s_BarrelBlockedTarget.Contains(body) &&
+			s_BarrelBlockedTarget.Get(body) == enemy;
+		if (!same)
+		{
+			s_BarrelBlockedSince.Set(body, now);
+			s_BarrelBlockedTarget.Set(body, enemy);
+			return true;
+		}
+
+		if (now - s_BarrelBlockedSince.Get(body) < stuckMs)
+			return true;
+
+		s_BarrelCoolUntil.Set(body, now + BarrelCoolMs());
+		s_BarrelBlockedSince.Remove(body);
+		s_BarrelBlockedTarget.Remove(body);
+		return false;
+	}
+
+	protected static void ForgetBarrelBlock(IEntity body)
+	{
+		if (!body)
+			return;
+
+		s_BarrelBlockedSince.Remove(body);
+		s_BarrelBlockedTarget.Remove(body);
+	}
+
+	protected static float BarrelStuckMs()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return 1000;
+
+		return mode.KK_GetBarrelStuck() * 1000;
+	}
+
+	protected static float BarrelCoolMs()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return 2000;
+
+		return mode.KK_GetBarrelCool() * 1000;
+	}
+
+	// Center, then a lean to either side. A window the shoulder can clear
+	// is still a shot. side is -1 left, 1 right, and 0 from the shoulder.
+	protected static bool BarrelClear(
+		IEntity body,
+		IEntity enemy,
+		vector point,
+		out float side)
+	{
+		side = 0;
+		if (!body || point == vector.Zero)
+			return false;
+
+		BaseWorld world = GetGame().GetWorld();
+		if (!world)
+			world = body.GetWorld();
+
+		if (!world)
+			return false;
+
+		s_SightTarget = enemy;
+		bool center = SightClear(world, body, MuzzlePosition(body, 0), point, 0.05);
+		if (center)
+		{
+			s_SightTarget = null;
+			return true;
+		}
+
+		if (SightClear(world, body, MuzzlePosition(body, -1), point, 0.05))
+		{
+			side = -1;
+			s_SightTarget = null;
+			return true;
+		}
+
+		if (SightClear(world, body, MuzzlePosition(body, 1), point, 0.05))
+		{
+			side = 1;
+			s_SightTarget = null;
+			return true;
+		}
+
+		s_SightTarget = null;
+		return false;
+	}
+
+	protected static vector MuzzlePosition(IEntity body, float lean)
+	{
+		vector bone;
+		if (lean == 0 && MuzzleBone(body, bone))
+			return bone;
+
+		vector transform[4];
+		body.GetWorldTransform(transform);
+		float side = 0.18;
+		if (lean < 0)
+			side = -LEAN_OFFSET;
+		else if (lean > 0)
+			side = LEAN_OFFSET;
+
+		vector shoulder = body.GetOrigin() + Vector(0, 1.45, 0);
+		return shoulder + (transform[0] * side) + (transform[2] * 0.45);
+	}
+
+	protected static bool MuzzleBone(IEntity body, out vector muzzle)
+	{
+		muzzle = vector.Zero;
+		BaseWeaponComponent weapon = CurrentWeapon(body);
+		if (!weapon)
+			return false;
+
+		IEntity weaponEnt = weapon.GetOwner();
+		if (!weaponEnt)
+			return false;
+
+		Animation anim = weaponEnt.GetAnimation();
+		if (!anim)
+			return false;
+
+		int index = anim.GetBoneIndex("muzzle");
+		if (index < 0)
+			index = anim.GetBoneIndex("slot_muzzle");
+
+		if (index < 0)
+			return false;
+
+		vector mat[4];
+		anim.GetBoneMatrix(index, mat);
+		muzzle = weaponEnt.CoordToParent(mat[3]);
+		return muzzle != vector.Zero;
 	}
 
 	static vector ShotAimPoint(vector feet)
@@ -5076,6 +6346,7 @@ class KK_GarrisonHold
 			return;
 
 		s_LookEntity.Remove(body);
+		ClearSnapAim(body);
 		if (utility && utility.m_LookAction)
 			utility.m_LookAction.Cancel();
 	}
@@ -5085,7 +6356,10 @@ class KK_GarrisonHold
 	protected static void CancelLook(SCR_AIUtilityComponent utility, IEntity body)
 	{
 		if (body)
+		{
 			s_LookEntity.Remove(body);
+			ClearSnapAim(body);
+		}
 
 		if (utility && utility.m_LookAction)
 			utility.m_LookAction.Cancel();
@@ -5618,6 +6892,17 @@ modded class SCR_AIAttackBehavior
 			agentEntity = m_Utility.GetOwner();
 		}
 
+		// A man on the ground does not take the attack. CQB is paused,
+		// and this behavior would aim and walk him anyway.
+		if (
+			KK_GarrisonHold.IsDown(character) ||
+			KK_GarrisonHold.IsDown(agentEntity)
+		)
+		{
+			m_bUseCombatMove = false;
+			return 0;
+		}
+
 		// The bound is a sprint to the next spot. The attack aims that
 		// step, and the aimed step walks.
 		if (
@@ -5834,7 +7119,7 @@ modded class SCR_AICombatMoveLogicBase
 					{
 						IEntity targetEntity = target.GetTargetEntity();
 						if (targetEntity)
-							aimPos = KK_GarrisonHold.ShotAimPoint(targetEntity);
+							aimPos = KK_GarrisonHold.ShotAimPoint(body, targetEntity);
 					}
 				}
 
@@ -6122,11 +7407,31 @@ modded class SCR_AIUtilityComponent
 				!KK_GarrisonHold.SeesTarget(viewer, unknownTarget)
 			);
 
+		bool downed =
+			KK_GarrisonHold.IsDown(m_OwnerEntity) ||
+			KK_GarrisonHold.IsDown(GetOwner());
+
 		SCR_AIBehaviorBase result;
-		if (ignore || staleUnknown)
+		if (ignore || staleUnknown || downed)
 			result = vanilla.EvaluateBehavior(null);
 		else
 			result = vanilla.EvaluateBehavior(unknownTarget);
+
+		if (downed)
+		{
+			if (
+				KK_GarrisonHold.OnHouseOrder(m_OwnerEntity) ||
+				KK_GarrisonHold.OnHouseOrder(GetOwner())
+			)
+			{
+				IEntity downedBody = m_OwnerEntity;
+				if (!downedBody)
+					downedBody = GetOwner();
+				KK_GarrisonHold.PauseDownedCQB(downedBody);
+			}
+
+			return result;
+		}
 
 		if (ignore)
 			KK_GarrisonHold.EnforceSprintIgnore(this);
@@ -6161,6 +7466,9 @@ modded class SCR_AISetWeaponRaised
 		IEntity body;
 		if (owner)
 			body = owner.GetControlledEntity();
+
+		if (KK_GarrisonHold.IsDown(body) || KK_GarrisonHold.IsDown(owner))
+			return ENodeResult.SUCCESS;
 
 		if (KK_GarrisonHold.IsIgnoringTargets(body) || KK_GarrisonHold.IsIgnoringTargets(owner))
 		{
@@ -6266,7 +7574,7 @@ modded class SCR_AILookAction
 	// and leave a restart that already started this look.
 	void KK_Track(vector pos, float priority, float duration)
 	{
-		if (SprintIgnoring() || SprintingToCover() || PathLookBlocks())
+		if (SnapClaimed() || SprintIgnoring() || SprintingToCover() || PathLookBlocks())
 			return;
 
 		if (pos == vector.Zero)
@@ -6286,8 +7594,32 @@ modded class SCR_AILookAction
 	// Replaces a look at a man. A lower priority is ignored, so the head
 	// stays on him until that look ends. One restart turns him onto the
 	// lane. Later calls only move the point.
+	vector KK_LookPosition()
+	{
+		return m_vPosition;
+	}
+
+	// Moves this look onto the snap pose. A restart cancels the turn he
+	// already has and starts another, which is the sweep off the route
+	// when a shot begins. The point is updated and that restart is dropped.
+	void KK_HoldSnapPoint(vector pos)
+	{
+		if (pos == vector.Zero || LookOwnerDown())
+			return;
+
+		m_bRestartLook = false;
+		m_vPosition = pos;
+		m_fDuration = 30;
+		m_bCancelLook = false;
+		if (m_fPriority < 1000)
+			m_fPriority = 1000;
+	}
+
 	void KK_Snap(vector pos, float priority, float duration)
 	{
+		if (LookOwnerDown() || SnapClaimed())
+			return;
+
 		if (
 			!KK_GarrisonHold.IsPathLookWrite() &&
 			(SprintIgnoring() || SprintingToCover() || PathLookBlocks())
@@ -6319,6 +7651,9 @@ modded class SCR_AILookAction
 
 	override void LookAt(vector pos, float priority, float duration = 0.8)
 	{
+		if (SnapClaimed())
+			return;
+
 		if (!KK_GarrisonHold.IsPathLookWrite() && PathLookBlocks())
 			return;
 
@@ -6330,7 +7665,7 @@ modded class SCR_AILookAction
 
 	override void LookAt(IEntity ent, float priority, float duration = 0.8)
 	{
-		if (PathLookBlocks())
+		if (SnapClaimed() || PathLookBlocks())
 			return;
 
 		if (SprintIgnoring() || SprintingToCover() || BoundSprinting())
@@ -6345,6 +7680,59 @@ modded class SCR_AILookAction
 			return;
 
 		super.Cancel();
+	}
+
+	// The look behavior reads this every tick. While snap has the sight
+	// line, the look stays on that point. Cancelling it left the attack
+	// behavior with nothing to shoot at.
+	override void MoveLookParametersToNode(
+		out bool outCanLook,
+		out vector outLookPos,
+		out float outLookDuration,
+		out bool outCancelLook,
+		out bool outRestartLook)
+	{
+		super.MoveLookParametersToNode(
+			outCanLook,
+			outLookPos,
+			outLookDuration,
+			outCancelLook,
+			outRestartLook
+		);
+
+		if (LookOwnerDown() || !SnapClaimed() || !m_Utility)
+			return;
+
+		vector snap = KK_GarrisonHold.SnapPosePoint(m_Utility.m_OwnerEntity, vector.Zero);
+		if (snap == vector.Zero)
+			snap = KK_GarrisonHold.SnapPosePoint(m_Utility.GetOwner(), vector.Zero);
+		if (snap == vector.Zero)
+			return;
+
+		outCanLook = true;
+		outLookPos = snap;
+		m_vPosition = snap;
+		outCancelLook = false;
+		outRestartLook = false;
+		m_bRestartLook = false;
+	}
+
+	protected bool LookOwnerDown()
+	{
+		if (!m_Utility)
+			return false;
+
+		return KK_GarrisonHold.IsDown(m_Utility.m_OwnerEntity) ||
+			KK_GarrisonHold.IsDown(m_Utility.GetOwner());
+	}
+
+	protected bool SnapClaimed()
+	{
+		if (!m_Utility)
+			return false;
+
+		return KK_GarrisonHold.SnapAimClaimed(m_Utility.m_OwnerEntity) ||
+			KK_GarrisonHold.SnapAimClaimed(m_Utility.GetOwner());
 	}
 
 	// A clear or garrison look is already on this head. Anything else,
@@ -6461,18 +7849,21 @@ modded class SCR_AICombatMoveState
 			return;
 		}
 
+		SCR_AICombatMoveRequest_Move move = SCR_AICombatMoveRequest_Move.Cast(request);
+		if (move && SnapTurnBlocked())
+		{
+			move.m_bAimAtTarget = false;
+			move.m_bAimAtTargetEnd = false;
+		}
+
 		super.ApplyNewRequest(request);
+		if (SnapTurnBlocked())
+			m_bAimAtTarget = false;
 	}
 
 	override void EnableAiming(bool enable)
 	{
-		if (
-			enable &&
-			(
-				KK_GarrisonHold.IsSprintMoveLocked(this) ||
-				KK_GarrisonHold.IsClearMoveLocked(this)
-			)
-		)
+		if (enable && (SnapTurnBlocked() || KK_GarrisonHold.IsSprintMoveLocked(this) || KK_GarrisonHold.IsClearMoveLocked(this)))
 		{
 			m_bAimAtTarget = false;
 			return;
@@ -6480,12 +7871,52 @@ modded class SCR_AICombatMoveState
 
 		super.EnableAiming(enable);
 	}
+
+	void KK_StopAimTurn()
+	{
+		m_bAimAtTarget = false;
+	}
+
+	protected bool SnapTurnBlocked()
+	{
+		return KK_GarrisonHold.SnapTurnHeld(this);
+	}
 }
 
 // Close range accepts ten degrees of miss, so the rifle stops short of the
 // target. A greater threat pulls that onto him. The shot timer is unchanged.
 modded class SCR_AIGetAimErrorOffset
 {
+	override ENodeResult EOnTaskSimulate(AIAgent owner, float dt)
+	{
+		ENodeResult result = super.EOnTaskSimulate(owner, dt);
+		if (result != ENodeResult.SUCCESS)
+			return result;
+
+		IEntity body;
+		if (owner)
+			body = owner.GetControlledEntity();
+
+		if (!KK_GarrisonHold.SnapAimClaimed(body) && !KK_GarrisonHold.SnapAimClaimed(owner))
+			return result;
+
+		// The snap already placed the skill offset. This node would add
+		// another one and the rifle would settle beside the pose.
+		vector pose = KK_GarrisonHold.SnapPosePoint(body, vector.Zero);
+		if (pose == vector.Zero)
+			pose = KK_GarrisonHold.SnapPosePoint(owner, vector.Zero);
+		if (pose == vector.Zero)
+			return result;
+
+		AimPoint aimPoint;
+		if (GetVariableIn(PORT_AIM_POINT, aimPoint) && aimPoint)
+			SetVariableOut(PORT_ERROR_OFFSET, pose - aimPoint.GetPosition());
+		else
+			SetVariableOut(PORT_ERROR_OFFSET, vector.Zero);
+
+		return ENodeResult.SUCCESS;
+	}
+
 	override float GetRandomFactor(EAISkill skill, float mu)
 	{
 		float factor = super.GetRandomFactor(skill, mu);
@@ -6524,5 +7955,16 @@ modded class SCR_AIGetAimErrorOffset
 			return -1;
 
 		return KK_GarrisonHold.AimThreat(m_CombatComponent.GetOwner());
+	}
+}
+
+// A snap round is launched along the pose from this callback.
+modded class SCR_MuzzleEffectComponent
+{
+	override void OnFired(IEntity effectEntity, BaseMuzzleComponent muzzle, IEntity projectileEntity)
+	{
+		super.OnFired(effectEntity, muzzle, projectileEntity);
+		KK_GarrisonHold.LogSnapShot(effectEntity, muzzle, projectileEntity);
+		KK_GarrisonHold.QueueSnapShot(effectEntity, muzzle, projectileEntity);
 	}
 }

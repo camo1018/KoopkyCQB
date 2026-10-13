@@ -55,7 +55,7 @@ class KK_GarrisonBuildingWaypoint : SCR_AIWaypoint
 	[Attribute("0", UIWidgets.CheckBox, "Mark doors and windows and prefer those posts")]
 	protected bool m_bClassifyOpenings;
 
-	[Attribute("0", UIWidgets.CheckBox, "Draw interior debug points in Workbench")]
+	[Attribute("0", UIWidgets.CheckBox, "Draw interior debug points for this order")]
 	protected bool m_bDebugDraw;
 
 	protected BaseBuilding m_OrderBuilding;

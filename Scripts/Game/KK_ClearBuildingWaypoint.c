@@ -40,7 +40,7 @@ class KK_ClearBuildingWaypoint : SCR_AIWaypoint
 	[Attribute("1", UIWidgets.CheckBox, "If one node in a floor cluster is unreachable, fail the rest of that cluster")]
 	protected bool m_bFailClusterOnUnreachable = true;
 
-	[Attribute("0", UIWidgets.CheckBox, "Draw interior debug points in Workbench")]
+	[Attribute("0", UIWidgets.CheckBox, "Draw interior debug points for this order")]
 	protected bool m_bDebugDraw;
 
 	protected BaseBuilding m_OrderBuilding;

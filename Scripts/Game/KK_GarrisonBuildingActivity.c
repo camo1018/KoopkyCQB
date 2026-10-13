@@ -78,6 +78,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		new map<AIAgent, float>();
 
 	protected ref array<ref Shape> m_aDebugShapes = {};
+	protected int m_iDebugToken;
 
 	protected bool m_bPlanReady;
 	protected bool m_bFinished;
@@ -142,6 +143,8 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			);
 
 		KK_GarrisonHold.NoteOrderGroup(m_Group);
+		if (m_iDebugToken == 0)
+			m_iDebugToken = KK_InteriorDebugOverlay.Claim(m_Group);
 		HoldSquadOrder();
 	}
 
@@ -236,12 +239,13 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		);
 		FillAvailableAssignments(currentTime);
 
-#ifdef WORKBENCH
-		if (m_GarrisonWaypoint.GetDebugDraw())
+		if (
+			m_GarrisonWaypoint.GetDebugDraw() &&
+			KK_InteriorDebugOverlay.Owns(m_iDebugToken)
+		)
 			DrawDebug();
 		else
 			ClearDebug();
-#endif
 
 		return GetPriority();
 	}
@@ -496,6 +500,16 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				continue;
 			}
 
+			if (KK_GarrisonHold.IsDown(controlledEntity))
+			{
+				KK_GarrisonHold.PauseDownedCQB(controlledEntity);
+				assignment.m_fStartedAt = currentTime;
+				assignment.m_fStillSince = currentTime;
+				assignment.m_fLastOrderAt = currentTime;
+				i--;
+				continue;
+			}
+
 			KK_PerceptionBoost.Apply(
 				assignment.m_Agent,
 				m_mPerceptionFactors
@@ -715,10 +729,12 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				if (attacking || indoorFight || roomLook)
 					assignment.m_bFacingApplied = false;
 
+				// One turn-in-place. Repeating it restarts the animation.
 				if (
 					!attacking &&
 					!indoorFight &&
 					!roomLook &&
+					!assignment.m_bFacingApplied &&
 					KK_HoldFacing.HasFacing(assignment.m_Target)
 				)
 				{
@@ -763,6 +779,8 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				assignment.m_fStartedAt = currentTime;
 				assignment.m_fStillSince = currentTime;
 				assignment.m_vStillPosition = unitPosition;
+				// The hold used to skip this, so the walk-in look kept turning him.
+				ApplyGarrisonLook(assignment, settledAtPost);
 				i--;
 				continue;
 			}
@@ -2722,13 +2740,11 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		if (!m_Plan)
 			return;
 
-		ClearDebug();
-
-		ShapeFlags shapeFlags =
-			ShapeFlags.NOZBUFFER |
-			ShapeFlags.TRANSP |
-			ShapeFlags.NOOUTLINE |
-			ShapeFlags.VISIBLE;
+#ifdef WORKBENCH
+		m_aDebugShapes.Clear();
+#else
+		KK_InteriorDebugOverlay.Begin();
+#endif
 
 		array<ref KK_InteriorTarget> targets =
 			m_Plan.GetTargets();
@@ -2752,28 +2768,18 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			vector markerPosition =
 				target.m_vPosition + Vector(0, 0.35, 0);
 
-			m_aDebugShapes.Insert(
-				Shape.CreateSphere(
-					color,
-					shapeFlags,
-					markerPosition,
-					radius
-				)
-			);
+			DebugSphere(markerPosition, radius, color);
 
 			if (
 				target.m_eOpening != KK_EInteriorOpening.NONE &&
 				target.m_vFacing.Length() > 0.01
 			)
 			{
-				m_aDebugShapes.Insert(
-					Shape.CreateArrow(
-						markerPosition,
-						markerPosition + (target.m_vFacing * 1.4),
-						0.08,
-						color,
-						ShapeFlags.NOZBUFFER | ShapeFlags.VISIBLE
-					)
+				DebugArrow(
+					markerPosition,
+					markerPosition + (target.m_vFacing * 1.4),
+					0.08,
+					color
 				);
 			}
 		}
@@ -2797,22 +2803,59 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				assignment.m_Agent.GetControlledEntity().GetOrigin() +
 				Vector(0, 1.6, 0);
 
-			m_aDebugShapes.Insert(
-				Shape.CreateArrow(
-					unitPosition,
-					assignment.m_Target.m_vPosition +
-						Vector(0, 0.35, 0),
-					0.15,
-					0xFFFFFF00,
-					ShapeFlags.NOZBUFFER | ShapeFlags.VISIBLE
-				)
+			DebugArrow(
+				unitPosition,
+				assignment.m_Target.m_vPosition + Vector(0, 0.35, 0),
+				0.15,
+				0xFFFFFF00
 			);
 		}
+
+#ifndef WORKBENCH
+		KK_InteriorDebugOverlay.Commit();
+#endif
+	}
+
+	protected void DebugSphere(vector origin, float radius, int color)
+	{
+#ifdef WORKBENCH
+		ShapeFlags shapeFlags =
+			ShapeFlags.NOZBUFFER |
+			ShapeFlags.TRANSP |
+			ShapeFlags.NOOUTLINE |
+			ShapeFlags.VISIBLE;
+		m_aDebugShapes.Insert(
+			Shape.CreateSphere(color, shapeFlags, origin, radius)
+		);
+#else
+		KK_InteriorDebugOverlay.Disc(origin, radius, color);
+#endif
+	}
+
+	protected void DebugArrow(vector from, vector to, float size, int color)
+	{
+#ifdef WORKBENCH
+		m_aDebugShapes.Insert(
+			Shape.CreateArrow(
+				from,
+				to,
+				size,
+				color,
+				ShapeFlags.NOZBUFFER | ShapeFlags.VISIBLE
+			)
+		);
+#else
+		KK_InteriorDebugOverlay.Line(from, to, color);
+#endif
 	}
 
 	protected void ClearDebug()
 	{
 		m_aDebugShapes.Clear();
+#ifndef WORKBENCH
+		if (KK_InteriorDebugOverlay.Owns(m_iDebugToken))
+			KK_InteriorDebugOverlay.Hide();
+#endif
 	}
 
 	protected int GetDebugColor(notnull KK_InteriorTarget target)

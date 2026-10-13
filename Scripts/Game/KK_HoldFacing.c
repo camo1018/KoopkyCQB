@@ -26,6 +26,9 @@ class KK_HoldFacing
 		if (!controller)
 			return;
 
+		if (KK_GarrisonHold.SnapAimClaimed(controlled))
+			return;
+
 		vector flat = target.m_vFacing;
 		flat[1] = 0;
 		if (flat.Length() < 0.01)
