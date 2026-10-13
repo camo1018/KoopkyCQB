@@ -1,12 +1,14 @@
 # Koopky CQB
 
-Orders for clearing and holding buildings. Works with the base game and with CRX Enfusion AI.
+Orders for clearing and holding buildings, and for pushing a squad outdoors. Works with the base game and with CRX Enfusion AI.
 
-Give **Clear Building** or **Garrison** from the commanding menu, or place the matching waypoint in the editor. The order uses the nearest occupiable building within the search radius (75 m by default). A command-menu order copies the current Koopky CQB scenario properties onto that waypoint. A waypoint placed in the editor keeps the values set on that waypoint.
+Give **Clear Building**, **Garrison**, or an **Attack** pace from the commanding menu, or place the matching waypoint in the editor. Game Master also has a separate Koopky command bar (numpad 1–5) for the same orders. A clear or garrison aimed at a building piece, or placed inside one, locks that building. Otherwise the order uses the nearest occupiable building within the search radius (75 m by default). A command-menu order copies the current Koopky CQB scenario properties onto that waypoint. A waypoint placed in the editor keeps the values set on that waypoint until the order starts, then scenario values are applied.
+
+**Recruit Squad** recruits the whole squad of the soldier you are aiming at, not only that man.
 
 ## Clear Building
 
-Each soldier moves to his own point. The interior is sampled into points, then grouped into rooms on each floor. The squad works the lowest unfinished floor first, and soldiers run while they clear.
+Each soldier moves to his own point. The interior is sampled into points, then grouped into rooms on each floor. The squad works the lowest unfinished floor first, and soldiers run while they clear. With **Start from the order** on, a player squad starts on the floor and side where the clear was placed. An AI squad still starts on the lowest floor nearest the squad.
 
 Two soldiers take a room: one on the far point, one on the near point. What the rest of the squad does is **Clear coordination behavior**:
 
@@ -21,11 +23,11 @@ A point counts as visited when a soldier stands on it, or when he is close enoug
 
 If a soldier cannot reach a point, he retries. After the other points are done, held points are tried again. With **Clear fails the rest of the room** on, one unreachable point fails the rest of that room with it.
 
-A finished clear garrisons that building when nothing else is queued and **Garrison after the last clear** is on. Chained orders continue to the next one.
+Clear and garrison own movement and aim for the whole order. A new clear or garrison replaces the last one. A later move ends a clear. A finished clear garrisons that building when nothing else is queued and **Garrison after the last clear** is on. Chained orders continue to the next one. A player squad that finishes a clear goes back to follow.
 
 ## Garrison
 
-Puts the squad on posts inside the building. They sprint toward the building and run once they are inside. On the way in, a bound runs and shoots. Inside, with **Custom CQB AI** on, an enemy in the building stops him until that enemy is gone, and only then does he run on. A closed door holds him, and he can shoot while he waits. At the post, he holds and fights from there.
+Puts the squad on posts inside the building. They sprint toward the building and run once they are inside. On the way in, a bound runs and shoots. Inside, with **Custom CQB AI** on, an enemy in range stops him until that enemy is gone, and only then does he run on. A closed door holds him, and he can shoot while he waits. At the post, he holds and fights from there.
 
 A post only counts if the soldier is on that floor. A sampled interior post allows a wider drift (the garrison hold radius, 5 m). A placed window, door, or post uses the tighter placed-waypoint hold radius (1 m).
 
@@ -33,23 +35,41 @@ A soldier who leaves his post is pulled back on an interval. He rotates to anoth
 
 **Hold doors and windows** marks openings and sends soldiers there first. Off, garrison uses the normal interior posts.
 
+## Attack
+
+Outdoor push orders under the Attack page of the commanding menu, or from the Game Master Koopky bar.
+
+- **Advance.** Pairs step toward the point, pause, and scan. On contact they shoot for **Contact duration** before the normal attack takes the fight.
+- **Bound.** The same push, with pairs bounding by lane.
+- **Take cover.** Pairs bound into cover on the way. After one fighter in the moving pair has stopped, **Cover handoff** lets the holding pair bound if the others have not arrived. While planted, contact shots run for the whole hold when **Contact duration** is above zero. At the point, **Take cover uses attack** hands the fight to the normal attack and walks a soldier back if he leaves the return distance. Off keeps them on the cover spot.
+
+**Attack lane spacing**, **Attack step length**, **Attack pause**, and **Attack finish distance** set how far apart the lanes sit, how far each step goes, how long a pair holds, and how close they must be to finish.
+
 ## Doors and movement
 
-**Open doors ahead** is on. A soldier opens a closed door in front of him on the way to a clear point or garrison post. The squad steps out of the door's swing first, so a door that opens toward them can move.
+**Open doors ahead** is on. A soldier opens a closed door in front of him on the way to a clear point or garrison post. The squad steps out of the door's swing only when it opens toward them.
 
 **AI navigation improvements** defaults to off.
 
 - **Off** leaves collision and movement alone.
 - **Make Way** is experimental. A soldier who has been stopped asks the person in front to step aside.
-- **Pass-through** keeps collision until someone is blocking him. That soldier then ignores character collision until he is through. Walls, doors, and the ground stay solid.
+- **Pass-through** keeps collision until someone is blocking him. That soldier then ignores character collision until he is through. Walls, doors, and the ground stay solid. The interior walk speed stays on during that step.
 
 **Pass through characters** is a separate option. While clearing or garrisoning, squad members pass through other characters for the whole order. A player in the squad keeps normal collision. Walls, doors, and the ground stay solid.
 
 ## Combat
 
-While a soldier is clearing or garrisoning, **Recognition speed** replaces his normal speed, then returns when the order ends. 1 is normal. **Stay sharp under fire** keeps suppression from slowing recognition, and the first shot does not wait.
+While a soldier is clearing, garrisoning, or attacking, **Recognition speed** replaces his normal speed, then returns when the order ends. 1 is normal. **Stay sharp under fire** keeps suppression from slowing recognition, and the first shot does not wait. On an attack waypoint he also stays at the alerted recognition rate for the whole order.
 
-**Custom CQB AI** is on. It replaces the normal attack inside the building while soldiers are clearing or garrisoning. A soldier fires himself at the nearest enemy he can see. **Shot check** is how often he looks, in milliseconds, from 50 to 100. It defaults to 75. **Shot delay** is how long that clear sight has to last before the round, in seconds. 0 fires on the next check. If only a step to his left or right can see the enemy, he leans that way and shoots from the peek.
+**Custom CQB AI** is on and is strongly suggested. It replaces the normal attack while soldiers are clearing or garrisoning, including outside the building within **CQB range** (50 m by default). A soldier fires himself at the nearest enemy he can see in that range. He plants and shoots in place, then picks the route back up once that man is gone. Between contacts he looks along the uncleared route. After the sight line breaks, **Lost contact look** keeps the rifle on the last place the man was seen before the route look returns.
+
+**Shot check** is how often he looks, in milliseconds, from 50 to 100. It defaults to 75. **Shot delay** is how long that clear sight has to last before the round, in seconds. 0 fires on the next check. If only a step to his left or right can see the enemy, he leans that way and shoots from the peek. The rifle stays up on a clear while the room gun is aimed.
+
+**Snap aim** is experimental and off. While he is aiming at a man, it snaps heading and weapon aim onto that point instead of turning at the normal rate. **Snap aim error** scatters that point by skill, distance, weapon, and light.
+
+If his eyes can see the man but the barrel cannot, **Barrel try** is how long he keeps engaging before he moves for a clear barrel line. **Barrel cool off** is how long after that move starts before he will stand and try an eyes-only shot again.
+
+Under threat, **Run while reloading** starts the reload and runs to the cluster node farthest from the threat. Off reloads in place. **Sprint to cover** is experimental: with run while reloading on, an empty gun with the target still visible sprints to a hidden node, then reloads. **Reload below** tops off once the magazine is under that percent after the enemy has stayed out of sight for **Out of sight**. An empty gun still reloads immediately.
 
 **Sidearm, then release** is on. When the primary has no rounds and no magazine, he switches to another loaded gun and stays on the clear or garrison. Grenades do not count. When no gun has ammo, he leaves that order and the normal AI can rearm him. **Return after rearm** is how many seconds he stays out once gun ammo is back, so a rearm can keep handing him magazines. It defaults to 10. 0 puts him back on the next check. He comes back only while that clear or garrison is still the squad's order. Off keeps him on the order with the rifle down.
 
@@ -63,11 +83,11 @@ Horizontal and vertical spacing set how far apart interior points are. Samples c
 
 ## Settings
 
-Game Master scenario properties has a Koopky CQB tab. The server loads `KoopkyCQB/config.json` from the profile folder when the game mode starts. If that file is missing and an older `KoopkyCQB_config.json` is still in the profile root, those values are copied across once.
+Game Master scenario properties has a Koopky CQB tab, including Clear, Garrison, Attack, Combat, Interior, and Debug. The server loads `KoopkyCQB/config.json` from the profile folder when the game mode starts. If that file is missing and an older `KoopkyCQB_config.json` is still in the profile root, those values are copied across once.
 
 The **Config file** control on the tab writes the current values, reloads them, or restores the scenario defaults. Export again after a reset if the file should match.
 
-**Draw interior points in Workbench** draws the plan while playing from Workbench.
+**Draw interior points** draws the plan for the latest clear or garrison order. **Debug log** writes KK log lines.
 
 ## Waypoint authoring
 
@@ -75,8 +95,8 @@ The **Config file** control on the tab writes the current values, reloads them, 
 
 **Lock Building** locks the building you are looking at. The layout is stored for that prefab, so later copies of the same building reuse it. **Release Building** drops the lock.
 
-Place windows, doors, posts, and route points. Add or delete nodes, delete a cluster, link points, and undo. **Forbid above** and **Forbid below** limit which heights are kept. **Clear heights** removes those limits. **Roof allow** includes the roof.
+Place windows, doors, posts, and route points. Add or delete nodes, delete a cluster, link points, and undo. **Forbid above** and **Forbid below** limit which heights are kept. Confirm a forbid height with left click. **Clear heights** removes those limits. **Roof allow** includes the roof.
 
 Placed windows, doors, and posts become the tighter garrison holds. Linked points are the route a soldier follows to his post. The files live in `KoopkyCQB/Waypoints` in the profile folder.
 
-**Toggle WP Debug** draws the authored marks. **Sample attempts** is how many times a lock waits for navmesh tiles. Each try is half a second.
+**Toggle WP Debug** draws the authored marks. In Workbench they are debug shapes. Outside Workbench they are circles and lines on the HUD. **Sample attempts** is how many times a lock waits for navmesh tiles. Each try is half a second.
