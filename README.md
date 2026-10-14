@@ -63,6 +63,8 @@ While a soldier is clearing, garrisoning, or attacking, **Recognition speed** re
 
 **Custom CQB AI** is on by default and is strongly suggested. It replaces the normal attack while soldiers are clearing or garrisoning, including outside the building within **CQB range** (50 m by default). A soldier fires himself at the nearest enemy he can see in that range. He plants and shoots in place, then picks the route back up once that man is gone. Between contacts he looks along the uncleared route. After the sight line breaks, **Lost contact look** keeps the rifle on the last place the man was seen before the route look returns (2 s by default).
 
+**Sight conditions** is off by default. Off, a clear ray is enough at any range. On, that ray still has to pick the man out. Darkness, crouching or lying down, holding still, and foliage shorten how far it counts. A man within a few meters is still seen. Walls are unchanged.
+
 **Shot check** is how often he looks, in milliseconds, from 50 to 100. It is 75 by default. **Shot delay** is how long that clear sight has to last before the round, in milliseconds, from 0 to 2000. It is 150 by default. 0 fires on the next check. If only a step to his left or right can see the enemy, he leans that way and shoots from the peek. The rifle stays up on a clear while the room gun is aimed.
 
 **Snap aim** is experimental and off by default. While he is aiming at a man, it snaps heading and weapon aim onto that point instead of turning at the normal rate. **Snap aim error** is on by default. It scatters that point by skill, distance, weapon, and light.

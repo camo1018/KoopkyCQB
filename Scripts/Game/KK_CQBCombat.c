@@ -566,6 +566,8 @@ class KK_GarrisonHold
 	protected static ref set<IEntity> s_FreshOrder = new set<IEntity>();
 	protected static ref set<AIAgent> s_OrderNoted = new set<AIAgent>();
 	protected static ref TraceParam s_SightTrace;
+	protected static ref TraceParam s_ConditionTrace;
+	protected static IEntity s_ConditionBody;
 	protected static IEntity s_SightViewer;
 	// The man this trace is trying to see. His own body is not a wall.
 	protected static IEntity s_SightTarget;
@@ -5037,6 +5039,10 @@ class KK_GarrisonHold
 		if (!body || !enemy)
 			return false;
 
+		// A peek past the frame does not skip darkness or a man in a bush.
+		if (!ConditionsAllow(body, enemy))
+			return false;
+
 		bool left;
 		bool right;
 		SidesClear(body, enemy, left, right);
@@ -6492,7 +6498,217 @@ class KK_GarrisonHold
 		if (!seen)
 			seen = SightClear(world, body, eye, enemy.GetOrigin() + Vector(0, 0.35, 0));
 		s_SightTarget = null;
-		return seen;
+		if (!seen)
+			return false;
+
+		return ConditionsAllow(body, enemy);
+	}
+
+	// Off, the ray is the whole check. On, light and concealment shorten
+	// how far a clear ray still counts. A few meters always counts, so a
+	// man in the same room is not lost in the dark.
+	protected static bool ConditionsAllow(IEntity body, IEntity enemy)
+	{
+		if (!UseSightConditions())
+			return true;
+
+		if (!body || !enemy)
+			return false;
+
+		float conceal = ConcealmentOf(enemy);
+		if (conceal < 0)
+			conceal = 0;
+		if (conceal > 0.9)
+			conceal = 0.9;
+
+		float openness = IlluminationOf(enemy) * (1 - conceal);
+		if (openness >= 0.98)
+			return true;
+
+		float reach = Math.Lerp(5, 120, openness);
+		return vector.Distance(body.GetOrigin(), enemy.GetOrigin()) <= reach;
+	}
+
+	protected static bool UseSightConditions()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return false;
+
+		return mode.KK_GetSightConditions();
+	}
+
+	protected static float IlluminationOf(IEntity enemy)
+	{
+		PerceivableComponent perceivable = PerceivableComponent.Cast(
+			enemy.FindComponent(PerceivableComponent)
+		);
+		if (!perceivable)
+			return 1;
+
+		float light = perceivable.GetIlluminationFactor();
+		if (light < 0)
+			return 0;
+		if (light > 1)
+			return 1;
+
+		return light;
+	}
+
+	// 0 is standing in the open. Prone, still, and foliage push it toward 1.
+	// A man who is moving gives that concealment back.
+	protected static float ConcealmentOf(IEntity enemy)
+	{
+		float conceal = 0;
+		bool low = false;
+		CharacterControllerComponent controller = Controller(enemy);
+		if (controller)
+		{
+			ECharacterStance stance = controller.GetStance();
+			if (stance == ECharacterStance.PRONE)
+			{
+				conceal = 0.55;
+				low = true;
+			}
+			else if (stance == ECharacterStance.CROUCH)
+			{
+				conceal = 0.3;
+				low = true;
+			}
+		}
+
+		conceal = conceal + FoliageConcealment(enemy, low);
+
+		float speed = FlatSpeed(enemy);
+		if (speed >= 2.5)
+			conceal = conceal * 0.4;
+		else if (speed >= 0.6)
+			conceal = conceal * 0.75;
+		else if (conceal > 0)
+			conceal = conceal + 0.15;
+
+		return conceal;
+	}
+
+	protected static float FlatSpeed(IEntity enemy)
+	{
+		Physics physics = enemy.GetPhysics();
+		if (!physics)
+			return 0;
+
+		vector velocity = physics.GetVelocity();
+		velocity[1] = 0;
+		return velocity.Length();
+	}
+
+	// A bush around the body counts for anyone. Grass at the feet counts
+	// only when he is already low.
+	protected static float FoliageConcealment(IEntity enemy, bool low)
+	{
+		BaseWorld world = GetGame().GetWorld();
+		if (!world)
+			world = enemy.GetWorld();
+
+		if (!world)
+			return 0;
+
+		if (!s_ConditionTrace)
+			s_ConditionTrace = new TraceParam();
+
+		vector origin = enemy.GetOrigin();
+		s_ConditionBody = enemy;
+		s_ConditionTrace.Flags = TraceFlags.ENTS | TraceFlags.WORLD;
+		s_ConditionTrace.Exclude = enemy;
+		s_ConditionTrace.TraceEnt = null;
+		s_ConditionTrace.Start = origin + Vector(0, 2.2, 0);
+		s_ConditionTrace.End = origin + Vector(0, 0.15, 0);
+
+		float fraction = world.TraceMove(s_ConditionTrace, FilterConditionTrace);
+		s_ConditionBody = null;
+		if (fraction >= 1)
+			return 0;
+
+		if (!HitIsFoliage())
+			return 0;
+
+		float hitHeight = 2.2 - (fraction * 2.05);
+		if (hitHeight >= 0.45 && hitHeight <= 1.8)
+			return 0.4;
+
+		if (low && hitHeight < 0.45)
+			return 0.15;
+
+		return 0;
+	}
+
+	protected static bool HitIsFoliage()
+	{
+		if (NameIsFoliage(s_ConditionTrace.TraceMaterial))
+			return true;
+
+		return EntityIsFoliage(s_ConditionTrace.TraceEnt);
+	}
+
+	protected static bool EntityIsFoliage(IEntity entity)
+	{
+		if (!entity)
+			return false;
+
+		if (NameIsFoliage(entity.GetName()))
+			return true;
+
+		if (NameIsFoliage(entity.ClassName()))
+			return true;
+
+		EntityPrefabData prefabData = entity.GetPrefabData();
+		if (!prefabData)
+			return false;
+
+		return NameIsFoliage(string.Format("%1", prefabData.GetPrefabName()));
+	}
+
+	protected static bool NameIsFoliage(string name)
+	{
+		if (name.IsEmpty())
+			return false;
+
+		string lower = name;
+		lower.ToLower();
+		return lower.Contains("grass") ||
+			lower.Contains("bush") ||
+			lower.Contains("foliage") ||
+			lower.Contains("leaf") ||
+			lower.Contains("shrub") ||
+			lower.Contains("hedge") ||
+			lower.Contains("plant") ||
+			lower.Contains("fern") ||
+			lower.Contains("reed") ||
+			lower.Contains("crop");
+	}
+
+	protected static bool FilterConditionTrace(
+		IEntity entity,
+		vector start = "0 0 0",
+		vector dir = "0 0 0")
+	{
+		if (!entity || entity == s_ConditionBody)
+			return false;
+
+		IEntity current = entity;
+		int depth;
+		while (current && depth < 6)
+		{
+			if (current == s_ConditionBody)
+				return false;
+
+			if (ChimeraCharacter.Cast(current))
+				return false;
+
+			current = current.GetParent();
+			depth++;
+		}
+
+		return true;
 	}
 
 	protected static bool CanSeePoint(IEntity body, vector feet)
