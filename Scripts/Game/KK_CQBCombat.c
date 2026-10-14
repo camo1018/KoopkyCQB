@@ -370,9 +370,16 @@ modded class SCR_AICombatComponent
 	// The clear route owns the aim point. CRX writes the threat here on
 	// the same evaluation, and this puts the next uncleared node back.
 	// A living enemy he can see takes that point instead. The plant is
-	// already holding his feet.
+	// already holding his feet. A man past CQB range keeps the aim the
+	// normal attack already has.
 	protected void KK_StampPathLook()
 	{
+		if (KK_GarrisonHold.DistantBaseFight(GetOwner()))
+		{
+			KK_GarrisonHold.YieldLookToAttack(GetOwner());
+			return;
+		}
+
 		vector contactAim;
 		if (KK_GarrisonHold.TakeContactLook(GetOwner(), contactAim))
 		{
@@ -3611,7 +3618,16 @@ class KK_GarrisonHold
 		if (!s_ShotLive.Contains(body))
 		{
 			ClearAim(body);
+			ClearSnapAim(body);
 			RememberLean(body, 0);
+			// Past CQB range the normal attack aims and sets the trigger.
+			// Forcing either here cuts that burst off.
+			if (DistantBaseFight(body))
+			{
+				YieldLookToAttack(body);
+				return;
+			}
+
 			bool raised = FeelsThreatened(utility);
 			if (ClearWeaponStaysUp(body))
 				raised = true;
@@ -5053,8 +5069,9 @@ class KK_GarrisonHold
 		return affiliation.GetAffiliatedFaction();
 	}
 
-	// A clear or garrison does not plant or shoot past CQB range.
-	// Attack waypoints are not in this.
+	// A clear or garrison does not plant or use the room gun past CQB range.
+	// Attack waypoints are not in this. A man past that range is a normal
+	// attack instead, and he does not get snap aim.
 	static bool PastOrderContact(IEntity body, IEntity enemy)
 	{
 		if (!body || !enemy)
@@ -5064,6 +5081,63 @@ class KK_GarrisonHold
 			return false;
 
 		return vector.Distance(body.GetOrigin(), enemy.GetOrigin()) > OrderContactRange();
+	}
+
+	// The room gun has nobody it will shoot, and the selected man is past
+	// CQB range and in sight. The normal attack then aims and fires. The
+	// route still owns his feet.
+	static bool DistantBaseFight(IEntity soldier)
+	{
+		if (!UseRoomCombat() || !OrderOwnsBehavior(soldier))
+			return false;
+
+		// Zero range does not shoot on sight, including through the normal attack.
+		if (OrderContactRange() <= 0)
+			return false;
+
+		IEntity body = CharacterBody(soldier);
+		if (!body || IsDown(body) || CannotShoot(body))
+			return false;
+
+		if (s_ShotLive.Contains(body))
+			return false;
+
+		if (VisibleContact(body, OrderContactRange()))
+			return false;
+
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (!utility || !utility.m_CombatComponent)
+			return false;
+
+		BaseTarget current = utility.m_CombatComponent.GetCurrentTarget();
+		if (!current || !IsLivingTarget(current))
+			return false;
+
+		IEntity enemy = current.GetTargetEntity();
+		if (!enemy || !CanSeeEntity(body, enemy))
+			return false;
+
+		return PastOrderContact(body, enemy);
+	}
+
+	// Drops the route look once, so the normal attack can take the head.
+	// Later calls leave the look it started.
+	static void YieldLookToAttack(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		ForgetLostLook(body);
+		if (!s_PathLook.Contains(body))
+			return;
+
+		s_PathLook.Remove(body);
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (!utility || !utility.m_LookAction)
+			return;
+
+		utility.m_LookAction.Cancel();
 	}
 
 	protected static bool CanEngage(IEntity body, IEntity enemy, out float lean)
@@ -5323,7 +5397,8 @@ class KK_GarrisonHold
 			IsDown(body) ||
 			!HasGunAmmo(body) ||
 			IsBoundSprint(body) ||
-			SprintBeforeReload(body)
+			SprintBeforeReload(body) ||
+			vector.Distance(body.GetOrigin(), point) > OrderContactRange()
 		)
 		{
 			ClearSnapAim(body);
@@ -5390,6 +5465,17 @@ class KK_GarrisonHold
 				!HasGunAmmo(body) ||
 				IsBoundSprint(body) ||
 				SprintBeforeReload(body)
+			)
+			{
+				ClearSnapAim(body);
+				continue;
+			}
+
+			IEntity engaged = EngagedEnemy(body);
+			vector held = s_SnapAim.Get(body);
+			if (
+				(engaged && PastOrderContact(body, engaged)) ||
+				vector.Distance(body.GetOrigin(), held) > OrderContactRange()
 			)
 			{
 				ClearSnapAim(body);
@@ -6988,16 +7074,20 @@ modded class SCR_AIAttackBehavior
 			return 0;
 		}
 
-		// A clear and a garrison do not take this behavior. It walks and
-		// shoots. A man in sight stops him through the plant, and the
-		// room gun fires. This attack must not carry him forward.
-		if (
+		// A clear and a garrison do not take this behavior for a man inside
+		// CQB range. The room gun fires, and this attack must not carry him
+		// forward. Past that range the normal attack aims and fires, and
+		// the route still owns his feet.
+		bool houseOrder =
 			KK_GarrisonHold.UseRoomCombat() &&
 			(
 				KK_GarrisonHold.OrderOwnsBehavior(character) ||
 				KK_GarrisonHold.OrderOwnsBehavior(agentEntity)
-			)
-		)
+			);
+		bool distantFight =
+			KK_GarrisonHold.DistantBaseFight(character) ||
+			KK_GarrisonHold.DistantBaseFight(agentEntity);
+		if (houseOrder && !distantFight)
 		{
 			m_bUseCombatMove = false;
 			return 0;
@@ -7055,7 +7145,7 @@ modded class SCR_AIAttackBehavior
 			KK_GarrisonHold.GetApproachGoal(character, approachGoal) ||
 			KK_GarrisonHold.GetApproachGoal(agentEntity, approachGoal);
 
-		if (clearingInside || pinned || doorFiring)
+		if (clearingInside || pinned || doorFiring || distantFight)
 		{
 			m_bUseCombatMove = false;
 			if (KK_GarrisonHold.IsPinned(character))
@@ -7073,7 +7163,11 @@ modded class SCR_AIAttackBehavior
 
 	override void InitWaitTime(SCR_AIUtilityComponent utility)
 	{
-		if (utility && KK_GarrisonHold.OwnsShot(utility.m_OwnerEntity))
+		if (
+			utility &&
+			KK_GarrisonHold.OwnsShot(utility.m_OwnerEntity) &&
+			!KK_GarrisonHold.DistantBaseFight(utility.m_OwnerEntity)
+		)
 		{
 			m_fWaitTime.m_Value = KK_GarrisonHold.ShotDelayFor(utility.m_OwnerEntity);
 			return;
@@ -7086,7 +7180,14 @@ modded class SCR_AIAttackBehavior
 				KK_GarrisonHold.IsAttackSearch(utility.GetOwner())
 			);
 
+		bool distantFight =
+			utility &&
+			(
+				KK_GarrisonHold.DistantBaseFight(utility.m_OwnerEntity) ||
+				KK_GarrisonHold.DistantBaseFight(utility.GetOwner())
+			);
 		if (
+			!distantFight &&
 			KK_PerceptionBoost.UseSharpCombat() &&
 			(
 				attackSearch ||
@@ -7581,7 +7682,11 @@ modded class SCR_AISetWeaponRaised
 			return ENodeResult.SUCCESS;
 		}
 
-		if (KK_GarrisonHold.OwnsShot(body) || KK_GarrisonHold.OwnsShot(owner))
+		if (
+			(KK_GarrisonHold.OwnsShot(body) || KK_GarrisonHold.OwnsShot(owner)) &&
+			!KK_GarrisonHold.DistantBaseFight(body) &&
+			!KK_GarrisonHold.DistantBaseFight(owner)
+		)
 		{
 			SCR_ChimeraAIAgent roomSoldier = SCR_ChimeraAIAgent.Cast(owner);
 			if (roomSoldier)
@@ -7810,10 +7915,22 @@ modded class SCR_AILookAction
 	}
 
 	// A clear or garrison look is already on this head. Anything else,
-	// including a threat look, is dropped.
+	// including a threat look, is dropped. A distant fight leaves the
+	// head to the normal attack.
 	protected bool PathLookBlocks()
 	{
-		return m_Utility && KK_GarrisonHold.PathLookActive(m_Utility);
+		if (!m_Utility)
+			return false;
+
+		if (
+			KK_GarrisonHold.DistantBaseFight(m_Utility.m_OwnerEntity) ||
+			KK_GarrisonHold.DistantBaseFight(m_Utility.GetOwner())
+		)
+		{
+			return false;
+		}
+
+		return KK_GarrisonHold.PathLookActive(m_Utility);
 	}
 
 	protected bool SprintIgnoring()
@@ -7994,6 +8111,9 @@ modded class SCR_AIGetAimErrorOffset
 	override float GetRandomFactor(EAISkill skill, float mu)
 	{
 		float factor = super.GetRandomFactor(skill, mu);
+		if (DistantAiming())
+			return factor;
+
 		float threat = RoomThreat();
 		if (threat < 0)
 			return factor;
@@ -8016,11 +8136,23 @@ modded class SCR_AIGetAimErrorOffset
 			weaponType
 		);
 
+		if (DistantAiming())
+			return tolerance;
+
 		float threat = KK_GarrisonHold.AimThreat(observer);
 		if (threat < 0)
 			return tolerance;
 
 		return Math.Min(tolerance, Math.Lerp(3, 0.6, threat));
+	}
+
+	// Past CQB range the normal attack owns the aim, including its scatter.
+	protected bool DistantAiming()
+	{
+		if (!m_CombatComponent)
+			return false;
+
+		return KK_GarrisonHold.DistantBaseFight(m_CombatComponent.GetOwner());
 	}
 
 	protected float RoomThreat()
