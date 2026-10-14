@@ -3383,11 +3383,11 @@ class KK_GarrisonHold
 		return mode.KK_GetRoomCombat();
 	}
 
-	static float ShotDelaySeconds()
+	static float ShotDelayMs()
 	{
 		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
 		if (!mode)
-			return 0.15;
+			return 150;
 
 		return mode.KK_GetShotDelay();
 	}
@@ -5141,7 +5141,7 @@ class KK_GarrisonHold
 			s_AimSince.Set(body, now);
 		}
 
-		return now - s_AimSince.Get(body) >= ShotDelaySeconds() * 1000;
+		return now - s_AimSince.Get(body) >= ShotDelayMs();
 	}
 
 	protected static void ClearAim(IEntity body)
@@ -7001,7 +7001,7 @@ modded class SCR_AIAttackBehavior
 	{
 		if (utility && KK_GarrisonHold.OwnsShot(utility.m_OwnerEntity))
 		{
-			m_fWaitTime.m_Value = KK_GarrisonHold.ShotDelaySeconds();
+			m_fWaitTime.m_Value = KK_GarrisonHold.ShotDelayMs() / 1000;
 			return;
 		}
 
