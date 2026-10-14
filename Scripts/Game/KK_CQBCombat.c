@@ -5039,10 +5039,6 @@ class KK_GarrisonHold
 		if (!body || !enemy)
 			return false;
 
-		// A peek past the frame does not skip darkness or a man in a bush.
-		if (!ConditionsAllow(body, enemy))
-			return false;
-
 		bool left;
 		bool right;
 		SidesClear(body, enemy, left, right);
@@ -5052,6 +5048,13 @@ class KK_GarrisonHold
 
 		// The center ray hits the cover he is standing against. A clear
 		// side is still a shot, and the trigger needs that side remembered.
+		// The same light and concealment check follows that ray.
+		if (!left && !right)
+			return false;
+
+		if (!ConditionsAllow(enemy))
+			return false;
+
 		if (left && !right)
 			lean = -1;
 		else if (right && !left)
@@ -5059,7 +5062,7 @@ class KK_GarrisonHold
 		else if (left && right)
 			lean = -1;
 
-		return left || right;
+		return true;
 	}
 
 	// The side point has to be in open air. A trace that starts inside a
@@ -6501,32 +6504,28 @@ class KK_GarrisonHold
 		if (!seen)
 			return false;
 
-		return ConditionsAllow(body, enemy);
+		return ConditionsAllow(enemy);
 	}
 
-	// Off, the ray is the whole check. On, light and concealment shorten
-	// how far a clear ray still counts. A few meters always counts, so a
-	// man in the same room is not lost in the dark.
-	protected static bool ConditionsAllow(IEntity body, IEntity enemy)
+	// The ray already succeeded. This asks whether he can pick the man
+	// out. Distance is not part of it. He sees the man when the light on
+	// him, reduced by concealment, is still enough.
+	protected static bool ConditionsAllow(IEntity enemy)
 	{
 		if (!UseSightConditions())
 			return true;
 
-		if (!body || !enemy)
+		if (!enemy)
 			return false;
 
 		float conceal = ConcealmentOf(enemy);
 		if (conceal < 0)
 			conceal = 0;
-		if (conceal > 0.9)
-			conceal = 0.9;
+		if (conceal > 0.85)
+			conceal = 0.85;
 
-		float openness = IlluminationOf(enemy) * (1 - conceal);
-		if (openness >= 0.98)
-			return true;
-
-		float reach = Math.Lerp(5, 120, openness);
-		return vector.Distance(body.GetOrigin(), enemy.GetOrigin()) <= reach;
+		float apparent = IlluminationOf(enemy) * (1 - conceal);
+		return apparent >= 0.2;
 	}
 
 	protected static bool UseSightConditions()

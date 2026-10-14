@@ -152,7 +152,7 @@ modded class SCR_BaseGameMode
 	[Attribute("150", UIWidgets.EditBox, "Milliseconds from a clear sight to the shot, while clearing or garrisoning inside a building. 0 fires immediately.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_ShotDelay;
 
-	[Attribute("0", UIWidgets.CheckBox, "A clear ray still has to pick him out. Darkness, a low stance, holding still, and foliage shorten how far that ray counts. Off, a clear ray is enough at any range.", category: "Koopky CQB/Combat")]
+	[Attribute("0", UIWidgets.CheckBox, "After a clear ray, he still has to pick the man out. He sees him when the man is lit enough for how concealed he is. Crouching, lying down, holding still, and foliage raise that. Moving lowers it. The ray length does not change. Off, a clear ray is enough.", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_SightConditions;
 
 	[Attribute("0", UIWidgets.CheckBox, "Experimental. While he is aiming at a man, snap his heading and weapon aim onto that point instead of turning at the normal rate.", category: "Koopky CQB/Combat")]
