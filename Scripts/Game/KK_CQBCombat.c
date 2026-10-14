@@ -3392,6 +3392,41 @@ class KK_GarrisonHold
 		return mode.KK_GetShotDelay();
 	}
 
+	// The scenario value is a regular soldier. Vanilla does not scale its
+	// first-shot wait by skill (that wait is threat, then distance). Skill
+	// there only sets the aim-error sigma, and these are that same ratio.
+	static float ShotDelayFor(IEntity soldier)
+	{
+		float delay = ShotDelaySeconds();
+		if (delay <= 0)
+			return 0;
+
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return delay;
+
+		return delay * SkillDelayFactor(SnapSkill(body));
+	}
+
+	protected static float SkillDelayFactor(EAISkill skill)
+	{
+		switch (skill)
+		{
+			case EAISkill.NOOB:
+				return 4;
+			case EAISkill.ROOKIE:
+				return 2;
+			case EAISkill.VETERAN:
+				return 0.5;
+			case EAISkill.EXPERT:
+				return 0.25;
+			case EAISkill.CYLON:
+				return 0;
+		}
+
+		return 1;
+	}
+
 	static int ShotIntervalMs()
 	{
 		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
@@ -5141,7 +5176,7 @@ class KK_GarrisonHold
 			s_AimSince.Set(body, now);
 		}
 
-		return now - s_AimSince.Get(body) >= ShotDelaySeconds() * 1000;
+		return now - s_AimSince.Get(body) >= ShotDelayFor(body) * 1000;
 	}
 
 	protected static void ClearAim(IEntity body)
@@ -5578,7 +5613,8 @@ class KK_GarrisonHold
 	}
 
 	// Held offset around the aim point. A new man, or the hold running
-	// out, rolls again. The axes and the scales match the aim-error node.
+	// out, rolls again. The axes match the aim-error node. The size is
+	// the skill angle, so a long shot is not a laser.
 	protected static vector SnapAimError(IEntity body, vector point)
 	{
 		if (!SnapAimErrorEnabled())
@@ -5631,11 +5667,15 @@ class KK_GarrisonHold
 		axisY.Normalize();
 
 		float span = AimErrorSpan(enemy, point);
-		float scale = SnapDistanceFactor(distance) * SnapWeaponFactor(body) * SnapIllumination(body);
 		EAISkill skill = SnapSkill(body);
+		float sigma = SnapScatterSigma(skill, distance, span);
+		sigma = sigma * SnapWeaponFactor(body) * SnapIllumination(body);
+		if (sigma <= 0)
+			return vector.Zero;
+
 		vector offset =
-			(axisX * (span * SkillAimScatter(skill) * scale)) +
-			(axisY * (span * SkillAimScatter(skill) * scale));
+			(axisX * Math.RandomGaussFloat(sigma, 0)) +
+			(axisY * Math.RandomGaussFloat(sigma, 0));
 		return offset;
 	}
 
@@ -5695,7 +5735,8 @@ class KK_GarrisonHold
 		return 2 * nearest.GetDimension();
 	}
 
-	// Close range keeps a small share of the scatter. Past 15 m it grows.
+	// Close-range share of the aim-point diameter. Past 15 m it grows.
+	// The skill angle replaces this once it is the larger miss.
 	protected static float SnapDistanceFactor(float distance)
 	{
 		if (distance < 15)
@@ -5730,31 +5771,64 @@ class KK_GarrisonHold
 		return 1;
 	}
 
-	// The aim node's skill roll. A cylon does not miss. The CQB threat
-	// scale is not applied: it is what pulls a threatened shot to zero.
-	protected static float SkillAimScatter(EAISkill skill)
+	// Snap launches the round on this point, so the angle is the whole miss.
+	// The aim node's scatter is only centimeters inside a room and a fraction
+	// of a degree past it. A regular is 1.25 degrees. Lower skill opens that
+	// up, and the same angle is a larger miss farther out. Up close the
+	// aim-point diameter can still be the larger of the two, on the vanilla
+	// skill ratios. A cylon does not miss. Threat is not applied: that scale
+	// is what pulls a threatened shot onto the point.
+	protected static float SnapScatterSigma(EAISkill skill, float distance, float span)
 	{
 		if (skill == EAISkill.CYLON)
 			return 0;
 
-		float sigma = 1;
+		float angular = distance * Math.Tan(SkillAimDegrees(skill) * Math.DEG2RAD);
+		float body = span * SkillScatterShare(skill) * SnapDistanceFactor(distance);
+		if (angular > body)
+			return angular;
+
+		return body;
+	}
+
+	protected static float SkillAimDegrees(EAISkill skill)
+	{
 		switch (skill)
 		{
 			case EAISkill.NOOB:
-				sigma = 4;
-				break;
+				return 3.5;
 			case EAISkill.ROOKIE:
-				sigma = 2;
-				break;
+				return 2.2;
 			case EAISkill.VETERAN:
-				sigma = 0.5;
-				break;
+				return 0.65;
 			case EAISkill.EXPERT:
-				sigma = 0.25;
-				break;
+				return 0.32;
+			case EAISkill.CYLON:
+				return 0;
 		}
 
-		return Math.RandomGaussFloat(sigma, 0);
+		return 1.25;
+	}
+
+	// The aim node's skill sigma, relative to a regular. Used on the
+	// aim-point diameter when that miss is larger than the angle.
+	protected static float SkillScatterShare(EAISkill skill)
+	{
+		switch (skill)
+		{
+			case EAISkill.NOOB:
+				return 4;
+			case EAISkill.ROOKIE:
+				return 2;
+			case EAISkill.VETERAN:
+				return 0.5;
+			case EAISkill.EXPERT:
+				return 0.25;
+			case EAISkill.CYLON:
+				return 0;
+		}
+
+		return 1;
 	}
 
 	// Debug log only. The barrel, the aiming component, the pose, and the
@@ -7001,7 +7075,7 @@ modded class SCR_AIAttackBehavior
 	{
 		if (utility && KK_GarrisonHold.OwnsShot(utility.m_OwnerEntity))
 		{
-			m_fWaitTime.m_Value = KK_GarrisonHold.ShotDelaySeconds();
+			m_fWaitTime.m_Value = KK_GarrisonHold.ShotDelayFor(utility.m_OwnerEntity);
 			return;
 		}
 

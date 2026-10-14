@@ -149,7 +149,7 @@ modded class SCR_BaseGameMode
 	[Attribute("50", UIWidgets.EditBox, "Meters within which a clearing or garrison soldier plants and shoots a man he can see. Attack waypoints are not affected. 0 does not plant or shoot on sight.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_RoomCombatRange;
 
-	[Attribute("0.15", UIWidgets.EditBox, "Seconds from a clear sight to the shot, while clearing or garrisoning inside a building. 0 fires immediately.", category: "Koopky CQB/Combat")]
+	[Attribute("0.15", UIWidgets.EditBox, "Seconds a regular soldier holds a clear sight before the shot. A noob waits four times this, a rookie twice, a veteran half, an expert a quarter, and a cylon does not wait. 0 fires on the next check.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_ShotDelay;
 
 	[Attribute("0", UIWidgets.CheckBox, "Experimental. While he is aiming at a man, snap his heading and weapon aim onto that point instead of turning at the normal rate.", category: "Koopky CQB/Combat")]
