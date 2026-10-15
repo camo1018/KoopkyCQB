@@ -146,7 +146,7 @@ modded class SCR_BaseGameMode
 	[Attribute("1", UIWidgets.CheckBox, "While clearing or garrisoning, shoot the nearest enemy he can see instead of staying on one target", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_RoomCombat;
 
-	[Attribute("50", UIWidgets.EditBox, "Meters within which a clearing or garrison soldier plants and the room gun shoots. Past this, the normal attack aims and fires, and snap aim stays off. Attack waypoints are not affected. 0 does not plant or shoot on sight.", category: "Koopky CQB/Combat")]
+	[Attribute("50", UIWidgets.EditBox, "Meters within which a clearing or garrison soldier plants and the room gun shoots. On a garrison, past this the normal attack aims and fires, and snap aim stays off. A clear ignores anyone past this. Attack waypoints are not affected. 0 does not plant or shoot on sight.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_RoomCombatRange;
 
 	[Attribute("0.15", UIWidgets.EditBox, "Seconds a regular soldier holds a clear sight before the shot. A noob waits four times this, a rookie twice, a veteran half, an expert a quarter, and a cylon does not wait. 0 fires on the next check.", category: "Koopky CQB/Combat")]

@@ -5070,8 +5070,9 @@ class KK_GarrisonHold
 	}
 
 	// A clear or garrison does not plant or use the room gun past CQB range.
-	// Attack waypoints are not in this. A man past that range is a normal
-	// attack instead, and he does not get snap aim.
+	// Attack waypoints are not in this. On a garrison, a man past that
+	// range is a normal attack instead, and he does not get snap aim.
+	// A clear leaves him alone.
 	static bool PastOrderContact(IEntity body, IEntity enemy)
 	{
 		if (!body || !enemy)
@@ -5083,12 +5084,13 @@ class KK_GarrisonHold
 		return vector.Distance(body.GetOrigin(), enemy.GetOrigin()) > OrderContactRange();
 	}
 
-	// The room gun has nobody it will shoot, and the selected man is past
-	// CQB range and in sight. The normal attack then aims and fires. The
-	// route still owns his feet.
+	// Garrison only. The room gun has nobody it will shoot, and the
+	// selected man is past CQB range and in sight. The normal attack
+	// then aims and fires. The route still owns his feet. A clear does
+	// not take this.
 	static bool DistantBaseFight(IEntity soldier)
 	{
-		if (!UseRoomCombat() || !OrderOwnsBehavior(soldier))
+		if (!UseRoomCombat() || !OrderOwnsBehavior(soldier) || IsClearing(soldier))
 			return false;
 
 		// Zero range does not shoot on sight, including through the normal attack.
@@ -7076,8 +7078,8 @@ modded class SCR_AIAttackBehavior
 
 		// A clear and a garrison do not take this behavior for a man inside
 		// CQB range. The room gun fires, and this attack must not carry him
-		// forward. Past that range the normal attack aims and fires, and
-		// the route still owns his feet.
+		// forward. On a garrison, past that range the normal attack aims
+		// and fires, and the route still owns his feet. A clear never does.
 		bool houseOrder =
 			KK_GarrisonHold.UseRoomCombat() &&
 			(
