@@ -7144,9 +7144,9 @@ class KK_GarrisonHold
 		s_SightViewer = body;
 		s_SightTrace.Flags = TraceFlags.ENTS | TraceFlags.WORLD;
 		s_SightTrace.Exclude = body;
-		s_SightTrace.TraceEnt = null;
 		s_SightTrace.Start = start;
 		s_SightTrace.End = aim;
+		ClearSightHit();
 
 		float fraction = TraceThroughGlass(world);
 		s_SightViewer = null;
@@ -7158,13 +7158,13 @@ class KK_GarrisonHold
 	}
 
 	// A pane stops the ray on the first hit. Step past it and trace again.
-	// A wall behind the glass still blocks. Four panes is enough for a
-	// double window and the door glass behind it.
+	// A wall behind the glass still blocks. Eight hits covers a double
+	// window and the door behind it when each pane has two faces.
 	protected static float TraceThroughGlass(BaseWorld world)
 	{
 		float fraction = world.TraceMove(s_SightTrace, FilterMoveSight);
 		vector end = s_SightTrace.End;
-		for (int hop = 0; hop < 4; hop++)
+		for (int hop = 0; hop < 8; hop++)
 		{
 			if (fraction >= 0.9)
 				return fraction;
@@ -7185,19 +7185,100 @@ class KK_GarrisonHold
 
 			s_SightTrace.Start = next;
 			s_SightTrace.End = end;
-			s_SightTrace.TraceEnt = null;
+			ClearSightHit();
 			fraction = world.TraceMove(s_SightTrace, FilterMoveSight);
 		}
 
 		return fraction;
 	}
 
+	protected static void ClearSightHit()
+	{
+		s_SightTrace.TraceEnt = null;
+		s_SightTrace.TraceMaterial = string.Empty;
+		s_SightTrace.ColliderName = string.Empty;
+		s_SightTrace.SurfaceProps = null;
+		s_SightTrace.ColliderIndex = -1;
+	}
+
+	// TraceMaterial is filled for the ground. A pane on a house is the
+	// surface that was hit, so the game material and the window collider
+	// are what name it.
 	protected static bool HitIsTransparent()
 	{
 		if (MaterialIsTransparent(s_SightTrace.TraceMaterial))
 			return true;
 
-		return SurfaceIsTransparent(s_SightTrace.TraceEnt);
+		if (MaterialIsTransparent(s_SightTrace.ColliderName))
+			return true;
+
+		if (PropsAreTransparent(s_SightTrace.SurfaceProps))
+			return true;
+
+		if (SurfaceIsTransparent(s_SightTrace.TraceEnt))
+			return true;
+
+		return WindowCollider(s_SightTrace.TraceEnt);
+	}
+
+	protected static bool PropsAreTransparent(SurfaceProperties properties)
+	{
+		if (!properties)
+			return false;
+
+		BaseContainer current = properties;
+		int depth;
+		while (current && depth < 4)
+		{
+			if (MaterialIsTransparent(current.GetName()))
+				return true;
+
+			ResourceName resource = current.GetResourceName();
+			if (MaterialIsTransparent(string.Format("%1", resource)))
+				return true;
+
+			current = current.GetAncestor();
+			depth++;
+		}
+
+		return false;
+	}
+
+	protected static bool WindowCollider(IEntity entity)
+	{
+		IEntity current = entity;
+		int depth;
+		while (current && depth < 4)
+		{
+			HitZoneContainerComponent container = HitZoneContainerComponent.Cast(
+				current.FindComponent(HitZoneContainerComponent)
+			);
+			if (container && ZoneIsWindow(container))
+				return true;
+
+			current = current.GetParent();
+			depth++;
+		}
+
+		return false;
+	}
+
+	protected static bool ZoneIsWindow(notnull HitZoneContainerComponent container)
+	{
+		HitZone zone = null;
+		if (!s_SightTrace.ColliderName.IsEmpty())
+			zone = container.GetHitZone(s_SightTrace.ColliderName);
+
+		if (!zone && s_SightTrace.ColliderIndex >= 0)
+			zone = container.GetHitZoneByColliderID(s_SightTrace.ColliderIndex);
+
+		if (!zone)
+			return false;
+
+		if (SCR_WindowHitZone.Cast(zone))
+			return true;
+
+		return NameIsTransparent(zone.GetName());
 	}
 
 	protected static bool MaterialIsTransparent(string material)
@@ -7212,8 +7293,8 @@ class KK_GarrisonHold
 			lower.Contains("transparent");
 	}
 
-	// A glass pane or a window piece. A house mesh stays solid; its glass
-	// surface is handled from the hit material instead.
+	// A glass pane or a window piece. A house mesh stays solid; the pane
+	// on that mesh is named by the hit surface, not by the house.
 	protected static bool SurfaceIsTransparent(IEntity entity)
 	{
 		if (!entity)
