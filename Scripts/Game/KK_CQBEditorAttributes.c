@@ -204,6 +204,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 21: return mode.KK_GetTakeCoverAttack();
 			case 22: return mode.KK_GetSnapAim();
 			case 23: return mode.KK_GetSnapAimError();
+			case 24: return mode.KK_GetShotDelaySkill();
 		}
 
 		return mode.KK_GetGarrisonAfterClear();
@@ -234,6 +235,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 21: mode.KK_SetTakeCoverAttack(value); break;
 			case 22: mode.KK_SetSnapAim(value); break;
 			case 23: mode.KK_SetSnapAimError(value); break;
+			case 24: mode.KK_SetShotDelaySkill(value); break;
 			default: mode.KK_SetGarrisonAfterClear(value); break;
 		}
 	}
@@ -311,6 +313,8 @@ class KK_CQBAttrRoomCombat : KK_CQBBoolEditorAttribute {}
 class KK_CQBAttrRoomCombatRange : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrShotDelay : KK_CQBFloatEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrShotDelaySkill : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrSnapAim : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]

@@ -146,11 +146,14 @@ modded class SCR_BaseGameMode
 	[Attribute("1", UIWidgets.CheckBox, "While clearing or garrisoning, shoot the nearest enemy he can see instead of staying on one target", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_RoomCombat;
 
-	[Attribute("50", UIWidgets.EditBox, "Meters within which a clearing or garrison soldier plants and shoots a man he can see. Attack waypoints are not affected. 0 does not plant or shoot on sight.", category: "Koopky CQB/Combat")]
+	[Attribute("50", UIWidgets.EditBox, "Meters within which a clearing or garrison soldier plants and the room gun shoots. On a garrison, past this the normal attack aims and fires, and snap aim stays off. A clear ignores anyone past this. Attack waypoints are not affected. 0 does not plant or shoot on sight.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_RoomCombatRange;
 
-	[Attribute("150", UIWidgets.EditBox, "Milliseconds from a clear sight to the shot, while clearing or garrisoning inside a building. 0 fires immediately.", category: "Koopky CQB/Combat")]
+	[Attribute("150", UIWidgets.EditBox, "Milliseconds from a clear sight to the shot, while clearing or garrisoning. 0 fires on the next check. From 0 to 2000.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_ShotDelay;
+
+	[Attribute("1", UIWidgets.CheckBox, "Shot delay scales by skill. A noob waits four times the delay, a rookie twice, a veteran half, an expert a quarter, and a cylon does not wait. Off uses the delay for every skill.", category: "Koopky CQB/Combat")]
+	protected bool m_bKK_ShotDelaySkill;
 
 	[Attribute("0", UIWidgets.CheckBox, "After a clear ray, he still has to pick the man out. He sees him when the man is lit enough for how concealed he is. Crouching, lying down, holding still, and foliage raise that. Moving lowers it. The ray length does not change. Off, a clear ray is enough.", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_SightConditions;
@@ -387,6 +390,7 @@ modded class SCR_BaseGameMode
 					m_fKK_ShotDelay = shotDelaySeconds * 1000;
 			}
 			m_fKK_ShotDelay = KK_ClampShotDelay(m_fKK_ShotDelay);
+			KK_ReadBool(context, "ShotDelaySkill", m_bKK_ShotDelaySkill);
 			KK_ReadBool(context, "SightConditions", m_bKK_SightConditions);
 			KK_ReadBool(context, "SnapAim", m_bKK_SnapAim);
 			KK_ReadBool(context, "SnapAimError", m_bKK_SnapAimError);
@@ -574,6 +578,7 @@ modded class SCR_BaseGameMode
 		context.WriteValue("RoomCombat", m_bKK_RoomCombat);
 		context.WriteValue("RoomCombatRange", KK_GetRoomCombatRange());
 		context.WriteValue("ShotDelayMs", KK_GetShotDelay());
+		context.WriteValue("ShotDelaySkill", m_bKK_ShotDelaySkill);
 		context.WriteValue("SightConditions", m_bKK_SightConditions);
 		context.WriteValue("SnapAim", m_bKK_SnapAim);
 		context.WriteValue("SnapAimError", m_bKK_SnapAimError);
@@ -833,6 +838,11 @@ modded class SCR_BaseGameMode
 		return KK_ClampShotDelay(m_fKK_ShotDelay);
 	}
 
+	bool KK_GetShotDelaySkill()
+	{
+		return m_bKK_ShotDelaySkill;
+	}
+
 	bool KK_GetSnapAim()
 	{
 		return m_bKK_SnapAim;
@@ -1029,6 +1039,7 @@ modded class SCR_BaseGameMode
 	void KK_SetRoomCombat(bool value) { m_bKK_RoomCombat = value; }
 	void KK_SetRoomCombatRange(float value) { m_fKK_RoomCombatRange = Math.Max(value, 0); }
 	void KK_SetShotDelay(float value) { m_fKK_ShotDelay = KK_ClampShotDelay(value); }
+	void KK_SetShotDelaySkill(bool value) { m_bKK_ShotDelaySkill = value; }
 	void KK_SetSnapAim(bool value) { m_bKK_SnapAim = value; }
 	void KK_SetSnapAimError(bool value) { m_bKK_SnapAimError = value; }
 	void KK_SetSightConditions(bool value) { m_bKK_SightConditions = value; }

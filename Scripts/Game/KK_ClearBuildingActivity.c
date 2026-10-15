@@ -957,6 +957,13 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			return;
 		}
 
+		// The normal attack is aiming at a man past CQB range.
+		if (KK_GarrisonHold.DistantBaseFight(body))
+		{
+			KK_GarrisonHold.YieldLookToAttack(body);
+			return;
+		}
+
 		bool spareHold =
 			!assignment.m_bClearsPoint &&
 			KK_AuthoredRouteHelper.IsOnFinalGoal(

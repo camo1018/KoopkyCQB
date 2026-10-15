@@ -984,6 +984,13 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			return;
 		}
 
+		// The normal attack is aiming at a man past CQB range.
+		if (KK_GarrisonHold.DistantBaseFight(body))
+		{
+			KK_GarrisonHold.YieldLookToAttack(body);
+			return;
+		}
+
 		vector look;
 		if (settledAtPost && KK_HoldFacing.HasFacing(assignment.m_Target))
 			look = KK_AuthoredRouteHelper.FacingLook(
@@ -1800,7 +1807,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		if (want)
 		{
 			float until = currentTime +
-				KK_GarrisonHold.ShotDelayMs() +
+				KK_GarrisonHold.ShotDelayFor(controlledEntity) +
 				250.0;
 			if (until > assignment.m_fSteadyUntil)
 				assignment.m_fSteadyUntil = until;
