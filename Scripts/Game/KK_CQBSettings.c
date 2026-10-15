@@ -152,6 +152,9 @@ modded class SCR_BaseGameMode
 	[Attribute("150", UIWidgets.EditBox, "Milliseconds from a clear sight to the shot, while clearing or garrisoning inside a building. 0 fires immediately.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_ShotDelay;
 
+	[Attribute("0", UIWidgets.CheckBox, "After a clear ray, he still has to pick the man out. He sees him when the man is lit enough for how concealed he is. Crouching, lying down, holding still, and foliage raise that. Moving lowers it. The ray length does not change. Off, a clear ray is enough.", category: "Koopky CQB/Combat")]
+	protected bool m_bKK_SightConditions;
+
 	[Attribute("0", UIWidgets.CheckBox, "Experimental. While he is aiming at a man, snap his heading and weapon aim onto that point instead of turning at the normal rate.", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_SnapAim;
 
@@ -384,6 +387,7 @@ modded class SCR_BaseGameMode
 					m_fKK_ShotDelay = shotDelaySeconds * 1000;
 			}
 			m_fKK_ShotDelay = KK_ClampShotDelay(m_fKK_ShotDelay);
+			KK_ReadBool(context, "SightConditions", m_bKK_SightConditions);
 			KK_ReadBool(context, "SnapAim", m_bKK_SnapAim);
 			KK_ReadBool(context, "SnapAimError", m_bKK_SnapAimError);
 			KK_ReadFloat(context, "BarrelStuck", m_fKK_BarrelStuck);
@@ -570,6 +574,7 @@ modded class SCR_BaseGameMode
 		context.WriteValue("RoomCombat", m_bKK_RoomCombat);
 		context.WriteValue("RoomCombatRange", KK_GetRoomCombatRange());
 		context.WriteValue("ShotDelayMs", KK_GetShotDelay());
+		context.WriteValue("SightConditions", m_bKK_SightConditions);
 		context.WriteValue("SnapAim", m_bKK_SnapAim);
 		context.WriteValue("SnapAimError", m_bKK_SnapAimError);
 		context.WriteValue("BarrelStuck", KK_GetBarrelStuck());
@@ -838,6 +843,11 @@ modded class SCR_BaseGameMode
 		return m_bKK_SnapAimError;
 	}
 
+	bool KK_GetSightConditions()
+	{
+		return m_bKK_SightConditions;
+	}
+
 	float KK_GetBarrelStuck()
 	{
 		return Math.Max(m_fKK_BarrelStuck, 0);
@@ -1021,6 +1031,7 @@ modded class SCR_BaseGameMode
 	void KK_SetShotDelay(float value) { m_fKK_ShotDelay = KK_ClampShotDelay(value); }
 	void KK_SetSnapAim(bool value) { m_bKK_SnapAim = value; }
 	void KK_SetSnapAimError(bool value) { m_bKK_SnapAimError = value; }
+	void KK_SetSightConditions(bool value) { m_bKK_SightConditions = value; }
 	void KK_SetBarrelStuck(float value) { m_fKK_BarrelStuck = Math.Max(value, 0); }
 	void KK_SetBarrelCool(float value) { m_fKK_BarrelCool = Math.Max(value, 0); }
 	void KK_SetLostContactLook(float value) { m_fKK_LostContactLook = Math.Max(value, 0); }
