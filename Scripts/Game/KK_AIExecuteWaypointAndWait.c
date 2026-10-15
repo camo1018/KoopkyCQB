@@ -56,6 +56,6 @@ class KK_AIExecuteWaypointAndWait : AITaskScripted
 
 	protected static override string GetOnHoverDescription()
 	{
-		return "Starts the custom waypoint state and remains active.";
+		return "Runs the custom waypoint and stays up until it finishes.";
 	}
 }
