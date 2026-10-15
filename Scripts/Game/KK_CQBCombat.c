@@ -3415,14 +3415,23 @@ class KK_GarrisonHold
 	static float ShotDelayFor(IEntity soldier)
 	{
 		float delay = ShotDelayMs();
-		if (delay <= 0)
-			return 0;
+		if (delay <= 0 || !ShotDelaySkillEnabled())
+			return delay;
 
 		IEntity body = CharacterBody(soldier);
 		if (!body)
 			return delay;
 
 		return delay * SkillDelayFactor(SnapSkill(body));
+	}
+
+	protected static bool ShotDelaySkillEnabled()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return true;
+
+		return mode.KK_GetShotDelaySkill();
 	}
 
 	protected static float SkillDelayFactor(EAISkill skill)
