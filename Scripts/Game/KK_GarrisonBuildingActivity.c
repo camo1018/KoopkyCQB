@@ -1807,7 +1807,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		if (want)
 		{
 			float until = currentTime +
-				KK_GarrisonHold.ShotDelayFor(controlledEntity) * 1000.0 +
+				KK_GarrisonHold.ShotDelayFor(controlledEntity) +
 				250.0;
 			if (until > assignment.m_fSteadyUntil)
 				assignment.m_fSteadyUntil = until;

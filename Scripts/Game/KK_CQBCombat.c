@@ -573,6 +573,8 @@ class KK_GarrisonHold
 	protected static ref set<IEntity> s_FreshOrder = new set<IEntity>();
 	protected static ref set<AIAgent> s_OrderNoted = new set<AIAgent>();
 	protected static ref TraceParam s_SightTrace;
+	protected static ref TraceParam s_ConditionTrace;
+	protected static IEntity s_ConditionBody;
 	protected static IEntity s_SightViewer;
 	// The man this trace is trying to see. His own body is not a wall.
 	protected static IEntity s_SightTarget;
@@ -665,9 +667,17 @@ class KK_GarrisonHold
 	protected static ref array<float> s_CandidateDist = new array<float>();
 	protected static ref map<IEntity, ref BaseTarget> s_CandidateKnown =
 		new map<IEntity, ref BaseTarget>();
+	// A man confirmed through glass stays in the list when nearer men are
+	// behind walls. Those wall hits are the ones that get dropped.
+	protected static ref set<IEntity> s_CandidateKept = new set<IEntity>();
 	protected static IEntity s_ScanBody;
 	protected static IEntity s_ScanBuilding;
 	protected static ref set<IEntity> s_ScanSeen = new set<IEntity>();
+	protected static ref array<IEntity> s_NearBodies = new array<IEntity>();
+	protected static IEntity s_NearViewer;
+	protected static ref array<IEntity> s_CloseBodies = new array<IEntity>();
+	protected static ref array<float> s_CloseDist = new array<float>();
+	protected static const int GLASS_CHECKS = 12;
 	// Milliseconds the next shot check was scheduled with.
 	protected static int s_iShotTickMs;
 	protected static bool s_bShotTicking;
@@ -3390,11 +3400,11 @@ class KK_GarrisonHold
 		return mode.KK_GetRoomCombat();
 	}
 
-	static float ShotDelaySeconds()
+	static float ShotDelayMs()
 	{
 		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
 		if (!mode)
-			return 0.15;
+			return 150;
 
 		return mode.KK_GetShotDelay();
 	}
@@ -3404,7 +3414,7 @@ class KK_GarrisonHold
 	// there only sets the aim-error sigma, and these are that same ratio.
 	static float ShotDelayFor(IEntity soldier)
 	{
-		float delay = ShotDelaySeconds();
+		float delay = ShotDelayMs();
 		if (delay <= 0)
 			return 0;
 
@@ -4514,7 +4524,8 @@ class KK_GarrisonHold
 	}
 
 	// The selected target is one enemy. Inside, check every perceived enemy
-	// and anyone hostile in the room, then keep the nearest one a ray can reach.
+	// and anyone hostile in the room or visible through glass, then keep
+	// the nearest one a ray can reach.
 	static void RefreshShot(
 		IEntity soldier,
 		PerceptionComponent perception,
@@ -4563,7 +4574,7 @@ class KK_GarrisonHold
 		if (!building || !PositionInside(building, body.GetOrigin()))
 		{
 			// Outside, the route still owns the feet. Anyone he can see
-			// is still a shot. Perception already has them.
+			// is still a shot, including a man behind glass.
 			if (UseRoomCombat() && OrderOwnsBehavior(body))
 				ConsiderOpen(body, perception, true);
 			// A jog has no building, and the selected target may be empty.
@@ -4592,10 +4603,12 @@ class KK_GarrisonHold
 		s_Candidates.Clear();
 		s_CandidateDist.Clear();
 		s_CandidateKnown.Clear();
+		s_CandidateKept.Clear();
 		ConsiderIndoor(perception, body, building, ETargetCategory.ENEMY, true);
 		ConsiderIndoor(perception, body, building, ETargetCategory.DETECTED, true);
 		ConsiderIndoor(perception, body, building, ETargetCategory.UNKNOWN, true);
 		CollectRoom(body, building);
+		CollectThroughGlass(body);
 
 		if (CommitNearestShot(body, perception))
 		{
@@ -4739,6 +4752,7 @@ class KK_GarrisonHold
 		s_Candidates.Clear();
 		s_CandidateDist.Clear();
 		s_CandidateKnown.Clear();
+		s_CandidateKept.Clear();
 		ConsiderOpenCategory(
 			perception,
 			body,
@@ -4747,6 +4761,7 @@ class KK_GarrisonHold
 		);
 		ConsiderOpenCategory(perception, body, ETargetCategory.DETECTED, true);
 		ConsiderOpenCategory(perception, body, ETargetCategory.UNKNOWN, true);
+		CollectThroughGlass(body);
 		CommitNearestShot(body, perception);
 	}
 
@@ -4850,14 +4865,21 @@ class KK_GarrisonHold
 			if (requireHostile && !IsHostile(body, character))
 				continue;
 
-			if (!PositionInside(building, character.GetOrigin()))
-				continue;
-
-			AddCandidate(
-				character,
-				vector.Distance(body.GetOrigin(), character.GetOrigin()),
-				candidate
+			float distance = vector.Distance(
+				body.GetOrigin(),
+				character.GetOrigin()
 			);
+			// A man outside the shell is still a shot when he is in range.
+			// The sight trace is what decides the window.
+			if (
+				!PositionInside(building, character.GetOrigin()) &&
+				distance > OrderContactRange()
+			)
+			{
+				continue;
+			}
+
+			AddCandidate(character, distance, candidate);
 		}
 	}
 
@@ -4924,9 +4946,134 @@ class KK_GarrisonHold
 		return true;
 	}
 
+	// Perception does not register a man behind glass. The house order
+	// still looks, and a clear pane is enough to take the shot.
+	protected static void CollectThroughGlass(IEntity body)
+	{
+		if (!body || !OnGlassWatch(body))
+			return;
+
+		float range = OrderContactRange();
+		if (range < 1)
+			return;
+
+		FillCloseBodies(body, range);
+		int kept = 0;
+		for (int i = 0; i < s_CloseBodies.Count(); i++)
+		{
+			if (kept >= GLASS_CHECKS)
+				break;
+
+			IEntity enemy = s_CloseBodies[i];
+			if (!enemy || s_Candidates.Find(enemy) >= 0)
+				continue;
+
+			if (!CanSeeEntity(body, enemy))
+				continue;
+
+			AddCandidate(enemy, s_CloseDist[i], null, true);
+			kept++;
+		}
+	}
+
+	protected static bool OnGlassWatch(IEntity body)
+	{
+		return OrderOwnsBehavior(body) || OnHouseOrder(body);
+	}
+
+	protected static void FillCloseBodies(IEntity body, float range)
+	{
+		s_CloseBodies.Clear();
+		s_CloseDist.Clear();
+		if (!body || range < 1)
+			return;
+
+		GatherBodies(body, range);
+		foreach (IEntity enemy : s_NearBodies)
+		{
+			if (!enemy || enemy == body)
+				continue;
+
+			if (!IsTargetable(enemy) || !IsHostile(body, enemy))
+				continue;
+
+			float distance = vector.Distance(body.GetOrigin(), enemy.GetOrigin());
+			if (distance > range)
+				continue;
+
+			NoteClose(enemy, distance, GLASS_CHECKS);
+		}
+	}
+
+	protected static void GatherBodies(IEntity body, float radius)
+	{
+		s_NearBodies.Clear();
+		BaseWorld world = GetGame().GetWorld();
+		if (!world)
+			world = body.GetWorld();
+
+		if (!world)
+			return;
+
+		s_NearViewer = body;
+		world.QueryEntitiesBySphere(
+			body.GetOrigin(),
+			radius,
+			OnNearBody,
+			null,
+			EQueryEntitiesFlags.DYNAMIC | EQueryEntitiesFlags.WITH_OBJECT
+		);
+		s_NearViewer = null;
+	}
+
+	protected static bool OnNearBody(IEntity entity)
+	{
+		ChimeraCharacter character = CharacterOf(entity);
+		if (!character || character == s_NearViewer)
+			return true;
+
+		if (s_NearBodies.Contains(character))
+			return true;
+
+		s_NearBodies.Insert(character);
+		return true;
+	}
+
+	protected static void NoteClose(IEntity enemy, float distance, int limit)
+	{
+		if (!enemy || limit < 1)
+			return;
+
+		int index = s_CloseBodies.Count();
+		for (int i = 0; i < s_CloseBodies.Count(); i++)
+		{
+			if (distance < s_CloseDist[i])
+			{
+				index = i;
+				break;
+			}
+		}
+
+		if (index >= limit)
+			return;
+
+		s_CloseBodies.InsertAt(enemy, index);
+		s_CloseDist.InsertAt(distance, index);
+		while (s_CloseBodies.Count() > limit)
+		{
+			int last = s_CloseBodies.Count() - 1;
+			s_CloseBodies.Remove(last);
+			s_CloseDist.Remove(last);
+		}
+	}
+
 	// Nearest first, and only a few of them. The sight rays then stop at the
 	// first one that is actually clear.
-	protected static void AddCandidate(IEntity enemy, float distance, BaseTarget target)
+	protected static void AddCandidate(
+		IEntity enemy,
+		float distance,
+		BaseTarget target,
+		bool keep = false)
 	{
 		if (!enemy)
 			return;
@@ -4936,6 +5083,9 @@ class KK_GarrisonHold
 		{
 			if (target && !s_CandidateKnown.Contains(enemy))
 				s_CandidateKnown.Set(enemy, target);
+
+			if (keep)
+				s_CandidateKept.Insert(enemy);
 
 			return;
 		}
@@ -4950,7 +5100,7 @@ class KK_GarrisonHold
 			}
 		}
 
-		if (index >= SHOT_CANDIDATES)
+		if (!keep && index >= SHOT_CANDIDATES)
 			return;
 
 		s_Candidates.InsertAt(enemy, index);
@@ -4958,13 +5108,33 @@ class KK_GarrisonHold
 		if (target)
 			s_CandidateKnown.Set(enemy, target);
 
+		if (keep)
+			s_CandidateKept.Insert(enemy);
+
 		while (s_Candidates.Count() > SHOT_CANDIDATES)
 		{
-			int last = s_Candidates.Count() - 1;
-			IEntity dropped = s_Candidates[last];
-			s_Candidates.Remove(last);
-			s_CandidateDist.Remove(last);
+			int drop = s_Candidates.Count() - 1;
+			if (s_CandidateKept.Contains(s_Candidates[drop]))
+			{
+				drop = -1;
+				for (int i = s_Candidates.Count() - 1; i >= 0; i--)
+				{
+					if (!s_CandidateKept.Contains(s_Candidates[i]))
+					{
+						drop = i;
+						break;
+					}
+				}
+
+				if (drop < 0)
+					break;
+			}
+
+			IEntity dropped = s_Candidates[drop];
+			s_Candidates.Remove(drop);
+			s_CandidateDist.Remove(drop);
 			s_CandidateKnown.Remove(dropped);
+			s_CandidateKept.RemoveItem(dropped);
 		}
 	}
 
@@ -5157,6 +5327,13 @@ class KK_GarrisonHold
 
 		// The center ray hits the cover he is standing against. A clear
 		// side is still a shot, and the trigger needs that side remembered.
+		// The same light and concealment check follows that ray.
+		if (!left && !right)
+			return false;
+
+		if (!ConditionsAllow(enemy))
+			return false;
+
 		if (left && !right)
 			lean = -1;
 		else if (right && !left)
@@ -5164,7 +5341,7 @@ class KK_GarrisonHold
 		else if (left && right)
 			lean = -1;
 
-		return left || right;
+		return true;
 	}
 
 	// The side point has to be in open air. A trace that starts inside a
@@ -5252,7 +5429,7 @@ class KK_GarrisonHold
 			s_AimSince.Set(body, now);
 		}
 
-		return now - s_AimSince.Get(body) >= ShotDelayFor(body) * 1000;
+		return now - s_AimSince.Get(body) >= ShotDelayFor(body);
 	}
 
 	protected static void ClearAim(IEntity body)
@@ -6549,21 +6726,45 @@ class KK_GarrisonHold
 
 	// Nearest living enemy perception has already started on, and this
 	// order can trace. Identified, detected, and unknown all count.
-	// Far contacts stay on the lane look.
+	// Far contacts stay on the lane look. A house order also takes a man
+	// perception missed because a window is in the way.
 	static IEntity VisibleContact(IEntity soldier, float maxRange = ATTACK_CONTACT_RANGE)
 	{
 		IEntity body = CharacterBody(soldier);
 		if (!body)
 			return null;
 
+		IEntity nearest = null;
+		float best = maxRange;
+
 		PerceptionComponent perception = PerceptionComponent.Cast(
 			body.FindComponent(PerceptionComponent)
 		);
-		if (!perception)
-			return null;
+		if (perception)
+			nearest = NearestPerceived(body, perception, maxRange, best);
 
+		float search = maxRange;
+		if (nearest)
+			search = best;
+
+		IEntity throughGlass = NearestGlassContact(body, search);
+		if (!throughGlass)
+			return nearest;
+
+		if (!nearest || vector.Distance(body.GetOrigin(), throughGlass.GetOrigin()) < best)
+			return throughGlass;
+
+		return nearest;
+	}
+
+	protected static IEntity NearestPerceived(
+		IEntity body,
+		PerceptionComponent perception,
+		float maxRange,
+		out float best)
+	{
 		IEntity nearest = null;
-		float best = maxRange;
+		best = maxRange;
 
 		for (int category = 0; category < 3; category++)
 		{
@@ -6613,6 +6814,30 @@ class KK_GarrisonHold
 		return nearest;
 	}
 
+	// Closest hostile the glass-aware ray can see. Perception never lists
+	// him when the pane blocks its own check.
+	protected static IEntity NearestGlassContact(IEntity body, float maxRange)
+	{
+		if (!body || maxRange < 1 || !OnGlassWatch(body))
+			return null;
+
+		FillCloseBodies(body, maxRange);
+		for (int i = 0; i < s_CloseBodies.Count(); i++)
+		{
+			IEntity enemy = s_CloseBodies[i];
+			if (!enemy)
+				continue;
+
+			if (s_CloseDist[i] > maxRange)
+				continue;
+
+			if (CanSeeEntity(body, enemy))
+				return enemy;
+		}
+
+		return null;
+	}
+
 	protected static bool CanSeeTarget(IEntity body, BaseTarget target)
 	{
 		if (!body || !target)
@@ -6654,7 +6879,213 @@ class KK_GarrisonHold
 		if (!seen)
 			seen = SightClear(world, body, eye, enemy.GetOrigin() + Vector(0, 0.35, 0));
 		s_SightTarget = null;
-		return seen;
+		if (!seen)
+			return false;
+
+		return ConditionsAllow(enemy);
+	}
+
+	// The ray already succeeded. This asks whether he can pick the man
+	// out. Distance is not part of it. He sees the man when the light on
+	// him, reduced by concealment, is still enough.
+	protected static bool ConditionsAllow(IEntity enemy)
+	{
+		if (!UseSightConditions())
+			return true;
+
+		if (!enemy)
+			return false;
+
+		float conceal = ConcealmentOf(enemy);
+		if (conceal < 0)
+			conceal = 0;
+		if (conceal > 0.85)
+			conceal = 0.85;
+
+		float apparent = IlluminationOf(enemy) * (1 - conceal);
+		return apparent >= 0.2;
+	}
+
+	protected static bool UseSightConditions()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return false;
+
+		return mode.KK_GetSightConditions();
+	}
+
+	protected static float IlluminationOf(IEntity enemy)
+	{
+		PerceivableComponent perceivable = PerceivableComponent.Cast(
+			enemy.FindComponent(PerceivableComponent)
+		);
+		if (!perceivable)
+			return 1;
+
+		float light = perceivable.GetIlluminationFactor();
+		if (light < 0)
+			return 0;
+		if (light > 1)
+			return 1;
+
+		return light;
+	}
+
+	// 0 is standing in the open. Prone, still, and foliage push it toward 1.
+	// A man who is moving gives that concealment back.
+	protected static float ConcealmentOf(IEntity enemy)
+	{
+		float conceal = 0;
+		bool low = false;
+		CharacterControllerComponent controller = Controller(enemy);
+		if (controller)
+		{
+			ECharacterStance stance = controller.GetStance();
+			if (stance == ECharacterStance.PRONE)
+			{
+				conceal = 0.55;
+				low = true;
+			}
+			else if (stance == ECharacterStance.CROUCH)
+			{
+				conceal = 0.3;
+				low = true;
+			}
+		}
+
+		conceal = conceal + FoliageConcealment(enemy, low);
+
+		float speed = FlatSpeed(enemy);
+		if (speed >= 2.5)
+			conceal = conceal * 0.4;
+		else if (speed >= 0.6)
+			conceal = conceal * 0.75;
+		else if (conceal > 0)
+			conceal = conceal + 0.15;
+
+		return conceal;
+	}
+
+	protected static float FlatSpeed(IEntity enemy)
+	{
+		Physics physics = enemy.GetPhysics();
+		if (!physics)
+			return 0;
+
+		vector velocity = physics.GetVelocity();
+		velocity[1] = 0;
+		return velocity.Length();
+	}
+
+	// A bush around the body counts for anyone. Grass at the feet counts
+	// only when he is already low.
+	protected static float FoliageConcealment(IEntity enemy, bool low)
+	{
+		BaseWorld world = GetGame().GetWorld();
+		if (!world)
+			world = enemy.GetWorld();
+
+		if (!world)
+			return 0;
+
+		if (!s_ConditionTrace)
+			s_ConditionTrace = new TraceParam();
+
+		vector origin = enemy.GetOrigin();
+		s_ConditionBody = enemy;
+		s_ConditionTrace.Flags = TraceFlags.ENTS | TraceFlags.WORLD;
+		s_ConditionTrace.Exclude = enemy;
+		s_ConditionTrace.TraceEnt = null;
+		s_ConditionTrace.Start = origin + Vector(0, 2.2, 0);
+		s_ConditionTrace.End = origin + Vector(0, 0.15, 0);
+
+		float fraction = world.TraceMove(s_ConditionTrace, FilterConditionTrace);
+		s_ConditionBody = null;
+		if (fraction >= 1)
+			return 0;
+
+		if (!HitIsFoliage())
+			return 0;
+
+		float hitHeight = 2.2 - (fraction * 2.05);
+		if (hitHeight >= 0.45 && hitHeight <= 1.8)
+			return 0.4;
+
+		if (low && hitHeight < 0.45)
+			return 0.15;
+
+		return 0;
+	}
+
+	protected static bool HitIsFoliage()
+	{
+		if (NameIsFoliage(s_ConditionTrace.TraceMaterial))
+			return true;
+
+		return EntityIsFoliage(s_ConditionTrace.TraceEnt);
+	}
+
+	protected static bool EntityIsFoliage(IEntity entity)
+	{
+		if (!entity)
+			return false;
+
+		if (NameIsFoliage(entity.GetName()))
+			return true;
+
+		if (NameIsFoliage(entity.ClassName()))
+			return true;
+
+		EntityPrefabData prefabData = entity.GetPrefabData();
+		if (!prefabData)
+			return false;
+
+		return NameIsFoliage(string.Format("%1", prefabData.GetPrefabName()));
+	}
+
+	protected static bool NameIsFoliage(string name)
+	{
+		if (name.IsEmpty())
+			return false;
+
+		string lower = name;
+		lower.ToLower();
+		return lower.Contains("grass") ||
+			lower.Contains("bush") ||
+			lower.Contains("foliage") ||
+			lower.Contains("leaf") ||
+			lower.Contains("shrub") ||
+			lower.Contains("hedge") ||
+			lower.Contains("plant") ||
+			lower.Contains("fern") ||
+			lower.Contains("reed") ||
+			lower.Contains("crop");
+	}
+
+	protected static bool FilterConditionTrace(
+		IEntity entity,
+		vector start = "0 0 0",
+		vector dir = "0 0 0")
+	{
+		if (!entity || entity == s_ConditionBody)
+			return false;
+
+		IEntity current = entity;
+		int depth;
+		while (current && depth < 6)
+		{
+			if (current == s_ConditionBody)
+				return false;
+
+			if (ChimeraCharacter.Cast(current))
+				return false;
+
+			current = current.GetParent();
+			depth++;
+		}
+
+		return true;
 	}
 
 	protected static bool CanSeePoint(IEntity body, vector feet)
@@ -6708,12 +7139,107 @@ class KK_GarrisonHold
 		s_SightTrace.Start = start;
 		s_SightTrace.End = aim;
 
-		float fraction = world.TraceMove(s_SightTrace, FilterMoveSight);
+		float fraction = TraceThroughGlass(world);
 		s_SightViewer = null;
 
 		// A wall stops the ray well short. A graze on the frame near the
-		// target still counts as a clear shot.
+		// target still counts as a clear shot. Glass is stepped through
+		// before that test.
 		return fraction >= 0.9;
+	}
+
+	// A pane stops the ray on the first hit. Step past it and trace again.
+	// A wall behind the glass still blocks. Four panes is enough for a
+	// double window and the door glass behind it.
+	protected static float TraceThroughGlass(BaseWorld world)
+	{
+		float fraction = world.TraceMove(s_SightTrace, FilterMoveSight);
+		vector end = s_SightTrace.End;
+		for (int hop = 0; hop < 4; hop++)
+		{
+			if (fraction >= 0.9)
+				return fraction;
+
+			if (!HitIsTransparent())
+				return fraction;
+
+			vector from = s_SightTrace.Start;
+			vector dir = end - from;
+			float length = dir.Length();
+			if (length < 0.05)
+				return 1;
+
+			dir = dir * (1 / length);
+			vector next = from + (dir * (fraction * length)) + (dir * 0.06);
+			if (vector.Distance(next, end) < 0.1)
+				return 1;
+
+			s_SightTrace.Start = next;
+			s_SightTrace.End = end;
+			s_SightTrace.TraceEnt = null;
+			fraction = world.TraceMove(s_SightTrace, FilterMoveSight);
+		}
+
+		return fraction;
+	}
+
+	protected static bool HitIsTransparent()
+	{
+		if (MaterialIsTransparent(s_SightTrace.TraceMaterial))
+			return true;
+
+		return SurfaceIsTransparent(s_SightTrace.TraceEnt);
+	}
+
+	protected static bool MaterialIsTransparent(string material)
+	{
+		if (material.IsEmpty())
+			return false;
+
+		string lower = material;
+		lower.ToLower();
+		return lower.Contains("glass") ||
+			lower.Contains("window") ||
+			lower.Contains("transparent");
+	}
+
+	// A glass pane or a window piece. A house mesh stays solid; its glass
+	// surface is handled from the hit material instead.
+	protected static bool SurfaceIsTransparent(IEntity entity)
+	{
+		if (!entity)
+			return false;
+
+		if (NameIsTransparent(entity.GetName()))
+			return true;
+
+		if (NameIsTransparent(entity.ClassName()))
+			return true;
+
+		EntityPrefabData prefabData = entity.GetPrefabData();
+		if (!prefabData)
+			return false;
+
+		return NameIsTransparent(string.Format("%1", prefabData.GetPrefabName()));
+	}
+
+	protected static bool NameIsTransparent(string name)
+	{
+		if (name.IsEmpty())
+			return false;
+
+		string lower = name;
+		lower.ToLower();
+		if (lower.Contains("glass"))
+			return true;
+
+		if (!lower.Contains("window"))
+			return false;
+
+		if (lower.Contains("house_") || lower.Contains("_house") || lower.Contains("wall_"))
+			return false;
+
+		return true;
 	}
 
 	protected static bool FilterMoveSight(
@@ -6722,6 +7248,11 @@ class KK_GarrisonHold
 		vector dir = "0 0 0")
 	{
 		if (!entity || entity == s_SightViewer)
+			return false;
+
+		// The pane is not cover. Skipping it lets the ray reach the man
+		// on the other side. The frame and the wall still stop it.
+		if (SurfaceIsTransparent(entity))
 			return false;
 
 		IEntity current = entity;
@@ -7171,7 +7702,7 @@ modded class SCR_AIAttackBehavior
 			!KK_GarrisonHold.DistantBaseFight(utility.m_OwnerEntity)
 		)
 		{
-			m_fWaitTime.m_Value = KK_GarrisonHold.ShotDelayFor(utility.m_OwnerEntity);
+			m_fWaitTime.m_Value = KK_GarrisonHold.ShotDelayFor(utility.m_OwnerEntity) / 1000;
 			return;
 		}
 

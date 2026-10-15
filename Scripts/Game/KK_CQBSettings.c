@@ -149,8 +149,11 @@ modded class SCR_BaseGameMode
 	[Attribute("50", UIWidgets.EditBox, "Meters within which a clearing or garrison soldier plants and the room gun shoots. On a garrison, past this the normal attack aims and fires, and snap aim stays off. A clear ignores anyone past this. Attack waypoints are not affected. 0 does not plant or shoot on sight.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_RoomCombatRange;
 
-	[Attribute("0.15", UIWidgets.EditBox, "Seconds a regular soldier holds a clear sight before the shot. A noob waits four times this, a rookie twice, a veteran half, an expert a quarter, and a cylon does not wait. 0 fires on the next check.", category: "Koopky CQB/Combat")]
+	[Attribute("150", UIWidgets.EditBox, "Milliseconds a regular soldier holds a clear sight before the shot, from 0 to 2000. A noob waits four times this, a rookie twice, a veteran half, an expert a quarter, and a cylon does not wait. 0 fires on the next check.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_ShotDelay;
+
+	[Attribute("0", UIWidgets.CheckBox, "After a clear ray, he still has to pick the man out. He sees him when the man is lit enough for how concealed he is. Crouching, lying down, holding still, and foliage raise that. Moving lowers it. The ray length does not change. Off, a clear ray is enough.", category: "Koopky CQB/Combat")]
+	protected bool m_bKK_SightConditions;
 
 	[Attribute("0", UIWidgets.CheckBox, "Experimental. While he is aiming at a man, snap his heading and weapon aim onto that point instead of turning at the normal rate.", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_SnapAim;
@@ -374,7 +377,17 @@ modded class SCR_BaseGameMode
 			KK_ReadBool(context, "SharpCombat", m_bKK_SharpCombat);
 			KK_ReadBool(context, "RoomCombat", m_bKK_RoomCombat);
 			KK_ReadFloat(context, "RoomCombatRange", m_fKK_RoomCombatRange);
-			KK_ReadFloat(context, "ShotDelay", m_fKK_ShotDelay);
+			float shotDelayMs;
+			if (context.ReadValue("ShotDelayMs", shotDelayMs))
+				m_fKK_ShotDelay = shotDelayMs;
+			else
+			{
+				float shotDelaySeconds;
+				if (context.ReadValue("ShotDelay", shotDelaySeconds))
+					m_fKK_ShotDelay = shotDelaySeconds * 1000;
+			}
+			m_fKK_ShotDelay = KK_ClampShotDelay(m_fKK_ShotDelay);
+			KK_ReadBool(context, "SightConditions", m_bKK_SightConditions);
 			KK_ReadBool(context, "SnapAim", m_bKK_SnapAim);
 			KK_ReadBool(context, "SnapAimError", m_bKK_SnapAimError);
 			KK_ReadFloat(context, "BarrelStuck", m_fKK_BarrelStuck);
@@ -560,7 +573,8 @@ modded class SCR_BaseGameMode
 		context.WriteValue("SharpCombat", m_bKK_SharpCombat);
 		context.WriteValue("RoomCombat", m_bKK_RoomCombat);
 		context.WriteValue("RoomCombatRange", KK_GetRoomCombatRange());
-		context.WriteValue("ShotDelay", m_fKK_ShotDelay);
+		context.WriteValue("ShotDelayMs", KK_GetShotDelay());
+		context.WriteValue("SightConditions", m_bKK_SightConditions);
 		context.WriteValue("SnapAim", m_bKK_SnapAim);
 		context.WriteValue("SnapAimError", m_bKK_SnapAimError);
 		context.WriteValue("BarrelStuck", KK_GetBarrelStuck());
@@ -816,7 +830,7 @@ modded class SCR_BaseGameMode
 
 	float KK_GetShotDelay()
 	{
-		return Math.Max(m_fKK_ShotDelay, 0);
+		return KK_ClampShotDelay(m_fKK_ShotDelay);
 	}
 
 	bool KK_GetSnapAim()
@@ -827,6 +841,11 @@ modded class SCR_BaseGameMode
 	bool KK_GetSnapAimError()
 	{
 		return m_bKK_SnapAimError;
+	}
+
+	bool KK_GetSightConditions()
+	{
+		return m_bKK_SightConditions;
 	}
 
 	float KK_GetBarrelStuck()
@@ -1009,9 +1028,10 @@ modded class SCR_BaseGameMode
 	void KK_SetSharpCombat(bool value) { m_bKK_SharpCombat = value; }
 	void KK_SetRoomCombat(bool value) { m_bKK_RoomCombat = value; }
 	void KK_SetRoomCombatRange(float value) { m_fKK_RoomCombatRange = Math.Max(value, 0); }
-	void KK_SetShotDelay(float value) { m_fKK_ShotDelay = Math.Max(value, 0); }
+	void KK_SetShotDelay(float value) { m_fKK_ShotDelay = KK_ClampShotDelay(value); }
 	void KK_SetSnapAim(bool value) { m_bKK_SnapAim = value; }
 	void KK_SetSnapAimError(bool value) { m_bKK_SnapAimError = value; }
+	void KK_SetSightConditions(bool value) { m_bKK_SightConditions = value; }
 	void KK_SetBarrelStuck(float value) { m_fKK_BarrelStuck = Math.Max(value, 0); }
 	void KK_SetBarrelCool(float value) { m_fKK_BarrelCool = Math.Max(value, 0); }
 	void KK_SetLostContactLook(float value) { m_fKK_LostContactLook = Math.Max(value, 0); }
@@ -1031,6 +1051,17 @@ modded class SCR_BaseGameMode
 	void KK_SetReloadSprint(bool value) { m_bKK_ReloadSprint = value; }
 	void KK_SetSidearmThenRelease(bool value) { m_bKK_SidearmThenRelease = value; }
 	void KK_SetRearmReturn(float value) { m_fKK_RearmReturn = Math.Max(value, 0); }
+
+	protected float KK_ClampShotDelay(float value)
+	{
+		if (value < 0)
+			return 0;
+
+		if (value > 2000)
+			return 2000;
+
+		return value;
+	}
 
 	protected float KK_ClampShotInterval(float value)
 	{
