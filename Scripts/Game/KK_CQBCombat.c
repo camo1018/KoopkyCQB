@@ -642,8 +642,29 @@ class KK_GarrisonHold
 		new map<IEntity, int>();
 	protected static ref map<IEntity, float> s_SnapLogAt =
 		new map<IEntity, float>();
+	// Keys copied out of the live maps. Reused so a tick does not allocate.
+	protected static ref array<IEntity> s_SnapBodies = new array<IEntity>();
+	protected static ref array<IEntity> s_ShotBodies = new array<IEntity>();
+	protected static ref array<IEntity> s_LeanBodies = new array<IEntity>();
+	protected static IEntity s_UtilityBody;
+	protected static SCR_AIUtilityComponent s_UtilityCache;
+	protected static IEntity s_ControllerBody;
+	protected static CharacterControllerComponent s_ControllerCache;
+	// One sight answer per world-time for the same pair. A behavior tick
+	// asks again for the man it just traced.
+	protected static IEntity s_SeeViewer;
+	protected static IEntity s_SeeTarget;
+	protected static float s_SeeAt = -1;
+	protected static bool s_SeeResult;
+	protected static IEntity s_MuzzleEnt;
+	protected static int s_MuzzleBone = -1;
+	protected static ref array<WeaponSlotComponent> s_WeaponSlots =
+		new array<WeaponSlotComponent>();
 	protected static const float SNAP_AIM_ERROR_MS = 400;
 	protected static const float SNAP_AIM_LOG_MS = 1000;
+	// Below this, the heading and the weapon angle are already what we
+	// would write. Setting them again dirties the character for no change.
+	protected static const float SNAP_AIM_WRITE_DEG = 0.25;
 	static const float PATH_LOOK_PRIORITY = 1000;
 	// An enemy already selected when the bound started. The sprint does not
 	// aim at him, and perception then drops him, so the stop had to spot
@@ -675,17 +696,8 @@ class KK_GarrisonHold
 	protected static ref array<float> s_CandidateDist = new array<float>();
 	protected static ref map<IEntity, ref BaseTarget> s_CandidateKnown =
 		new map<IEntity, ref BaseTarget>();
-	// A man confirmed through glass stays in the list when nearer men are
-	// behind walls. Those wall hits are the ones that get dropped.
-	protected static ref set<IEntity> s_CandidateKept = new set<IEntity>();
-	protected static IEntity s_ScanBody;
-	protected static IEntity s_ScanBuilding;
-	protected static ref set<IEntity> s_ScanSeen = new set<IEntity>();
 	protected static ref array<IEntity> s_NearBodies = new array<IEntity>();
 	protected static IEntity s_NearViewer;
-	protected static ref array<IEntity> s_CloseBodies = new array<IEntity>();
-	protected static ref array<float> s_CloseDist = new array<float>();
-	protected static const int GLASS_CHECKS = 12;
 	// Milliseconds the next shot check was scheduled with.
 	protected static int s_iShotTickMs;
 	protected static bool s_bShotTicking;
@@ -798,7 +810,11 @@ class KK_GarrisonHold
 	// Unconscious, still alive. Dead is handled by the caller that drops the hold.
 	static bool IsDown(IEntity soldier)
 	{
-		CharacterControllerComponent controller = Controller(soldier);
+		return LifeIsDown(Controller(soldier));
+	}
+
+	protected static bool LifeIsDown(CharacterControllerComponent controller)
+	{
 		if (!controller || controller.IsDead())
 			return false;
 
@@ -1460,9 +1476,20 @@ class KK_GarrisonHold
 		if (!body || !manager)
 			return false;
 
-		array<WeaponSlotComponent> slots = {};
-		manager.GetWeaponsSlots(slots);
-		foreach (WeaponSlotComponent slot : slots)
+		s_WeaponSlots.Clear();
+		manager.GetWeaponsSlots(s_WeaponSlots);
+		foreach (WeaponSlotComponent slot : s_WeaponSlots)
+		{
+			if (!slot)
+				continue;
+
+			// A round already in the gun is enough. The spare-magazine
+			// search is only for a weapon that is empty in hand.
+			if (LoadedRounds(WeaponInSlot(slot)) > 0)
+				return true;
+		}
+
+		foreach (WeaponSlotComponent slot : s_WeaponSlots)
 		{
 			if (!slot)
 				continue;
@@ -1472,6 +1499,30 @@ class KK_GarrisonHold
 		}
 
 		return false;
+	}
+
+	// Rounds in the chamber or the loaded magazine. Spares in the vest
+	// are not counted.
+	protected static int LoadedRounds(BaseWeaponComponent weapon)
+	{
+		if (!weapon || IsThrowableType(weapon.GetWeaponType()))
+			return 0;
+
+		array<BaseMuzzleComponent> muzzles = {};
+		weapon.GetMuzzlesList(muzzles);
+		if (muzzles.Count() == 0 || !muzzles[0])
+			return 0;
+
+		BaseMuzzleComponent muzzle = muzzles[0];
+		int ammo = muzzle.GetAmmoCount();
+		if (muzzle.IsDisposable())
+			return ammo;
+
+		BaseMagazineComponent loaded = muzzle.GetMagazine();
+		if (loaded && loaded.GetAmmoCount() > ammo)
+			ammo = loaded.GetAmmoCount();
+
+		return ammo;
 	}
 
 	// Another non-throwable gun that still has rounds. The fullest one wins.
@@ -4633,11 +4684,11 @@ class KK_GarrisonHold
 			return;
 		}
 
-		array<IEntity> bodies = {};
+		s_ShotBodies.Clear();
 		for (int i = 0; i < s_Buildings.Count(); i++)
-			bodies.Insert(s_Buildings.GetKey(i));
+			s_ShotBodies.Insert(s_Buildings.GetKey(i));
 
-		foreach (IEntity body : bodies)
+		foreach (IEntity body : s_ShotBodies)
 		{
 			if (!body)
 				continue;
@@ -4664,6 +4715,12 @@ class KK_GarrisonHold
 		if (!body)
 			return null;
 
+		if (body == s_UtilityBody && s_UtilityCache && s_UtilityCache.m_OwnerEntity == body)
+			return s_UtilityCache;
+
+		s_UtilityBody = body;
+		s_UtilityCache = null;
+
 		AIControlComponent control = AIControlComponent.Cast(
 			body.FindComponent(AIControlComponent)
 		);
@@ -4675,7 +4732,8 @@ class KK_GarrisonHold
 		if (!agent)
 			return null;
 
-		return agent.m_UtilityComponent;
+		s_UtilityCache = agent.m_UtilityComponent;
+		return s_UtilityCache;
 	}
 
 	static bool IsRoomFire(IEntity soldier)
@@ -4726,8 +4784,8 @@ class KK_GarrisonHold
 	}
 
 	// The selected target is one enemy. Inside, check every perceived enemy
-	// and anyone hostile in the room or visible through glass, then keep
-	// the nearest one a ray can reach.
+	// and anyone hostile nearby. The sight ray steps through glass, then
+	// the nearest man that ray can reach is the shot.
 	static void RefreshShot(
 		IEntity soldier,
 		PerceptionComponent perception,
@@ -4750,6 +4808,7 @@ class KK_GarrisonHold
 
 		s_ShotAt.Set(body, now);
 		IEntity previousLook = null;
+		BaseTarget previousBase = null;
 		float previousLean = 0;
 		if (s_ShotLook.Contains(body))
 		{
@@ -4757,6 +4816,9 @@ class KK_GarrisonHold
 			if (s_ShotLean.Contains(body))
 				previousLean = s_ShotLean.Get(body);
 		}
+
+		if (s_ShotBase.Contains(body))
+			previousBase = s_ShotBase.Get(body);
 
 		s_ShotLook.Remove(body);
 		s_ShotBase.Remove(body);
@@ -4778,12 +4840,12 @@ class KK_GarrisonHold
 			// Outside, the route still owns the feet. Anyone he can see
 			// is still a shot, including a man behind glass.
 			if (UseRoomCombat() && OrderOwnsBehavior(body))
-				ConsiderOpen(body, perception, true);
+				ConsiderOpen(body, perception, true, previousLook, previousBase);
 			// A jog has no building, and the selected target may be empty.
 			// Reaper often keeps a sector there instead of a body. The
 			// perceived enemies are still the ones he can shoot.
 			else if (IsMoveFire(body))
-				ConsiderOpen(body, perception, false);
+				ConsiderOpen(body, perception, false, previousLook, previousBase);
 
 			if (!s_ShotLive.Contains(body))
 				ConsiderSelected(body, selected);
@@ -4805,12 +4867,14 @@ class KK_GarrisonHold
 		s_Candidates.Clear();
 		s_CandidateDist.Clear();
 		s_CandidateKnown.Clear();
-		s_CandidateKept.Clear();
 		ConsiderIndoor(perception, body, building, ETargetCategory.ENEMY, true);
 		ConsiderIndoor(perception, body, building, ETargetCategory.DETECTED, true);
 		ConsiderIndoor(perception, body, building, ETargetCategory.UNKNOWN, true);
-		CollectRoom(body, building);
-		CollectThroughGlass(body);
+		// Perception misses a man whose own ray stopped on a pane. One
+		// nearby query still finds him. While the current man is in sight
+		// that query stays off.
+		if (!HoldPreviousShot(body, previousLook, previousBase))
+			CollectNearby(body, building);
 
 		if (CommitNearestShot(body, perception))
 		{
@@ -4939,7 +5003,9 @@ class KK_GarrisonHold
 	protected static void ConsiderOpen(
 		IEntity body,
 		PerceptionComponent perception,
-		bool enemiesMustBeHostile)
+		bool enemiesMustBeHostile,
+		IEntity previousLook,
+		BaseTarget previousBase)
 	{
 		if (!body)
 			return;
@@ -4954,7 +5020,6 @@ class KK_GarrisonHold
 		s_Candidates.Clear();
 		s_CandidateDist.Clear();
 		s_CandidateKnown.Clear();
-		s_CandidateKept.Clear();
 		ConsiderOpenCategory(
 			perception,
 			body,
@@ -4963,8 +5028,31 @@ class KK_GarrisonHold
 		);
 		ConsiderOpenCategory(perception, body, ETargetCategory.DETECTED, true);
 		ConsiderOpenCategory(perception, body, ETargetCategory.UNKNOWN, true);
-		CollectThroughGlass(body);
+		if (!HoldPreviousShot(body, previousLook, previousBase))
+			CollectNearby(body, null);
+
 		CommitNearestShot(body, perception);
+	}
+
+	// True when the man from the last check is still a shot. He is put
+	// back on the list, and the sphere searches stay off for this pass.
+	protected static bool HoldPreviousShot(IEntity body, IEntity previousLook, BaseTarget previousBase)
+	{
+		if (!body || !previousLook || !IsTargetable(previousLook))
+			return false;
+
+		if (PastOrderContact(body, previousLook))
+			return false;
+
+		if (!CanSeeEntity(body, previousLook))
+			return false;
+
+		AddCandidate(
+			previousLook,
+			vector.Distance(body.GetOrigin(), previousLook.GetOrigin()),
+			previousBase
+		);
+		return true;
 	}
 
 	protected static void ConsiderOpenCategory(
@@ -5085,126 +5173,64 @@ class KK_GarrisonHold
 		}
 	}
 
-	protected static void CollectRoom(IEntity body, IEntity building)
+	// One query for men perception did not list. Indoors that is the room.
+	// Outside the shell it is CQB range. The sight ray, not a second list,
+	// decides whether a pane is in the way.
+	protected static void CollectNearby(IEntity body, IEntity building)
 	{
-		BaseWorld world = GetGame().GetWorld();
-		if (!world)
+		if (!body)
 			return;
 
-		s_ScanBody = body;
-		s_ScanBuilding = building;
-		s_ScanSeen.Clear();
+		float contact = OrderContactRange();
+		bool watch = OnGlassWatch(body);
+		float radius = 0;
+		if (building)
+			radius = ROOM_SCAN_RADIUS;
+		if (watch && contact > radius)
+			radius = contact;
 
-		world.QueryEntitiesBySphere(
-			body.GetOrigin(),
-			ROOM_SCAN_RADIUS,
-			OnRoomEnemy,
-			null,
-			EQueryEntitiesFlags.DYNAMIC | EQueryEntitiesFlags.WITH_OBJECT
-		);
-
-		s_ScanBody = null;
-		s_ScanBuilding = null;
-		s_ScanSeen.Clear();
-	}
-
-	protected static bool OnRoomEnemy(IEntity entity)
-	{
-		ChimeraCharacter character = CharacterOf(entity);
-		if (!character || character == s_ScanBody)
-			return true;
-
-		if (s_ScanSeen.Contains(character))
-			return true;
-
-		s_ScanSeen.Insert(character);
-
-		if (!IsTargetable(character) || !IsHostile(s_ScanBody, character))
-			return true;
-
-		// A downed man sinks. His head is the place to test, and the
-		// standing capsule is often still inside the shell.
-		vector place = character.GetOrigin();
-		if (IsDown(character))
-		{
-			vector eye = character.EyePosition();
-			if (eye != vector.Zero)
-				place = eye;
-		}
-
-		if (
-			!PositionInside(s_ScanBuilding, place) &&
-			!PositionInside(s_ScanBuilding, character.GetOrigin())
-		)
-		{
-			return true;
-		}
-
-		AddCandidate(
-			character,
-			vector.Distance(s_ScanBody.GetOrigin(), character.GetOrigin()),
-			null
-		);
-		return true;
-	}
-
-	// Perception does not register a man behind glass. The house order
-	// still looks, and a clear pane is enough to take the shot.
-	protected static void CollectThroughGlass(IEntity body)
-	{
-		if (!body || !OnGlassWatch(body))
+		if (radius < 1)
 			return;
 
-		float range = OrderContactRange();
-		if (range < 1)
-			return;
-
-		FillCloseBodies(body, range);
-		int kept = 0;
-		for (int i = 0; i < s_CloseBodies.Count(); i++)
+		GatherBodies(body, radius);
+		foreach (IEntity enemy : s_NearBodies)
 		{
-			if (kept >= GLASS_CHECKS)
-				break;
-
-			IEntity enemy = s_CloseBodies[i];
-			if (!enemy || s_Candidates.Find(enemy) >= 0)
+			if (!enemy || !IsTargetable(enemy) || !IsHostile(body, enemy))
 				continue;
 
-			if (!CanSeeEntity(body, enemy))
+			float distance = vector.Distance(body.GetOrigin(), enemy.GetOrigin());
+			bool inside = false;
+			if (building)
+			{
+				vector place = enemy.GetOrigin();
+				ChimeraCharacter character = ChimeraCharacter.Cast(enemy);
+				if (character && IsDown(character))
+				{
+					vector eye = character.EyePosition();
+					if (eye != vector.Zero)
+						place = eye;
+				}
+
+				inside = PositionInside(building, place) ||
+					PositionInside(building, enemy.GetOrigin());
+			}
+
+			if (inside)
+			{
+				AddCandidate(enemy, distance, null);
+				continue;
+			}
+
+			if (!watch || contact < 1 || distance > contact)
 				continue;
 
-			AddCandidate(enemy, s_CloseDist[i], null, true);
-			kept++;
+			AddCandidate(enemy, distance, null);
 		}
 	}
 
 	protected static bool OnGlassWatch(IEntity body)
 	{
 		return OrderOwnsBehavior(body) || OnHouseOrder(body);
-	}
-
-	protected static void FillCloseBodies(IEntity body, float range)
-	{
-		s_CloseBodies.Clear();
-		s_CloseDist.Clear();
-		if (!body || range < 1)
-			return;
-
-		GatherBodies(body, range);
-		foreach (IEntity enemy : s_NearBodies)
-		{
-			if (!enemy || enemy == body)
-				continue;
-
-			if (!IsTargetable(enemy) || !IsHostile(body, enemy))
-				continue;
-
-			float distance = vector.Distance(body.GetOrigin(), enemy.GetOrigin());
-			if (distance > range)
-				continue;
-
-			NoteClose(enemy, distance, GLASS_CHECKS);
-		}
 	}
 
 	protected static void GatherBodies(IEntity body, float radius)
@@ -5241,41 +5267,12 @@ class KK_GarrisonHold
 		return true;
 	}
 
-	protected static void NoteClose(IEntity enemy, float distance, int limit)
-	{
-		if (!enemy || limit < 1)
-			return;
-
-		int index = s_CloseBodies.Count();
-		for (int i = 0; i < s_CloseBodies.Count(); i++)
-		{
-			if (distance < s_CloseDist[i])
-			{
-				index = i;
-				break;
-			}
-		}
-
-		if (index >= limit)
-			return;
-
-		s_CloseBodies.InsertAt(enemy, index);
-		s_CloseDist.InsertAt(distance, index);
-		while (s_CloseBodies.Count() > limit)
-		{
-			int last = s_CloseBodies.Count() - 1;
-			s_CloseBodies.Remove(last);
-			s_CloseDist.Remove(last);
-		}
-	}
-
 	// Nearest first, and only a few of them. The sight rays then stop at the
 	// first one that is actually clear.
 	protected static void AddCandidate(
 		IEntity enemy,
 		float distance,
-		BaseTarget target,
-		bool keep = false)
+		BaseTarget target)
 	{
 		if (!enemy)
 			return;
@@ -5285,9 +5282,6 @@ class KK_GarrisonHold
 		{
 			if (target && !s_CandidateKnown.Contains(enemy))
 				s_CandidateKnown.Set(enemy, target);
-
-			if (keep)
-				s_CandidateKept.Insert(enemy);
 
 			return;
 		}
@@ -5302,7 +5296,7 @@ class KK_GarrisonHold
 			}
 		}
 
-		if (!keep && index >= SHOT_CANDIDATES)
+		if (index >= SHOT_CANDIDATES)
 			return;
 
 		s_Candidates.InsertAt(enemy, index);
@@ -5310,33 +5304,13 @@ class KK_GarrisonHold
 		if (target)
 			s_CandidateKnown.Set(enemy, target);
 
-		if (keep)
-			s_CandidateKept.Insert(enemy);
-
 		while (s_Candidates.Count() > SHOT_CANDIDATES)
 		{
 			int drop = s_Candidates.Count() - 1;
-			if (s_CandidateKept.Contains(s_Candidates[drop]))
-			{
-				drop = -1;
-				for (int i = s_Candidates.Count() - 1; i >= 0; i--)
-				{
-					if (!s_CandidateKept.Contains(s_Candidates[i]))
-					{
-						drop = i;
-						break;
-					}
-				}
-
-				if (drop < 0)
-					break;
-			}
-
 			IEntity dropped = s_Candidates[drop];
 			s_Candidates.Remove(drop);
 			s_CandidateDist.Remove(drop);
 			s_CandidateKnown.Remove(dropped);
-			s_CandidateKept.RemoveItem(dropped);
 		}
 	}
 
@@ -5692,11 +5666,11 @@ class KK_GarrisonHold
 			return;
 		}
 
-		array<IEntity> bodies = {};
+		s_LeanBodies.Clear();
 		for (int i = 0; i < s_WantedLean.Count(); i++)
-			bodies.Insert(s_WantedLean.GetKey(i));
+			s_LeanBodies.Insert(s_WantedLean.GetKey(i));
 
-		foreach (IEntity body : bodies)
+		foreach (IEntity body : s_LeanBodies)
 		{
 			if (!body || !s_WantedLean.Contains(body))
 			{
@@ -5787,8 +5761,7 @@ class KK_GarrisonHold
 		}
 
 		s_SnapAim.Set(body, point);
-		ApplySnapAim(body, point);
-		HoldSnapLook(body, SnapPosePoint(body, point));
+		ApplySnapAim(body, point, null, null, null);
 		EnsureSnapAimPump();
 	}
 
@@ -5828,11 +5801,18 @@ class KK_GarrisonHold
 			return;
 		}
 
-		array<IEntity> bodies = {};
-		for (int i = 0; i < s_SnapAim.Count(); i++)
-			bodies.Insert(s_SnapAim.GetKey(i));
+		// The shot tick chooses chest or head and stores that point. This
+		// pass only writes it again, so a frame does not trace or search
+		// his inventory. A dry gun is dropped on that same tick.
+		bool roomCombat = UseRoomCombat();
+		float range = OrderContactRange();
+		float rangeSq = range * range;
 
-		foreach (IEntity body : bodies)
+		s_SnapBodies.Clear();
+		for (int i = 0; i < s_SnapAim.Count(); i++)
+			s_SnapBodies.Insert(s_SnapAim.GetKey(i));
+
+		foreach (IEntity body : s_SnapBodies)
 		{
 			if (!body || !s_SnapAim.Contains(body))
 			{
@@ -5840,10 +5820,10 @@ class KK_GarrisonHold
 				continue;
 			}
 
+			CharacterControllerComponent controller = Controller(body);
 			if (
-				!OwnsShot(body) ||
-				IsDown(body) ||
-				!HasGunAmmo(body) ||
+				!roomCombat ||
+				!SnapStillOwned(body, controller) ||
 				IsBoundSprint(body) ||
 				SprintBeforeReload(body)
 			)
@@ -5852,38 +5832,25 @@ class KK_GarrisonHold
 				continue;
 			}
 
-			IEntity engaged = EngagedEnemy(body);
+			SCR_AIUtilityComponent utility = UtilityOf(body);
+			IEntity engaged = EngagedFrom(body, utility);
+			vector origin = body.GetOrigin();
 			vector held = s_SnapAim.Get(body);
-			if (
-				(engaged && PastOrderContact(body, engaged)) ||
-				vector.Distance(body.GetOrigin(), held) > OrderContactRange()
-			)
+			vector fromHeld = origin - held;
+			bool heldFar = fromHeld.LengthSq() > rangeSq;
+			bool enemyFar = false;
+			if (engaged)
+			{
+				vector fromEnemy = origin - engaged.GetOrigin();
+				enemyFar = fromEnemy.LengthSq() > rangeSq;
+			}
+			if (enemyFar || heldFar)
 			{
 				ClearSnapAim(body);
 				continue;
 			}
 
-			// The stored point is only a fallback. A man the trace no longer
-			// reaches is not a lock, so the rifle does not stay on him.
-			vector point = s_SnapAim.Get(body);
-			IEntity enemy = EngagedEnemy(body);
-			if (enemy && IsTargetable(enemy))
-			{
-				if (!CanSeeEntity(body, enemy))
-				{
-					ClearSnapAim(body);
-					continue;
-				}
-
-				vector live = ShotAimPoint(body, enemy);
-				if (live != vector.Zero)
-				{
-					point = live;
-					s_SnapAim.Set(body, point);
-				}
-			}
-
-			ApplySnapAim(body, point);
+			ApplySnapAim(body, held, controller, utility, engaged);
 		}
 
 		if (s_SnapAim.Count() == 0 || !GetGame())
@@ -5895,37 +5862,60 @@ class KK_GarrisonHold
 		GetGame().GetCallqueue().CallLater(SnapAimPump, 0, false);
 	}
 
-	protected static void ApplySnapAim(IEntity body, vector point)
+	// Still on the clear or the garrison, and on his feet. The controller
+	// is the one the pump already resolved.
+	protected static bool SnapStillOwned(IEntity body, CharacterControllerComponent controller)
 	{
-		CharacterControllerComponent controller = Controller(body);
-		if (!controller || IsDown(body))
+		if (!body || LifeIsDown(controller))
+			return false;
+
+		return s_OrderBehavior.Contains(body) || OnHouseOrder(body);
+	}
+
+	protected static void ApplySnapAim(
+		IEntity body,
+		vector point,
+		CharacterControllerComponent controller,
+		SCR_AIUtilityComponent utility,
+		IEntity enemy)
+	{
+		if (!controller)
+			controller = Controller(body);
+		if (!controller || LifeIsDown(controller))
 			return;
 
-		vector pose = SnapPosePoint(body, point);
+		if (!utility)
+			utility = UtilityOf(body);
+		if (!enemy)
+			enemy = EngagedFrom(body, utility);
+
+		vector pose = point + SnapAimError(body, point, enemy);
 		vector flat = pose - body.GetOrigin();
 		flat[1] = 0;
 		if (flat.Length() < 0.05)
+		{
+			HoldSnapLook(utility, pose);
 			return;
+		}
 
 		flat.Normalize();
 		float heading = flat.ToYaw();
-		StopSnapTurn(body);
+		StopSnapTurn(utility);
 		SnapFacing(body, controller, heading);
 		// The weapon is parented to the facing he has now. Using the heading
 		// just requested aims the barrel off to the side until that turn lands.
 		float bodyYaw = body.GetYawPitchRoll()[0];
 		vector muzzle = MuzzlePosition(body, 0);
 		WriteAimAt(controller.GetAimingComponent(), muzzle, pose, bodyYaw);
-		HoldSnapLook(body, pose);
-		LogSnapAim(body, controller, pose, muzzle, heading, bodyYaw);
+		HoldSnapLook(utility, pose);
+		LogSnapAim(body, controller, utility, pose, muzzle, heading, bodyYaw);
 	}
 
 	// Combat movement also requests an aim turn. That request is dropped
 	// while the snap holds him. The weapon bone stays with the animation
 	// graph; the shot is aimed on its own.
-	protected static void StopSnapTurn(IEntity body)
+	protected static void StopSnapTurn(SCR_AIUtilityComponent utility)
 	{
-		SCR_AIUtilityComponent utility = UtilityOf(body);
 		if (!utility || !utility.m_CombatMoveState)
 			return;
 
@@ -5953,6 +5943,9 @@ class KK_GarrisonHold
 		float headingDeg)
 	{
 		vector angles = body.GetYawPitchRoll();
+		if (Math.AbsFloat(YawDelta(angles[0], headingDeg)) < SNAP_AIM_WRITE_DEG)
+			return;
+
 		angles[0] = headingDeg;
 		body.SetYawPitchRoll(angles);
 
@@ -5972,11 +5965,22 @@ class KK_GarrisonHold
 		return radians;
 	}
 
+	// Shortest signed gap, in degrees. Positive is toDeg to the right of fromDeg.
+	protected static float YawDelta(float fromDeg, float toDeg)
+	{
+		float gap = toDeg - fromDeg;
+		while (gap > 180)
+			gap = gap - 360;
+		while (gap < -180)
+			gap = gap + 360;
+
+		return gap;
+	}
+
 	// The look behavior keeps the last point it was given. Write the pose
 	// every frame, and restart only when that point has moved.
-	protected static void HoldSnapLook(IEntity body, vector pose)
+	protected static void HoldSnapLook(SCR_AIUtilityComponent utility, vector pose)
 	{
-		SCR_AIUtilityComponent utility = UtilityOf(body);
 		if (!utility || !utility.m_LookAction || pose == vector.Zero)
 			return;
 
@@ -5987,6 +5991,7 @@ class KK_GarrisonHold
 	protected static void LogSnapAim(
 		IEntity body,
 		CharacterControllerComponent controller,
+		SCR_AIUtilityComponent utility,
 		vector pose,
 		vector muzzle,
 		float headingDeg,
@@ -6025,7 +6030,6 @@ class KK_GarrisonHold
 			yawErr = yawErr + 360;
 
 		vector look = vector.Zero;
-		SCR_AIUtilityComponent utility = UtilityOf(body);
 		if (utility && utility.m_LookAction)
 			look = utility.m_LookAction.KK_LookPosition();
 
@@ -6063,7 +6067,7 @@ class KK_GarrisonHold
 		if (point == vector.Zero)
 			return point;
 
-		return point + SnapAimError(body, point);
+		return point + SnapAimError(body, point, EngagedEnemy(body));
 	}
 
 	// Yaw is the gap between the heading and the line from the muzzle to the
@@ -6075,24 +6079,22 @@ class KK_GarrisonHold
 			return;
 
 		vector angles = dir.VectorToAngles();
-		float yaw = angles[0] - headingDeg;
-		while (yaw > 180)
-			yaw = yaw - 360;
-		while (yaw < -180)
-			yaw = yaw + 360;
-
+		float yaw = YawDelta(headingDeg, angles[0]);
+		// Written every frame. A level shot reports a pitch just under 360,
+		// and the component's current pitch is near 0, so those two look
+		// like the same angle. Skipping that write left the rifle unarmed
+		// and the trigger never started.
 		WriteAimRotation(aiming, yaw, angles[1]);
 	}
 
 	// Held offset around the aim point. A new man, or the hold running
 	// out, rolls again. The axes match the aim-error node. The size is
 	// the skill angle, so a long shot is not a laser.
-	protected static vector SnapAimError(IEntity body, vector point)
+	protected static vector SnapAimError(IEntity body, vector point, IEntity enemy)
 	{
 		if (!SnapAimErrorEnabled())
 			return vector.Zero;
 
-		IEntity enemy = EngagedEnemy(body);
 		float now = WorldTime();
 		bool held =
 			s_SnapError.Contains(body) &&
@@ -6784,6 +6786,13 @@ class KK_GarrisonHold
 
 	protected static IEntity EngagedEnemy(IEntity body)
 	{
+		return EngagedFrom(body, null);
+	}
+
+	// utility may already be resolved. A null one is looked up only when the
+	// shot map does not already name the man.
+	protected static IEntity EngagedFrom(IEntity body, SCR_AIUtilityComponent utility)
+	{
 		if (!body)
 			return null;
 
@@ -6794,7 +6803,8 @@ class KK_GarrisonHold
 				return shot;
 		}
 
-		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (!utility)
+			utility = UtilityOf(body);
 		if (!utility || !utility.m_CombatComponent)
 			return null;
 
@@ -6958,9 +6968,19 @@ class KK_GarrisonHold
 		if (!anim)
 			return false;
 
-		int index = anim.GetBoneIndex("muzzle");
+		int index = -1;
+		if (weaponEnt == s_MuzzleEnt)
+			index = s_MuzzleBone;
+
 		if (index < 0)
-			index = anim.GetBoneIndex("slot_muzzle");
+		{
+			index = anim.GetBoneIndex("muzzle");
+			if (index < 0)
+				index = anim.GetBoneIndex("slot_muzzle");
+
+			s_MuzzleEnt = weaponEnt;
+			s_MuzzleBone = index;
+		}
 
 		if (index < 0)
 			return false;
@@ -7034,7 +7054,7 @@ class KK_GarrisonHold
 	// Nearest living enemy perception has already started on, and this
 	// order can trace. Identified, detected, and unknown all count.
 	// Far contacts stay on the lane look. A house order also takes a man
-	// perception missed because a window is in the way.
+	// perception missed. The same sight ray steps through a window.
 	static IEntity VisibleContact(IEntity soldier, float maxRange = ATTACK_CONTACT_RANGE)
 	{
 		IEntity body = CharacterBody(soldier);
@@ -7054,14 +7074,55 @@ class KK_GarrisonHold
 		if (nearest)
 			search = best;
 
-		IEntity throughGlass = NearestGlassContact(body, search);
-		if (!throughGlass)
+		IEntity nearby = NearestNearby(body, search);
+		if (!nearby)
 			return nearest;
 
-		if (!nearest || vector.Distance(body.GetOrigin(), throughGlass.GetOrigin()) < best)
-			return throughGlass;
+		if (!nearest || vector.Distance(body.GetOrigin(), nearby.GetOrigin()) < best)
+			return nearby;
 
 		return nearest;
+	}
+
+	// Closest hostile in range that the sight ray can reach. Perception
+	// never lists him when its own ray stops on a pane.
+	protected static IEntity NearestNearby(IEntity body, float maxRange)
+	{
+		if (!body || maxRange < 1 || !OnGlassWatch(body))
+			return null;
+
+		GatherBodies(body, maxRange);
+		for (int i = s_NearBodies.Count() - 1; i >= 0; i--)
+		{
+			IEntity enemy = s_NearBodies[i];
+			if (!enemy || !IsTargetable(enemy) || !IsHostile(body, enemy))
+				s_NearBodies.Remove(i);
+		}
+
+		for (int n = 0; n < SHOT_CANDIDATES && s_NearBodies.Count() > 0; n++)
+		{
+			int bestIndex = -1;
+			float bestDist = maxRange;
+			for (int i = 0; i < s_NearBodies.Count(); i++)
+			{
+				float distance = vector.Distance(body.GetOrigin(), s_NearBodies[i].GetOrigin());
+				if (distance > bestDist)
+					continue;
+
+				bestDist = distance;
+				bestIndex = i;
+			}
+
+			if (bestIndex < 0)
+				return null;
+
+			IEntity pick = s_NearBodies[bestIndex];
+			s_NearBodies.Remove(bestIndex);
+			if (CanSeeEntity(body, pick))
+				return pick;
+		}
+
+		return null;
 	}
 
 	protected static IEntity NearestPerceived(
@@ -7121,30 +7182,6 @@ class KK_GarrisonHold
 		return nearest;
 	}
 
-	// Closest hostile the glass-aware ray can see. Perception never lists
-	// him when the pane blocks its own check.
-	protected static IEntity NearestGlassContact(IEntity body, float maxRange)
-	{
-		if (!body || maxRange < 1 || !OnGlassWatch(body))
-			return null;
-
-		FillCloseBodies(body, maxRange);
-		for (int i = 0; i < s_CloseBodies.Count(); i++)
-		{
-			IEntity enemy = s_CloseBodies[i];
-			if (!enemy)
-				continue;
-
-			if (s_CloseDist[i] > maxRange)
-				continue;
-
-			if (CanSeeEntity(body, enemy))
-				return enemy;
-		}
-
-		return null;
-	}
-
 	protected static bool CanSeeTarget(IEntity body, BaseTarget target)
 	{
 		if (!body || !target)
@@ -7161,6 +7198,10 @@ class KK_GarrisonHold
 	{
 		if (!body || !enemy || !IsTargetable(enemy))
 			return false;
+
+		float now = WorldTime();
+		if (body == s_SeeViewer && enemy == s_SeeTarget && now == s_SeeAt)
+			return s_SeeResult;
 
 		BaseWorld world = GetGame().GetWorld();
 		if (!world)
@@ -7186,10 +7227,14 @@ class KK_GarrisonHold
 		if (!seen)
 			seen = SightClear(world, body, eye, enemy.GetOrigin() + Vector(0, 0.35, 0));
 		s_SightTarget = null;
-		if (!seen)
-			return false;
+		if (seen)
+			seen = ConditionsAllow(enemy);
 
-		return ConditionsAllow(enemy);
+		s_SeeViewer = body;
+		s_SeeTarget = enemy;
+		s_SeeAt = now;
+		s_SeeResult = seen;
+		return seen;
 	}
 
 	// The ray already succeeded. This asks whether he can pick the man
@@ -7680,9 +7725,18 @@ class KK_GarrisonHold
 		if (!body)
 			return null;
 
-		return CharacterControllerComponent.Cast(
+		if (
+			body == s_ControllerBody &&
+			s_ControllerCache &&
+			s_ControllerCache.GetOwner() == body
+		)
+			return s_ControllerCache;
+
+		s_ControllerBody = body;
+		s_ControllerCache = CharacterControllerComponent.Cast(
 			body.FindComponent(CharacterControllerComponent)
 		);
+		return s_ControllerCache;
 	}
 
 	static bool PositionInside(IEntity building, vector worldPosition)
@@ -8773,7 +8827,9 @@ modded class SCR_AILookAction
 	// when a shot begins. The point is updated and that restart is dropped.
 	void KK_HoldSnapPoint(vector pos)
 	{
-		if (pos == vector.Zero || LookOwnerDown())
+		// The snap caller already rejected a man on the ground. Checking
+		// that again here looks the controller up on every frame.
+		if (pos == vector.Zero)
 			return;
 
 		m_bRestartLook = false;

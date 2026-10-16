@@ -1198,6 +1198,7 @@ class KK_SquadCollision
 {
 	protected static ref map<AIAgent, ref KK_SavedCollision> s_Saved =
 		new map<AIAgent, ref KK_SavedCollision>();
+	protected static ref array<AIAgent> s_TickAgents = new array<AIAgent>();
 
 	protected static bool s_bTicking;
 	protected static bool s_bLoggedOff;
@@ -1327,11 +1328,11 @@ class KK_SquadCollision
 			return;
 		}
 
-		array<AIAgent> agents = {};
+		s_TickAgents.Clear();
 		for (int i = 0; i < s_Saved.Count(); i++)
-			agents.Insert(s_Saved.GetKey(i));
+			s_TickAgents.Insert(s_Saved.GetKey(i));
 
-		foreach (AIAgent agent : agents)
+		foreach (AIAgent agent : s_TickAgents)
 		{
 			if (!agent)
 			{
