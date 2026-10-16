@@ -233,7 +233,13 @@ modded class SCR_AICombatComponent
 			outWeaponEvent = false;
 		}
 
-		if (KK_HoldFightWeapon())
+		if (KK_GarrisonHold.YieldsWeaponForHeal(GetOwner()))
+		{
+			// The bandage is the item in his hands. Publishing a gun here
+			// pulls that gun back out and the heal never starts.
+			outWeaponEvent = false;
+		}
+		else if (KK_HoldFightWeapon())
 		{
 			// Hands and the selector stay on the gun that can actually fire.
 			// Publishing another weapon here would pull that gun back out.
@@ -461,6 +467,9 @@ modded class SCR_AICombatComponent
 	protected bool KK_HoldFightWeapon()
 	{
 		if (!KK_GarrisonHold.RunningCQB(GetOwner()))
+			return false;
+
+		if (KK_GarrisonHold.YieldsWeaponForHeal(GetOwner()))
 			return false;
 
 		BaseWeaponComponent want = KK_GarrisonHold.WeaponToHold(GetOwner());
@@ -1806,6 +1815,9 @@ class KK_GarrisonHold
 	static bool EnsureHeldGun(IEntity soldier)
 	{
 		IEntity body = CharacterBody(soldier);
+		if (YieldsWeaponForHeal(body))
+			return false;
+
 		BaseWeaponComponent want = WeaponToHold(body);
 		if (!want)
 			return false;
@@ -1966,6 +1978,9 @@ class KK_GarrisonHold
 	{
 		IEntity body = CharacterBody(soldier);
 		if (!body || !s_Buildings.Contains(body))
+			return;
+
+		if (YieldsWeaponForHeal(body))
 			return;
 
 		bool dry = GunIsDry(body);
@@ -3522,6 +3537,12 @@ class KK_GarrisonHold
 		if (!body)
 			return;
 
+		if (YieldsWeaponForHeal(body))
+		{
+			LeaveWeaponForHeal(body);
+			return;
+		}
+
 		// The trigger is a cook on a frag. Get a gun back before it.
 		if (HoldingThrowable(body))
 		{
@@ -3767,6 +3788,43 @@ class KK_GarrisonHold
 	static bool ClearHealBoost(SCR_AIUtilityComponent utility)
 	{
 		return ClearHealOpen(UtilityBody(utility));
+	}
+
+	// A bandage needs the hands. Drawing the gun, or holding it up,
+	// restarts that swap and the item never comes out.
+	static bool YieldsWeaponForHeal(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return false;
+
+		if (ClearHealOpen(body))
+			return true;
+
+		return HealBehaviorRunning(body);
+	}
+
+	static bool HealBehaviorRunning(IEntity soldier)
+	{
+		SCR_AIUtilityComponent utility = UtilityOf(CharacterBody(soldier));
+		if (!utility)
+			return false;
+
+		SCR_AIActionBase action = utility.GetExecutedAction();
+		return SCR_AIHealBehavior.Cast(action) ||
+			SCR_AIHealWaitBehavior.Cast(action) ||
+			SCR_AIMedicHealBehavior.Cast(action);
+	}
+
+	// Lowers once. A repeat while it is already down does not restart it.
+	static void LeaveWeaponForHeal(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		SetFireWanted(body, false);
+		RequestWeaponStance(body, false);
 	}
 
 	static void SetGarrisonPost(IEntity soldier, bool holding)
@@ -4711,6 +4769,9 @@ class KK_GarrisonHold
 	static bool ClearWeaponStaysUp(IEntity soldier)
 	{
 		IEntity body = CharacterBody(soldier);
+		if (!body || YieldsWeaponForHeal(body))
+			return false;
+
 		if (!UseRoomCombat() || !OrderOwnsBehavior(body))
 			return false;
 
@@ -4737,7 +4798,7 @@ class KK_GarrisonHold
 	static bool AttackWeaponStaysUp(IEntity soldier)
 	{
 		IEntity body = CharacterBody(soldier);
-		if (!IsAdvancing(body) || IsDown(body))
+		if (!body || YieldsWeaponForHeal(body) || !IsAdvancing(body) || IsDown(body))
 			return false;
 
 		// A bound sprint lowers the rifle so he can run. Walk and jog stay up.
@@ -9239,6 +9300,15 @@ modded class SCR_AIUtilityComponent
 			return result;
 		}
 
+		IEntity healing = m_OwnerEntity;
+		if (!healing)
+			healing = GetOwner();
+		if (KK_GarrisonHold.YieldsWeaponForHeal(healing))
+		{
+			KK_GarrisonHold.LeaveWeaponForHeal(healing);
+			return result;
+		}
+
 		if (ignore)
 			KK_GarrisonHold.EnforceSprintIgnore(this);
 		else if (KK_GarrisonHold.OwnsShot(m_OwnerEntity) || KK_GarrisonHold.OwnsShot(GetOwner()))
@@ -9286,6 +9356,15 @@ modded class SCR_AISetWeaponRaised
 
 		if (KK_GarrisonHold.IsDown(body) || KK_GarrisonHold.IsDown(owner))
 			return ENodeResult.SUCCESS;
+
+		if (KK_GarrisonHold.YieldsWeaponForHeal(body) || KK_GarrisonHold.YieldsWeaponForHeal(owner))
+		{
+			IEntity healer = body;
+			if (!healer)
+				healer = owner;
+			KK_GarrisonHold.LeaveWeaponForHeal(healer);
+			return ENodeResult.SUCCESS;
+		}
 
 		if (KK_GarrisonHold.IsIgnoringTargets(body) || KK_GarrisonHold.IsIgnoringTargets(owner))
 		{
