@@ -539,6 +539,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				assignment.m_fStartedAt += healDelta;
 				assignment.m_fStillSince = currentTime;
 				KK_GarrisonHold.HoldForHeal(assignment.m_Agent);
+				i--;
 				continue;
 			}
 

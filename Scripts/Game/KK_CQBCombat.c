@@ -183,6 +183,20 @@ modded class SCR_AICombatComponent
 	{
 		KK_GarrisonHold.TickCustomHeal(GetOwner());
 
+		// Weapon selection raises the rifle and pulls it back into his hands.
+		// Either one cuts the bandage off, and he then waits on a gesture
+		// that is no longer playing.
+		if (KK_GarrisonHold.YieldsWeaponForHeal(GetOwner()))
+		{
+			outWeaponEvent = false;
+			outSelectedTargetChanged = false;
+			outPrevTarget = null;
+			outCurrentTarget = null;
+			outRetreatTargetChanged = false;
+			outCompartmentChanged = false;
+			return;
+		}
+
 		if (KK_GarrisonHold.IsIgnoringTargets(GetOwner()))
 		{
 			KK_ClearTarget();
@@ -762,6 +776,8 @@ class KK_GarrisonHold
 	// another SetWeaponRaised restarts the animation and cuts off the step.
 	protected static ref set<IEntity> s_RaiseSettled = new set<IEntity>();
 	protected static ref map<IEntity, float> s_RaiseSentAt = new map<IEntity, float>();
+	// A lower already asked for. Sending it again restarts the pose.
+	protected static ref map<IEntity, float> s_LowerSentAt = new map<IEntity, float>();
 	// This order has not seen a living enemy yet. Last-seen points from
 	// the previous clear of this house stay out of the selector.
 	protected static ref set<IEntity> s_FreshOrder = new set<IEntity>();
@@ -3915,8 +3931,9 @@ class KK_GarrisonHold
 			return;
 		}
 
-		// Taking the bandage out is still the gesture.
-		if (controller.IsChangingItem())
+		// Taking the bandage out is still the gesture. A change that
+		// never finishes is the lower being asked for again.
+		if (controller.IsChangingItem() && now - started < 1500)
 			return;
 
 		if (!s_HealGestureSeen.Contains(body) && now - started < 800)
@@ -3928,6 +3945,8 @@ class KK_GarrisonHold
 
 		// A short gap so the next item does not cut the recover.
 		s_NextHealAt.Set(body, now + 400);
+		if (!CustomHealAllowed(body))
+			ReleaseHealHold(body);
 	}
 
 	// Bandage or tourniquet while he is bleeding. A health item once
@@ -4122,7 +4141,8 @@ class KK_GarrisonHold
 		if (!utility)
 			return false;
 
-		SCR_AIActionBase action = utility.GetExecutedAction();
+		SCR_AIActionBase action =
+			SCR_AIActionBase.Cast(utility.GetExecutedAction());
 		return SCR_AIHealBehavior.Cast(action) ||
 			SCR_AIHealWaitBehavior.Cast(action) ||
 			SCR_AIMedicHealBehavior.Cast(action);
@@ -4136,6 +4156,16 @@ class KK_GarrisonHold
 			return;
 
 		SetFireWanted(body, false);
+
+		// The gesture has the hands. Another lower restarts the draw
+		// and the bandage never finishes.
+		if (s_HealGestureItem.Contains(body))
+			return;
+
+		CharacterControllerComponent controller = Controller(body);
+		if (controller && (controller.IsUsingItem() || controller.IsChangingItem()))
+			return;
+
 		RequestWeaponStance(body, false);
 	}
 
@@ -5187,7 +5217,17 @@ class KK_GarrisonHold
 		if (raised)
 			return s_RaiseSettled.Contains(body);
 
-		return true;
+		// Already asked for it down. Another lower restarts the pose.
+		// A raise that went out after that ask is the reason to send one more.
+		float lowerAt = -1;
+		if (s_LowerSentAt.Contains(body))
+			lowerAt = s_LowerSentAt.Get(body);
+
+		float raiseAt = -1;
+		if (s_RaiseSentAt.Contains(body))
+			raiseAt = s_RaiseSentAt.Get(body);
+
+		return lowerAt < 0 || raiseAt > lowerAt;
 	}
 
 	// Sends the stance when it is still due. The clear uses the result
@@ -5217,6 +5257,7 @@ class KK_GarrisonHold
 		{
 			s_MoveWeaponUp.RemoveItem(body);
 			s_RaiseSettled.RemoveItem(body);
+			s_LowerSentAt.Set(body, WorldTime());
 		}
 
 		SetWeaponRaised(body, raised);

@@ -17,6 +17,7 @@ class KK_InteriorAgentAssignment
 	bool m_bReloadMove;
 	bool m_bHadContact;
 	bool m_bInsidePush;
+	bool m_bHealHeld;
 	bool m_bPlanted;
 	float m_fPlantUntil;
 	float m_fContactSeenAt;
@@ -566,8 +567,27 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				{
 					assignment.m_fStartedAt += timerDelta;
 					assignment.m_fStillSince = currentTime;
+					assignment.m_bHealHeld = true;
 					KK_GarrisonHold.HoldForHeal(assignment.m_Agent);
+					i--;
 					continue;
+				}
+
+				// The bandage ended or was dropped. The move it cancelled
+				// is still the route, and it has to be said again.
+				if (assignment.m_bHealHeld)
+				{
+					assignment.m_bHealHeld = false;
+					assignment.m_bWeaponUp = false;
+					assignment.m_fStillSince = currentTime;
+					assignment.m_fStartedAt = currentTime;
+					KK_GarrisonHold.ReleaseHealHold(assignment.m_Agent);
+					IssueMoveOrder(
+						assignment.m_Agent,
+						AssignmentMoveGoal(assignment),
+						EMovementType.RUN,
+						true
+					);
 				}
 
 				// Alert after the body is gone is not a firefight. A living
