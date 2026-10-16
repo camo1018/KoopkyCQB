@@ -688,9 +688,10 @@ class KK_GarrisonHold
 	protected static const float LEAN_OFFSET = 0.4;
 	// Origin is the feet. A look at that point from arm's length points the rifle down.
 	protected static const float SHOT_AIM_HEIGHT = 1.5;
-	// Chest first. The head is used only when the chest is behind cover.
-	// The head point is the skull, not the eyes.
-	protected static const float CHEST_AIM_HEIGHT = 1.2;
+	// Upper chest first. The head is used only when the chest is behind cover.
+	// The head point is the skull, not the eyes. Spine2 sits on the abdomen,
+	// and from a muzzle above it a close shot pitches down into the stomach.
+	protected static const float CHEST_AIM_HEIGHT = 1.4;
 	protected static const float HEAD_AIM_HEIGHT = 1.5;
 	// Long enough that a fight does not reissue the look and restart the turn.
 	protected static const float SHOT_LOOK_DURATION = 30;
@@ -6466,7 +6467,7 @@ class KK_GarrisonHold
 
 	protected static vector ChestPoint(IEntity enemy)
 	{
-		return BodyPoint(enemy, "Spine2", CHEST_AIM_HEIGHT);
+		return BodyPoint(enemy, "Spine3", CHEST_AIM_HEIGHT);
 	}
 
 	protected static vector HeadPoint(IEntity enemy)
