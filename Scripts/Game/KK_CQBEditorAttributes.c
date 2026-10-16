@@ -206,6 +206,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 23: return mode.KK_GetSnapAimError();
 			case 24: return mode.KK_GetShotDelaySkill();
 			case 25: return mode.KK_GetSightConditions();
+			case 45: return mode.KK_GetPerformanceLog();
 		}
 
 		return mode.KK_GetGarrisonAfterClear();
@@ -238,6 +239,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 23: mode.KK_SetSnapAimError(value); break;
 			case 24: mode.KK_SetShotDelaySkill(value); break;
 			case 25: mode.KK_SetSightConditions(value); break;
+			case 45: mode.KK_SetPerformanceLog(value); break;
 			default: mode.KK_SetGarrisonAfterClear(value); break;
 		}
 	}
@@ -499,6 +501,8 @@ class KK_CQBAttrDoorSearchDistance : KK_CQBFloatEditorAttribute {}
 class KK_CQBAttrDebugDraw : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrDebugLog : KK_CQBBoolEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrPerformanceLog : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrWaypointAuthoring : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]

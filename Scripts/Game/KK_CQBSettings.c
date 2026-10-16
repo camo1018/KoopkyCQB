@@ -233,6 +233,9 @@ modded class SCR_BaseGameMode
 	[Attribute("0", UIWidgets.CheckBox, "Write KK log lines. Off skips those calls.", category: "Koopky CQB/Debug")]
 	protected bool m_bKK_DebugLog;
 
+	[Attribute("0", UIWidgets.CheckBox, "Once a second, log how long the CQB fight and snap aim took. Off skips those timings.", category: "Koopky CQB/Debug")]
+	protected bool m_bKK_PerformanceLog;
+
 	[Attribute("0", UIWidgets.CheckBox, "Show the waypoint authoring page on the commanding radial", category: "Koopky CQB/Debug")]
 	protected bool m_bKK_WaypointAuthoring;
 
@@ -244,6 +247,7 @@ modded class SCR_BaseGameMode
 	protected bool m_bKK_ConfigLoaded;
 	protected string m_sKK_DefaultConfig;
 	protected static bool s_bKK_DebugLog;
+	protected static bool s_bKK_PerfLog;
 
 	override void OnGameModeStart()
 	{
@@ -258,6 +262,7 @@ modded class SCR_BaseGameMode
 
 		KK_CaptureDefaults();
 		s_bKK_DebugLog = m_bKK_DebugLog;
+		s_bKK_PerfLog = m_bKK_PerformanceLog;
 
 		if (!Replication.IsServer())
 		{
@@ -432,10 +437,12 @@ modded class SCR_BaseGameMode
 		{
 			KK_ReadBool(context, "DebugDraw", m_bKK_DebugDraw);
 			KK_ReadBool(context, "DebugLog", m_bKK_DebugLog);
+			KK_ReadBool(context, "PerformanceLog", m_bKK_PerformanceLog);
 			context.EndObject();
 		}
 
 		s_bKK_DebugLog = m_bKK_DebugLog;
+		KK_CommitPerfLog(m_bKK_PerformanceLog);
 
 		if (context.StartObject("Authoring"))
 		{
@@ -619,6 +626,7 @@ modded class SCR_BaseGameMode
 		context.StartObject("Debug");
 		context.WriteValue("DebugDraw", m_bKK_DebugDraw);
 		context.WriteValue("DebugLog", m_bKK_DebugLog);
+		context.WriteValue("PerformanceLog", m_bKK_PerformanceLog);
 		context.EndObject();
 
 		context.StartObject("Authoring");
@@ -986,6 +994,17 @@ modded class SCR_BaseGameMode
 		return s_bKK_DebugLog;
 	}
 
+	bool KK_GetPerformanceLog()
+	{
+		return m_bKK_PerformanceLog;
+	}
+
+	// False skips the performance timings, same idea as the debug log.
+	static bool KK_PerfLogEnabled()
+	{
+		return s_bKK_PerfLog;
+	}
+
 	bool KK_GetWaypointAuthoring()
 	{
 		return m_bKK_WaypointAuthoring;
@@ -1179,6 +1198,24 @@ modded class SCR_BaseGameMode
 	{
 		m_bKK_DebugLog = value;
 		s_bKK_DebugLog = value;
+	}
+
+	void KK_SetPerformanceLog(bool value)
+	{
+		m_bKK_PerformanceLog = value;
+		KK_CommitPerfLog(value);
+	}
+
+	protected void KK_CommitPerfLog(bool value)
+	{
+		if (value == s_bKK_PerfLog)
+			return;
+
+		s_bKK_PerfLog = value;
+		if (value)
+			Print("KK perf: logging on");
+		else
+			KK_PerfLog.Reset();
 	}
 	void KK_SetWaypointAuthoring(bool value) { m_bKK_WaypointAuthoring = value; }
 	void KK_SetSampleAttempts(int value) { m_iKK_SampleAttempts = Math.Max(value, 1); }

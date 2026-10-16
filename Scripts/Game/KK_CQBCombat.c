@@ -146,6 +146,20 @@ modded class SCR_AICombatComponent
 		out bool outRetreatTargetChanged,
 		out bool outCompartmentChanged)
 	{
+		if (!KK_PerfLog.On())
+		{
+			KK_EvaluateHouseOrder(
+				outWeaponEvent,
+				outSelectedTargetChanged,
+				outPrevTarget,
+				outCurrentTarget,
+				outRetreatTargetChanged,
+				outCompartmentChanged
+			);
+			return;
+		}
+
+		int started = System.GetTickCount();
 		KK_EvaluateHouseOrder(
 			outWeaponEvent,
 			outSelectedTargetChanged,
@@ -154,6 +168,7 @@ modded class SCR_AICombatComponent
 			outRetreatTargetChanged,
 			outCompartmentChanged
 		);
+		KK_PerfLog.End("CQB.WeaponTarget", started);
 	}
 
 	// Target and aim for a house order. Compat calls this so the other
@@ -545,6 +560,173 @@ modded class SCR_AICombatComponent
 	}
 }
 
+class KK_PerfBucket
+{
+	int m_iCalls;
+	int m_iTotalMs;
+	int m_iMaxMs;
+	int m_iUnits;
+}
+
+// Wall-clock samples for the CQB fight and snap aim. One summary a second.
+// Off, the clock is not read. A parent total includes the samples under it.
+// Short calls often add 0 until the clock crosses a millisecond, so read
+// the one-second total.
+class KK_PerfLog
+{
+	protected static const int WINDOW_MS = 1000;
+	protected static int s_iWindowAt;
+	protected static bool s_bFlushQueued;
+	protected static ref map<string, ref KK_PerfBucket> s_Buckets =
+		new map<string, ref KK_PerfBucket>();
+
+	static bool On()
+	{
+		return SCR_BaseGameMode.KK_PerfLogEnabled();
+	}
+
+	// Negative means the timings are off.
+	static int Begin()
+	{
+		if (!On())
+			return -1;
+
+		return System.GetTickCount();
+	}
+
+	static void End(string name, int started, int units = 0)
+	{
+		if (started < 0)
+			return;
+
+		int elapsed = System.GetTickCount() - started;
+		if (elapsed < 0)
+			elapsed = 0;
+
+		KK_PerfBucket bucket = Bucket(name);
+		bucket.m_iCalls = bucket.m_iCalls + 1;
+		bucket.m_iTotalMs = bucket.m_iTotalMs + elapsed;
+		if (elapsed > bucket.m_iMaxMs)
+			bucket.m_iMaxMs = elapsed;
+		if (units > 0)
+			bucket.m_iUnits = bucket.m_iUnits + units;
+
+		QueueFlush();
+	}
+
+	static void Reset()
+	{
+		s_iWindowAt = 0;
+		s_bFlushQueued = false;
+		for (int i = 0; i < s_Buckets.Count(); i++)
+		{
+			KK_PerfBucket bucket = s_Buckets.GetElement(i);
+			if (!bucket)
+				continue;
+
+			bucket.m_iCalls = 0;
+			bucket.m_iTotalMs = 0;
+			bucket.m_iMaxMs = 0;
+			bucket.m_iUnits = 0;
+		}
+	}
+
+	protected static KK_PerfBucket Bucket(string name)
+	{
+		if (s_Buckets.Contains(name))
+			return s_Buckets.Get(name);
+
+		KK_PerfBucket created = new KK_PerfBucket();
+		s_Buckets.Set(name, created);
+		return created;
+	}
+
+	protected static void QueueFlush()
+	{
+		int now = System.GetTickCount();
+		if (s_iWindowAt == 0)
+			s_iWindowAt = now;
+
+		if (s_bFlushQueued || !GetGame())
+			return;
+
+		if (now - s_iWindowAt < WINDOW_MS)
+			return;
+
+		s_bFlushQueued = true;
+		GetGame().GetCallqueue().CallLater(FlushQueued, 0, false);
+	}
+
+	static void FlushQueued()
+	{
+		s_bFlushQueued = false;
+		if (!On())
+		{
+			Reset();
+			return;
+		}
+
+		int now = System.GetTickCount();
+		int windowMs = now - s_iWindowAt;
+		if (windowMs < 1)
+			windowMs = 1;
+		s_iWindowAt = now;
+
+		array<string> names = {};
+		for (int i = 0; i < s_Buckets.Count(); i++)
+		{
+			string key = s_Buckets.GetKey(i);
+			KK_PerfBucket bucket = s_Buckets.Get(key);
+			if (!bucket || bucket.m_iCalls == 0)
+				continue;
+
+			names.Insert(key);
+		}
+
+		if (names.Count() == 0)
+			return;
+
+		Print(string.Format(
+			"KK perf %1ms. A caller total includes the samples it makes.",
+			windowMs
+		));
+
+		while (names.Count() > 0)
+		{
+			int best = 0;
+			int bestMs = s_Buckets.Get(names.Get(0)).m_iTotalMs;
+			for (int b = 1; b < names.Count(); b++)
+			{
+				int sampleMs = s_Buckets.Get(names.Get(b)).m_iTotalMs;
+				if (sampleMs <= bestMs)
+					continue;
+
+				best = b;
+				bestMs = sampleMs;
+			}
+
+			string name = names.Get(best);
+			names.Remove(best);
+			KK_PerfBucket printed = s_Buckets.Get(name);
+			string line = string.Format(
+				"KK perf %1 x%2 %3ms max %4",
+				name,
+				printed.m_iCalls,
+				printed.m_iTotalMs,
+				printed.m_iMaxMs
+			);
+			if (printed.m_iUnits > 0)
+				line = line + string.Format(" bodies %1", printed.m_iUnits);
+
+			Print(line);
+			printed.m_iCalls = 0;
+			printed.m_iTotalMs = 0;
+			printed.m_iMaxMs = 0;
+			printed.m_iUnits = 0;
+		}
+	}
+}
+
 // The pose a snap round is launched along from the fire callback.
 class KK_SnapShotAim
 {
@@ -701,6 +883,16 @@ class KK_GarrisonHold
 	// Milliseconds the next shot check was scheduled with.
 	protected static int s_iShotTickMs;
 	protected static bool s_bShotTicking;
+	// When this tick last ran him. Due men are spread across frames.
+	protected static ref map<IEntity, float> s_ShotServedAt =
+		new map<IEntity, float>();
+	// Men run in one wake. The rest of a crowded pass waits a frame.
+	protected static const int SHOT_MEN_PER_TICK = 2;
+	// Last interval found him with a full search. This interval keeps him
+	// when the center ray still hits, and the interval after searches again.
+	protected static ref set<IEntity> s_MayHoldShot = new set<IEntity>();
+	// The room shot already traced this man during the call running now.
+	protected static IEntity s_FreshSightBody;
 	// Bodies whose trigger stays down between shot checks. The check decides
 	// to fire. Other behaviors clear the flag, and a full-auto gun was then
 	// limited to one shot each time the check wrote it again.
@@ -3798,6 +3990,19 @@ class KK_GarrisonHold
 
 	static void ApplyRoomShot(SCR_AIUtilityComponent utility)
 	{
+		if (!KK_PerfLog.On())
+		{
+			ApplyRoomShotRun(utility);
+			return;
+		}
+
+		int started = System.GetTickCount();
+		ApplyRoomShotRun(utility);
+		KK_PerfLog.End("CQB.RoomShot", started);
+	}
+
+	protected static void ApplyRoomShotRun(SCR_AIUtilityComponent utility)
+	{
 		if (!utility)
 			return;
 
@@ -3859,6 +4064,7 @@ class KK_GarrisonHold
 		if (utility.m_CombatComponent)
 			selected = utility.m_CombatComponent.GetCurrentTarget();
 
+		s_FreshSightBody = null;
 		RefreshShot(body, utility.m_PerceptionComponent, selected);
 
 		if (
@@ -3910,10 +4116,18 @@ class KK_GarrisonHold
 		if (s_ShotLean.Contains(body))
 			lean = s_ShotLean.Get(body);
 
-		bool center = ShotStillVisible(body);
-		bool canShoot = center;
-		if (!canShoot && lean != 0)
-			canShoot = SideStillClear(body, enemy, lean);
+		// The search already traced him. A second ray in this same call
+		// was half of the room shot, and it could only repeat that answer.
+		bool canShoot;
+		if (s_FreshSightBody == body)
+			canShoot = true;
+		else
+		{
+			bool center = ShotStillVisible(body);
+			canShoot = center;
+			if (!canShoot && lean != 0)
+				canShoot = SideStillClear(body, enemy, lean);
+		}
 
 		// The selected man is who the plant and the aim are holding.
 		// The shot record can be a side peek that the second trace drops,
@@ -4647,6 +4861,7 @@ class KK_GarrisonHold
 			ClearPathLook(body);
 			LockClearMove(body, false);
 			s_Buildings.Remove(body);
+			s_ShotServedAt.Remove(body);
 			s_ReloadAt.Remove(body);
 			s_ToppingOff.RemoveItem(body);
 			s_EmptyReload.RemoveItem(body);
@@ -4681,7 +4896,7 @@ class KK_GarrisonHold
 
 	// Soldiers on a clear or garrison stay in the building map, including
 	// while they are still outside. The tick drops itself once that map
-	// is empty. Inside, each pass raises, leans, and fires.
+	// is empty. A wake runs two due men. A longer pass continues next frame.
 	protected static void EnsureShotTick()
 	{
 		if (s_bShotTicking || s_Buildings.Count() == 0 || !GetGame())
@@ -4694,36 +4909,90 @@ class KK_GarrisonHold
 
 	static void ShotTick()
 	{
-		if (!GetGame() || s_Buildings.Count() == 0 || !UseRoomCombat())
+		if (!KK_PerfLog.On())
 		{
-			s_bShotTicking = false;
+			ShotTickRun();
 			return;
 		}
 
-		s_ShotBodies.Clear();
-		for (int i = 0; i < s_Buildings.Count(); i++)
-			s_ShotBodies.Insert(s_Buildings.GetKey(i));
+		int started = System.GetTickCount();
+		ShotTickRun();
+		KK_PerfLog.End("CQB.ShotTick", started);
+	}
 
-		foreach (IEntity body : s_ShotBodies)
+	protected static void ShotTickRun()
+	{
+		if (!GetGame() || s_Buildings.Count() == 0 || !UseRoomCombat())
 		{
+			s_bShotTicking = false;
+			s_ShotServedAt.Clear();
+			return;
+		}
+
+		float now = WorldTime();
+		int interval = ShotIntervalMs();
+		if (interval < 1)
+			interval = 1;
+
+		s_ShotBodies.Clear();
+		float soonest = interval;
+		for (int i = 0; i < s_Buildings.Count(); i++)
+		{
+			IEntity body = s_Buildings.GetKey(i);
 			if (!body)
 				continue;
 
-			SCR_AIUtilityComponent utility = UtilityOf(body);
-			if (!utility)
+			if (!s_ShotServedAt.Contains(body))
+			{
+				s_ShotBodies.Insert(body);
 				continue;
+			}
 
-			ApplyRoomShot(utility);
+			float age = now - s_ShotServedAt.Get(body);
+			if (age >= interval)
+			{
+				s_ShotBodies.Insert(body);
+				continue;
+			}
+
+			float remain = interval - age;
+			if (remain < soonest)
+				soonest = remain;
+		}
+
+		int ran = 0;
+		foreach (IEntity body : s_ShotBodies)
+		{
+			if (ran >= SHOT_MEN_PER_TICK)
+				break;
+
+			SCR_AIUtilityComponent utility = UtilityOf(body);
+			if (utility)
+				ApplyRoomShot(utility);
+
+			s_ShotServedAt.Set(body, now);
+			ran++;
 		}
 
 		if (!GetGame() || s_Buildings.Count() == 0 || !UseRoomCombat())
 		{
 			s_bShotTicking = false;
+			s_ShotServedAt.Clear();
 			return;
 		}
 
-		s_iShotTickMs = ShotIntervalMs();
-		GetGame().GetCallqueue().CallLater(ShotTick, s_iShotTickMs, false);
+		int delay = interval;
+		if (s_ShotBodies.Count() > ran)
+			delay = 0;
+		else
+		{
+			delay = (int)soonest;
+			if (soonest > delay)
+				delay = delay + 1;
+		}
+
+		s_iShotTickMs = delay;
+		GetGame().GetCallqueue().CallLater(ShotTick, delay, false);
 	}
 
 	protected static SCR_AIUtilityComponent UtilityOf(IEntity body)
@@ -4807,6 +5076,22 @@ class KK_GarrisonHold
 		PerceptionComponent perception,
 		BaseTarget selected)
 	{
+		if (!KK_PerfLog.On())
+		{
+			RefreshShotRun(soldier, perception, selected);
+			return;
+		}
+
+		int started = System.GetTickCount();
+		RefreshShotRun(soldier, perception, selected);
+		KK_PerfLog.End("CQB.RefreshShot", started);
+	}
+
+	protected static void RefreshShotRun(
+		IEntity soldier,
+		PerceptionComponent perception,
+		BaseTarget selected)
+	{
 		IEntity body = CharacterBody(soldier);
 		if (!body)
 			return;
@@ -4836,6 +5121,14 @@ class KK_GarrisonHold
 		if (s_ShotBase.Contains(body))
 			previousBase = s_ShotBase.Get(body);
 
+		// The last search put him here. One center ray keeps him. The next
+		// interval walks the room again, so a closer man is not ignored.
+		if (KeepHeldShot(body, previousLook))
+		{
+			UpdateRoomFire(body);
+			return;
+		}
+
 		s_ShotLook.Remove(body);
 		s_ShotBase.Remove(body);
 		s_ShotLean.Remove(body);
@@ -4843,6 +5136,7 @@ class KK_GarrisonHold
 
 		if (IsIgnoringTargets(body))
 		{
+			s_MayHoldShot.RemoveItem(body);
 			UpdateRoomFire(body);
 			return;
 		}
@@ -4869,6 +5163,10 @@ class KK_GarrisonHold
 			if (IsMoveFire(body))
 				HoldMoveShot(body, now, previousLook, previousLean);
 
+			if (s_ShotLive.Contains(body) && s_FreshSightBody == body)
+				NoteHeldSearch(body);
+			else if (!s_ShotLive.Contains(body))
+				s_MayHoldShot.RemoveItem(body);
 			UpdateRoomFire(body);
 			return;
 		}
@@ -4894,11 +5192,16 @@ class KK_GarrisonHold
 
 		if (CommitNearestShot(body, perception))
 		{
+			NoteHeldSearch(body);
 			UpdateRoomFire(body);
 			return;
 		}
 
 		ConsiderSelected(body, selected);
+		if (s_ShotLive.Contains(body))
+			NoteHeldSearch(body);
+		else
+			s_MayHoldShot.RemoveItem(body);
 		UpdateRoomFire(body);
 	}
 
@@ -4920,6 +5223,7 @@ class KK_GarrisonHold
 		float lean;
 		CanEngage(body, enemy, lean);
 		s_ShotLean.Set(body, lean);
+		NoteHeldSearch(body);
 	}
 
 	protected static void UpdateRoomFire(IEntity body)
@@ -4971,6 +5275,9 @@ class KK_GarrisonHold
 		s_ShotBase.Remove(body);
 		s_ShotLean.Remove(body);
 		s_ShotLive.RemoveItem(body);
+		s_MayHoldShot.RemoveItem(body);
+		if (s_FreshSightBody == body)
+			s_FreshSightBody = null;
 		s_MoveShotSeen.Remove(body);
 		ForgetBarrelBlock(body);
 		s_RoomFire.RemoveItem(body);
@@ -5048,6 +5355,48 @@ class KK_GarrisonHold
 			CollectNearby(body, null);
 
 		CommitNearestShot(body, perception);
+	}
+
+	// True when the last full search's man is still on the center ray.
+	// The room walk waits until the next interval.
+	protected static bool KeepHeldShot(IEntity body, IEntity previousLook)
+	{
+		if (!body || !s_MayHoldShot.Contains(body))
+			return false;
+
+		s_MayHoldShot.RemoveItem(body);
+		if (!previousLook || !IsTargetable(previousLook) || !IsHostile(body, previousLook))
+			return false;
+
+		if (PastOrderContact(body, previousLook))
+			return false;
+
+		if (!CanSeeEntity(body, previousLook))
+			return false;
+
+		if (s_ShotLean.Contains(body))
+			s_ShotLean.Set(body, 0);
+
+		s_FreshSightBody = body;
+		return true;
+	}
+
+	// A search that found a man on the center ray. The next interval may
+	// keep him. A lean stays on the full search, because the center is blocked.
+	protected static void NoteHeldSearch(IEntity body)
+	{
+		if (!body)
+			return;
+
+		s_FreshSightBody = body;
+		float lean = 0;
+		if (s_ShotLean.Contains(body))
+			lean = s_ShotLean.Get(body);
+
+		if (lean == 0)
+			s_MayHoldShot.Insert(body);
+		else
+			s_MayHoldShot.RemoveItem(body);
 	}
 
 	// True when the man from the last check is still a shot. He is put
@@ -5137,6 +5486,7 @@ class KK_GarrisonHold
 			if (known)
 				s_ShotBase.Set(body, known);
 
+			s_FreshSightBody = body;
 			return true;
 		}
 
@@ -5506,12 +5856,14 @@ class KK_GarrisonHold
 		if (!body || !enemy)
 			return false;
 
+		// A clear center line does not need the lean rays. Those rays are
+		// the cost that grew with every extra man in the room.
+		if (CanSeeEntity(body, enemy))
+			return true;
+
 		bool left;
 		bool right;
 		SidesClear(body, enemy, left, right);
-
-		if (CanSeeEntity(body, enemy))
-			return true;
 
 		// The center ray hits the cover he is standing against. A clear
 		// side is still a shot, and the trigger needs that side remembered.
@@ -5672,6 +6024,19 @@ class KK_GarrisonHold
 
 	static void LeanPump()
 	{
+		if (!KK_PerfLog.On())
+		{
+			LeanPumpRun();
+			return;
+		}
+
+		int started = System.GetTickCount();
+		LeanPumpRun();
+		KK_PerfLog.End("CQB.LeanPump", started);
+	}
+
+	protected static void LeanPumpRun()
+	{
 		if (!GetGame() || s_WantedLean.Count() == 0)
 		{
 			s_bLeanPumping = false;
@@ -5815,6 +6180,19 @@ class KK_GarrisonHold
 
 	static void SnapAimPump()
 	{
+		if (!KK_PerfLog.On())
+		{
+			SnapAimPumpRun();
+			return;
+		}
+
+		int started = System.GetTickCount();
+		SnapAimPumpRun();
+		KK_PerfLog.End("SnapAim.Pump", started);
+	}
+
+	protected static void SnapAimPumpRun()
+	{
 		if (!GetGame() || s_SnapAim.Count() == 0 || !SnapAimEnabled())
 		{
 			s_SnapAim.Clear();
@@ -5845,6 +6223,8 @@ class KK_GarrisonHold
 		for (int i = 0; i < s_SnapAim.Count(); i++)
 			s_SnapBodies.Insert(s_SnapAim.GetKey(i));
 
+		int applyPerf = KK_PerfLog.Begin();
+		int applyCount = s_SnapBodies.Count();
 		foreach (IEntity body : s_SnapBodies)
 		{
 			if (!body || !s_SnapAim.Contains(body))
@@ -5885,6 +6265,8 @@ class KK_GarrisonHold
 
 			ApplySnapAim(body, held, controller, utility, engaged);
 		}
+
+		KK_PerfLog.End("SnapAim.Apply", applyPerf, applyCount);
 
 		if (s_SnapAim.Count() == 0 || !GetGame())
 		{
@@ -6158,6 +6540,17 @@ class KK_GarrisonHold
 	}
 
 	protected static vector ComputeSnapAimError(IEntity body, IEntity enemy, vector point)
+	{
+		if (!KK_PerfLog.On())
+			return ComputeSnapAimErrorRun(body, enemy, point);
+
+		int started = System.GetTickCount();
+		vector offset = ComputeSnapAimErrorRun(body, enemy, point);
+		KK_PerfLog.End("SnapAim.Error", started);
+		return offset;
+	}
+
+	protected static vector ComputeSnapAimErrorRun(IEntity body, IEntity enemy, vector point)
 	{
 		ChimeraCharacter character = ChimeraCharacter.Cast(body);
 		vector eye = body.GetOrigin() + Vector(0, 1.6, 0);
@@ -7800,6 +8193,19 @@ class KK_GarrisonHold
 
 	static void TriggerPump()
 	{
+		if (!KK_PerfLog.On())
+		{
+			TriggerPumpRun();
+			return;
+		}
+
+		int started = System.GetTickCount();
+		TriggerPumpRun();
+		KK_PerfLog.End("CQB.TriggerPump", started);
+	}
+
+	protected static void TriggerPumpRun()
+	{
 		if (!GetGame() || s_TriggerHeld.Count() == 0)
 		{
 			s_bTriggerPumping = false;
@@ -8142,6 +8548,17 @@ modded class SCR_AIAttackBehavior
 {
 	override float CustomEvaluate()
 	{
+		if (!KK_PerfLog.On())
+			return KK_AttackEvaluate();
+
+		int started = System.GetTickCount();
+		float score = KK_AttackEvaluate();
+		KK_PerfLog.End("CQB.AttackEval", started);
+		return score;
+	}
+
+	protected float KK_AttackEvaluate()
+	{
 		IEntity character;
 		IEntity agentEntity;
 		if (m_Utility)
@@ -8304,6 +8721,17 @@ modded class SCR_AIAttackBehavior
 modded class SCR_AICombatMoveLogicBase
 {
 	override ENodeResult EOnTaskSimulate(AIAgent owner, float dt)
+	{
+		if (!KK_PerfLog.On())
+			return KK_SimulateCombatMove(owner, dt);
+
+		int started = System.GetTickCount();
+		ENodeResult result = KK_SimulateCombatMove(owner, dt);
+		KK_PerfLog.End("CQB.CombatMove", started);
+		return result;
+	}
+
+	protected ENodeResult KK_SimulateCombatMove(AIAgent owner, float dt)
 	{
 		IEntity body;
 		if (owner)
@@ -8639,6 +9067,19 @@ modded class SCR_AIThreatSystem
 
 	override void Update(SCR_AIUtilityComponent utility, float timeSlice)
 	{
+		if (!KK_PerfLog.On())
+		{
+			KK_UpdateThreat(utility, timeSlice);
+			return;
+		}
+
+		int started = System.GetTickCount();
+		KK_UpdateThreat(utility, timeSlice);
+		KK_PerfLog.End("CQB.Threat", started);
+	}
+
+	protected void KK_UpdateThreat(SCR_AIUtilityComponent utility, float timeSlice)
+	{
 		if (
 			m_Utility &&
 			(
@@ -8726,7 +9167,13 @@ modded class SCR_AIUtilityComponent
 {
 	override SCR_AIBehaviorBase EvaluateBehavior(BaseTarget unknownTarget)
 	{
-		return KK_SelectHouseBehavior(unknownTarget);
+		if (!KK_PerfLog.On())
+			return KK_SelectHouseBehavior(unknownTarget);
+
+		int started = System.GetTickCount();
+		SCR_AIBehaviorBase result = KK_SelectHouseBehavior(unknownTarget);
+		KK_PerfLog.End("CQB.Behavior", started);
+		return result;
 	}
 
 	// Behavior pick for a house order. Compat calls this and skips the
@@ -8811,6 +9258,17 @@ modded class SCR_AIUtilityComponent
 modded class SCR_AISetWeaponRaised
 {
 	override ENodeResult EOnTaskSimulate(AIAgent owner, float dt)
+	{
+		if (!KK_PerfLog.On())
+			return KK_SimulateWeaponRaised(owner, dt);
+
+		int started = System.GetTickCount();
+		ENodeResult result = KK_SimulateWeaponRaised(owner, dt);
+		KK_PerfLog.End("CQB.WeaponRaised", started);
+		return result;
+	}
+
+	protected ENodeResult KK_SimulateWeaponRaised(AIAgent owner, float dt)
 	{
 		IEntity body;
 		if (owner)
@@ -9047,6 +9505,36 @@ modded class SCR_AILookAction
 		out bool outCancelLook,
 		out bool outRestartLook)
 	{
+		if (!KK_PerfLog.On())
+		{
+			KK_MoveLookParameters(
+				outCanLook,
+				outLookPos,
+				outLookDuration,
+				outCancelLook,
+				outRestartLook
+			);
+			return;
+		}
+
+		int started = System.GetTickCount();
+		KK_MoveLookParameters(
+			outCanLook,
+			outLookPos,
+			outLookDuration,
+			outCancelLook,
+			outRestartLook
+		);
+		KK_PerfLog.End("CQB.Look", started);
+	}
+
+	protected void KK_MoveLookParameters(
+		out bool outCanLook,
+		out vector outLookPos,
+		out float outLookDuration,
+		out bool outCancelLook,
+		out bool outRestartLook)
+	{
 		super.MoveLookParametersToNode(
 			outCanLook,
 			outLookPos,
@@ -9145,6 +9633,17 @@ modded class SCR_AILookAction
 modded class SCR_AIMoveIndividuallyBehavior
 {
 	override float CustomEvaluate()
+	{
+		if (!KK_PerfLog.On())
+			return KK_EvaluateMove();
+
+		int started = System.GetTickCount();
+		float score = KK_EvaluateMove();
+		KK_PerfLog.End("CQB.MoveEval", started);
+		return score;
+	}
+
+	protected float KK_EvaluateMove()
 	{
 		if (PlantHoldsFeet())
 			return 0;
