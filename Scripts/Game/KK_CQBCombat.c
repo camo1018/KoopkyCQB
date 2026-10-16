@@ -1564,6 +1564,10 @@ class KK_GarrisonHold
 				canShoot = SideStillClear(body, lookAt, lean);
 		}
 
+		// Rounds are not landing. The trigger stays off for the walk.
+		if (BarrelWantsMove(body))
+			canShoot = false;
+
 		float command = 0;
 		if (canShoot)
 			command = lean;
@@ -4656,6 +4660,10 @@ class KK_GarrisonHold
 			}
 		}
 
+		// Rounds are not landing. The trigger stays off for the walk.
+		if (BarrelWantsMove(body))
+			canShoot = false;
+
 		float command = 0;
 		if (canShoot)
 			command = lean;
@@ -5810,7 +5818,10 @@ class KK_GarrisonHold
 		if (s_FreshSightBody == body)
 			s_FreshSightBody = null;
 		s_MoveShotSeen.Remove(body);
-		ForgetBarrelBlock(body);
+		// The cool-off is the walk off a blocked shot. Dropping the shot
+		// record is part of that walk, so it must not cancel the move.
+		if (!BarrelCooling(body))
+			ForgetBarrelBlock(body);
 		s_RoomFire.RemoveItem(body);
 		ClearAim(body);
 		ReleaseLean(body);
@@ -7724,33 +7735,30 @@ class KK_GarrisonHold
 		return clear;
 	}
 
-	// True while he should leave the plant. This man took none of his
-	// damage through the try, and the cool-off is still walking him off.
+	// True for the whole cool-off. He left because the eye ray or the
+	// shot record failed, so neither of those cancels the walk. A hit
+	// still ends it.
 	static bool BarrelWantsMove(IEntity soldier)
 	{
 		IEntity body = CharacterBody(soldier);
-		if (!body || !s_BarrelCoolUntil.Contains(body))
-			return false;
+		if (BarrelCooling(body))
+			return true;
 
-		if (WorldTime() >= s_BarrelCoolUntil.Get(body))
+		if (body && s_BarrelCoolUntil.Contains(body))
 		{
 			s_BarrelCoolUntil.Remove(body);
 			s_BarrelBlockedTarget.Remove(body);
-			return false;
 		}
 
-		IEntity enemy = EngagedEnemy(body);
-		IEntity blocked = null;
-		if (s_BarrelBlockedTarget.Contains(body))
-			blocked = s_BarrelBlockedTarget.Get(body);
+		return false;
+	}
 
-		if (!enemy || enemy != blocked || !CanSeeEntity(body, enemy))
-		{
-			ForgetBarrelBlock(body);
+	protected static bool BarrelCooling(IEntity body)
+	{
+		if (!body || !s_BarrelCoolUntil.Contains(body))
 			return false;
-		}
 
-		return true;
+		return WorldTime() < s_BarrelCoolUntil.Get(body);
 	}
 
 	protected static IEntity EngagedEnemy(IEntity body)

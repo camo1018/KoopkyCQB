@@ -1208,6 +1208,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 				KK_GarrisonHold.SetPinned(agent.GetControlledEntity(), true);
 
 				bool shooting = CanReturnFire(agent);
+				if (shooting && KK_GarrisonHold.BarrelWantsMove(agent))
+					shooting = false;
+
 				KK_GarrisonHold.SetReturnFire(agent, shooting);
 				if (!shooting)
 					continue;

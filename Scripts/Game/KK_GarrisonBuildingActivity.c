@@ -723,7 +723,9 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				continue;
 			}
 
-			if (atHold && !passageOverride)
+			// A blocked barrel has to leave the post. Staying planted
+			// here kept the trigger on the same wall.
+			if (atHold && !passageOverride && !KK_GarrisonHold.BarrelWantsMove(controlledEntity))
 			{
 				if (!assignment.m_bHolding)
 				{
@@ -1710,8 +1712,9 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 		// A man he can see, standing or downed, holds this spot until the
 		// sight line breaks or the body is dead. The burst window was
-		// sending him on while that man was still there.
-		if (finishing)
+		// sending him on while that man was still there. A blocked barrel
+		// is the exception: that hold was the wall he would not leave.
+		if (finishing && !KK_GarrisonHold.BarrelWantsMove(controlledEntity))
 		{
 			assignment.m_bBounding = false;
 			assignment.m_bHeldDoor = false;
@@ -1734,8 +1737,22 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			assignment.m_fFireUntil = 0;
 			assignment.m_fBoundUntil = 0;
 			assignment.m_fSteadyUntil = 0;
-			KK_GarrisonHold.ClearApproachGoal(controlledEntity);
 			KK_GarrisonHold.SetDoorFiring(controlledEntity, false);
+			if (KK_GarrisonHold.BarrelWantsMove(controlledEntity))
+			{
+				KK_GarrisonHold.SetPinned(controlledEntity, false);
+				KK_GarrisonHold.SetApproachGoal(
+					controlledEntity,
+					AssignmentMoveGoal(assignment)
+				);
+				KK_AgentMove.SetWantedSpeed(
+					assignment.m_Agent,
+					EMovementType.RUN
+				);
+				return;
+			}
+
+			KK_GarrisonHold.ClearApproachGoal(controlledEntity);
 			return;
 		}
 
@@ -1769,6 +1786,8 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		}
 
 		bool roomShot = KK_GarrisonHold.OwnsShot(controlledEntity);
+		if (KK_GarrisonHold.BarrelWantsMove(controlledEntity))
+			assignment.m_fFireUntil = 0;
 
 		if (!assignment.m_bBounding)
 		{
@@ -1793,7 +1812,12 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		{
 			assignment.m_bBounding = false;
 
-			if (!cannotShoot && !roomShot && HasVisibleTarget(assignment.m_Agent))
+			if (
+				!cannotShoot &&
+				!roomShot &&
+				!KK_GarrisonHold.BarrelWantsMove(controlledEntity) &&
+				HasVisibleTarget(assignment.m_Agent)
+			)
 			{
 				assignment.m_fFireUntil = currentTime + FIGHT_WINDOW_MS;
 				KK_GarrisonHold.ClearApproachGoal(controlledEntity);
@@ -1825,6 +1849,13 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		bool waitingOnDoor)
 	{
 		if (KK_GarrisonHold.CannotShoot(controlledEntity))
+		{
+			assignment.m_fSteadyUntil = 0;
+			return false;
+		}
+
+		// The tail would keep him planted on the angle that is not hitting.
+		if (KK_GarrisonHold.BarrelWantsMove(controlledEntity))
 		{
 			assignment.m_fSteadyUntil = 0;
 			return false;
