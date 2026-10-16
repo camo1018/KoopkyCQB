@@ -173,7 +173,7 @@ modded class SCR_BaseGameMode
 	[Attribute("1", UIWidgets.CheckBox, "Snap aim scatters around the aim point by skill, distance, weapon, and light. Off puts the snap on the point itself.", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_SnapAimError;
 
-	[Attribute("0", UIWidgets.ComboBox, "Where the rifle aims", "Chest, then head uses the upper chest, and the head when the chest is behind cover. Head, then chest does the reverse. Chest and Head stay on that point. Random picks one of those two for each man, keeps it, and uses the other when that point is behind cover.", ParamEnumArray.FromEnum(KK_EAimMode))]
+	[Attribute("0", UIWidgets.ComboBox, "Where the rifle aims. Chest, then head uses the upper chest, and the head when the chest is behind cover. Head, then chest does the reverse. Chest and Head stay on that point. Random picks one of those two for each man, keeps it, and uses the other when that point is behind cover.", "", ParamEnumArray.FromEnum(KK_EAimMode))]
 	protected KK_EAimMode m_eKK_AimMode;
 
 	[Attribute("1", UIWidgets.EditBox, "Seconds he keeps shooting a man who has taken none of his damage. Then he moves. 0 moves as soon as he starts the shot.", category: "Koopky CQB/Combat")]
