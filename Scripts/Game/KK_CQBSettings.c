@@ -15,6 +15,15 @@ enum KK_ENavMode
 	PASS_THROUGH
 }
 
+enum KK_EAimMode
+{
+	CHEST_THEN_HEAD,
+	HEAD_THEN_CHEST,
+	CHEST,
+	HEAD,
+	RANDOM
+}
+
 modded class SCR_BaseGameMode
 {
 	[Attribute("2.5", UIWidgets.EditBox, "Horizontal sample spacing (m)", category: "Koopky CQB/Interior")]
@@ -163,6 +172,9 @@ modded class SCR_BaseGameMode
 
 	[Attribute("1", UIWidgets.CheckBox, "Snap aim scatters around the aim point by skill, distance, weapon, and light. Off puts the snap on the point itself.", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_SnapAimError;
+
+	[Attribute("0", UIWidgets.ComboBox, "Where the rifle aims", "Chest, then head uses the upper chest, and the head when the chest is behind cover. Head, then chest does the reverse. Chest and Head stay on that point. Random picks one of those two for each man, keeps it, and uses the other when that point is behind cover.", ParamEnumArray.FromEnum(KK_EAimMode))]
+	protected KK_EAimMode m_eKK_AimMode;
 
 	[Attribute("1", UIWidgets.EditBox, "Seconds he keeps shooting a man who has taken none of his damage. Then he moves. 0 moves as soon as he starts the shot.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_BarrelStuck;
@@ -394,6 +406,7 @@ modded class SCR_BaseGameMode
 			KK_ReadBool(context, "SightConditions", m_bKK_SightConditions);
 			KK_ReadBool(context, "SnapAim", m_bKK_SnapAim);
 			KK_ReadBool(context, "SnapAimError", m_bKK_SnapAimError);
+			KK_ReadAimMode(context);
 			KK_ReadFloat(context, "BarrelStuck", m_fKK_BarrelStuck);
 			KK_ReadFloat(context, "BarrelCool", m_fKK_BarrelCool);
 			KK_ReadFloat(context, "LostContactLook", m_fKK_LostContactLook);
@@ -582,6 +595,7 @@ modded class SCR_BaseGameMode
 		context.WriteValue("SightConditions", m_bKK_SightConditions);
 		context.WriteValue("SnapAim", m_bKK_SnapAim);
 		context.WriteValue("SnapAimError", m_bKK_SnapAimError);
+		context.WriteValue("AimMode", KK_GetAimMode());
 		context.WriteValue("BarrelStuck", KK_GetBarrelStuck());
 		context.WriteValue("BarrelCool", KK_GetBarrelCool());
 		context.WriteValue("LostContactLook", KK_GetLostContactLook());
@@ -853,6 +867,11 @@ modded class SCR_BaseGameMode
 		return m_bKK_SnapAimError;
 	}
 
+	int KK_GetAimMode()
+	{
+		return KK_ClampAimMode(m_eKK_AimMode);
+	}
+
 	bool KK_GetSightConditions()
 	{
 		return m_bKK_SightConditions;
@@ -1042,6 +1061,34 @@ modded class SCR_BaseGameMode
 	void KK_SetShotDelaySkill(bool value) { m_bKK_ShotDelaySkill = value; }
 	void KK_SetSnapAim(bool value) { m_bKK_SnapAim = value; }
 	void KK_SetSnapAimError(bool value) { m_bKK_SnapAimError = value; }
+	void KK_SetAimMode(int value) { m_eKK_AimMode = KK_ClampAimMode(value); }
+
+	protected void KK_ReadAimMode(notnull SCR_JsonLoadContext context)
+	{
+		int aimMode = m_eKK_AimMode;
+		if (!context.ReadValue("AimMode", aimMode))
+			return;
+
+		m_eKK_AimMode = KK_ClampAimMode(aimMode);
+	}
+
+	protected KK_EAimMode KK_ClampAimMode(int value)
+	{
+		if (value == KK_EAimMode.HEAD_THEN_CHEST)
+			return KK_EAimMode.HEAD_THEN_CHEST;
+
+		if (value == KK_EAimMode.CHEST)
+			return KK_EAimMode.CHEST;
+
+		if (value == KK_EAimMode.HEAD)
+			return KK_EAimMode.HEAD;
+
+		if (value == KK_EAimMode.RANDOM)
+			return KK_EAimMode.RANDOM;
+
+		return KK_EAimMode.CHEST_THEN_HEAD;
+	}
+
 	void KK_SetSightConditions(bool value) { m_bKK_SightConditions = value; }
 	void KK_SetBarrelStuck(float value) { m_fKK_BarrelStuck = Math.Max(value, 0); }
 	void KK_SetBarrelCool(float value) { m_fKK_BarrelCool = Math.Max(value, 0); }
