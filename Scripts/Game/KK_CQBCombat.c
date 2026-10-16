@@ -6514,8 +6514,8 @@ class KK_GarrisonHold
 		return mode.KK_GetAimMode();
 	}
 
-	// Chest or head for this man, and that choice stays. Either one is the
-	// only point. Cover does not switch it.
+	// Chest or head first for this man, and that choice stays. The other
+	// point is used when the first is behind cover.
 	protected static int LatchedAim(IEntity shooter, IEntity enemy)
 	{
 		IEntity body = CharacterBody(shooter);
@@ -6530,9 +6530,9 @@ class KK_GarrisonHold
 		)
 			return s_AimPick.Get(body);
 
-		int pick = KK_EAimMode.CHEST;
+		int pick = KK_EAimMode.CHEST_THEN_HEAD;
 		if (Math.RandomFloat01() < 0.5)
-			pick = KK_EAimMode.HEAD;
+			pick = KK_EAimMode.HEAD_THEN_CHEST;
 
 		if (!body)
 			return pick;
