@@ -44,6 +44,10 @@ class KK_OpeningLeaf
 	float m_fRadius;
 	bool m_bSwingKnown;
 	bool m_bSwingsOut;
+	bool m_bLeafGhosted;
+	IEntity m_GhostEntity;
+	int m_iSavedLayer;
+	ref array<int> m_aSavedGeoms;
 }
 
 class KK_Opening
@@ -532,6 +536,7 @@ class KK_Passage
 				continue;
 
 			UpdateSwing(opening);
+			SyncLeafCollision(opening);
 
 			if (!opening.m_bOpenCalled)
 				continue;
@@ -671,7 +676,7 @@ class KK_Passage
 				PutOrder(
 					orders,
 					soldier.m_Agent,
-					soldier.m_vGoal,
+					ReleaseTarget(opening, feet[index], pathfinding, soldier.m_vGoal),
 					false,
 					false
 				);
@@ -881,6 +886,11 @@ class KK_Passage
 		if (leaf.m_Door.IsOpen() || leaf.m_Door.CanCharacterPass(PASS_WIDTH))
 			return false;
 
+		// The leaf has left the doorway. The old quarter still covers the
+		// threshold, and that kept sending him back from the step.
+		if (SwungAside(leaf))
+			return false;
+
 		// Direction comes from the first latch movement. Until then the squad
 		// stays in the lane and the door is asked open. An inward leaf leaves
 		// the approach side alone. An outward leaf needs it clear, and so does
@@ -1011,6 +1021,203 @@ class KK_Passage
 				);
 			}
 		}
+	}
+
+	// The panel has left the doorway, even when CanCharacterPass is still false.
+	protected static bool SwungAside(KK_OpeningLeaf leaf)
+	{
+		if (!leaf || !leaf.m_bSwingKnown || !leaf.m_bSwingsOut)
+			return false;
+
+		if (!leaf.m_Door || !leaf.m_Entity)
+			return false;
+
+		if (leaf.m_Door.IsOpen() || leaf.m_Door.CanCharacterPass(PASS_WIDTH))
+			return true;
+
+		if (leaf.m_Door.GetNormalizedDoorState() >= 0.5)
+			return true;
+
+		vector now = leaf.m_Entity.CoordToParent(leaf.m_vLatchLocal);
+		vector moved = now - leaf.m_vClosedFar;
+		moved[1] = 0;
+		return vector.Dot(moved, leaf.m_vSwing) >= leaf.m_fRadius * 0.65;
+	}
+
+	protected static bool OutwardClear(notnull KK_Opening opening)
+	{
+		foreach (KK_OpeningLeaf leaf : opening.m_aLeaves)
+		{
+			if (SwungAside(leaf))
+				return true;
+		}
+
+		return false;
+	}
+
+	// The long goal paths around the open panel. A step just inside the
+	// frame is the way through, until he is actually in.
+	protected static vector ReleaseTarget(
+		notnull KK_Opening opening,
+		vector origin,
+		AIPathfindingComponent pathfinding,
+		vector goal)
+	{
+		if (!OutwardClear(opening))
+			return goal;
+
+		if (ApproachDepth(opening, origin) < -0.35)
+			return goal;
+
+		for (int i = 0; i < 3; i++)
+		{
+			vector desired =
+				opening.m_vCenter -
+				(opening.m_vApproach * (0.85 + (i * 0.45)));
+
+			vector projected;
+			if (!Project(pathfinding, desired, projected))
+				continue;
+
+			if (ApproachDepth(opening, projected) < -0.2)
+				return projected;
+		}
+
+		return goal;
+	}
+
+	// An outward panel sits on the step after it opens. Character collision
+	// on that panel shoves him back along the only free direction.
+	protected static void SyncLeafCollision(notnull KK_Opening opening)
+	{
+		foreach (KK_OpeningLeaf leaf : opening.m_aLeaves)
+		{
+			if (!leaf)
+				continue;
+
+			if (SwungAside(leaf))
+				GhostLeaf(leaf);
+			else
+				RestoreLeaf(leaf);
+		}
+	}
+
+	protected static void GhostLeaf(notnull KK_OpeningLeaf leaf)
+	{
+		if (leaf.m_bLeafGhosted || !leaf.m_Entity)
+			return;
+
+		IEntity entity;
+		Physics physics = LeafPhysics(leaf.m_Entity, entity);
+		if (!physics || !entity)
+			return;
+
+		if (!leaf.m_aSavedGeoms)
+			leaf.m_aSavedGeoms = new array<int>();
+		else
+			leaf.m_aSavedGeoms.Clear();
+
+		leaf.m_GhostEntity = entity;
+		leaf.m_iSavedLayer = physics.GetInteractionLayer();
+
+		int count = physics.GetNumGeoms();
+		for (int i = 0; i < count; i++)
+			leaf.m_aSavedGeoms.Insert(physics.GetGeomInteractionLayer(i));
+
+		int stripped = DoorWithoutCharacters(leaf.m_iSavedLayer);
+		if (stripped != leaf.m_iSavedLayer)
+			physics.SetInteractionLayer(stripped);
+
+		for (int i = 0; i < count; i++)
+		{
+			int mask = leaf.m_aSavedGeoms[i];
+			int next = DoorWithoutCharacters(mask);
+			if (next != mask)
+				physics.SetGeomInteractionLayer(i, next);
+		}
+
+		leaf.m_bLeafGhosted = true;
+	}
+
+	protected static void RestoreLeaf(notnull KK_OpeningLeaf leaf)
+	{
+		if (!leaf.m_bLeafGhosted)
+			return;
+
+		leaf.m_bLeafGhosted = false;
+		if (!leaf.m_GhostEntity || !leaf.m_aSavedGeoms)
+			return;
+
+		Physics physics = leaf.m_GhostEntity.GetPhysics();
+		leaf.m_GhostEntity = null;
+		if (!physics)
+			return;
+
+		physics.SetInteractionLayer(leaf.m_iSavedLayer);
+
+		int count = physics.GetNumGeoms();
+		int savedCount = leaf.m_aSavedGeoms.Count();
+		if (savedCount < count)
+			count = savedCount;
+
+		for (int i = 0; i < count; i++)
+			physics.SetGeomInteractionLayer(i, leaf.m_aSavedGeoms[i]);
+	}
+
+	protected static Physics LeafPhysics(
+		notnull IEntity entity,
+		out IEntity owner)
+	{
+		owner = entity;
+		Physics physics = entity.GetPhysics();
+		if (physics)
+			return physics;
+
+		IEntity child = entity.GetChildren();
+		while (child)
+		{
+			physics = child.GetPhysics();
+			if (physics)
+			{
+				owner = child;
+				return physics;
+			}
+
+			child = child.GetSibling();
+		}
+
+		owner = null;
+		return null;
+	}
+
+	protected static int DoorWithoutCharacters(int mask)
+	{
+		int fire = mask & EPhysicsLayerDefs.FireGeometry;
+		int characterBits =
+			EPhysicsLayerDefs.Character | EPhysicsLayerDefs.CharacterAI;
+
+		if (
+			mask == EPhysicsLayerDefs.Character ||
+			mask == EPhysicsLayerDefs.CharacterAI ||
+			mask == EPhysicsLayerPresets.Character ||
+			mask == EPhysicsLayerPresets.CharacterAI
+		)
+		{
+			return EPhysicsLayerDefs.CharNoCollide | fire;
+		}
+
+		if ((mask & characterBits) == 0)
+			return mask;
+
+		mask &= ~characterBits;
+		mask |= fire;
+		if ((EPhysicsLayerDefs.CharNoCollide & characterBits) == 0)
+			mask |= EPhysicsLayerDefs.CharNoCollide;
+
+		if (mask == 0)
+			return EPhysicsLayerDefs.CharNoCollide | fire;
+
+		return mask;
 	}
 
 	protected static void RememberLeaf(
@@ -1293,7 +1500,7 @@ class KK_Passage
 			if (!leaf || !leaf.m_Door)
 				continue;
 
-			if (leaf.m_Door.IsOpen())
+			if (leaf.m_Door.IsOpen() || SwungAside(leaf))
 				continue;
 
 			if (!leaf.m_Door.CanCharacterPass(PASS_WIDTH))

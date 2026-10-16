@@ -631,13 +631,23 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 			if (!insideBuilding)
 			{
-				IEntity doorEntity = assignment.m_DoorEntity;
-				waitingOnDoor = KK_DoorAssist.Handle(
-					assignment.m_Agent,
-					AssignmentMoveGoal(assignment),
-					doorEntity
-				);
-				assignment.m_DoorEntity = doorEntity;
+				// Passage already opens the door and steps him back.
+				// A second UseDoorAction toggles the leaf shut on the step.
+				if (passageOn)
+				{
+					if (havePassage)
+						passageHold = passageOrder.m_bHoldTimers;
+				}
+				else
+				{
+					IEntity doorEntity = assignment.m_DoorEntity;
+					waitingOnDoor = KK_DoorAssist.Handle(
+						assignment.m_Agent,
+						AssignmentMoveGoal(assignment),
+						doorEntity
+					);
+					assignment.m_DoorEntity = doorEntity;
+				}
 			}
 			else if (havePassage)
 			{

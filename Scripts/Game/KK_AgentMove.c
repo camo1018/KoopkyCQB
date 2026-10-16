@@ -20,6 +20,14 @@ class KK_AgentMove
 
 	static const float REISSUE_INTERVAL_MS = 2000.0;
 
+	protected static const float OBSTACLE_TRACE = 0.5;
+	// Above a climb, and still into a building wall.
+	protected static const float OBSTACLE_OVER = 3.0;
+	protected static const float OBSTACLE_THICK = 1.4;
+	protected static const float OBSTACLE_LANDING = 1.35;
+
+	protected static ref TraceParam s_ObstacleTrace;
+
 	// MoveIndividually adds the priority level to its base of 58.
 	// Attack-high is the emergent-threat attack, at 120 plus player level.
 	// One below that still beats every normal attack, heal, and observe.
@@ -84,7 +92,10 @@ class KK_AgentMove
 		if (KK_GarrisonHold.HealingNow(agent))
 			return;
 
-		position = OnNavmesh(group, position);
+		if (CrossingObstacle(agent))
+			return;
+
+		position = CommitPastObstacle(group, agent, position);
 
 		SCR_AIMessage_Move message = SCR_AIMessage_Move.Create(
 			null,
@@ -157,6 +168,9 @@ class KK_AgentMove
 		if (KK_GarrisonHold.HealingNow(agent))
 			return;
 
+		if (CrossingObstacle(agent))
+			return;
+
 		AICharacterMovementComponent movement =
 			AICharacterMovementComponent.Cast(
 				agent.FindComponent(AICharacterMovementComponent)
@@ -178,7 +192,153 @@ class KK_AgentMove
 		if (!movement)
 			return;
 
+		if (movement.GetMovementTypeWanted() == movementType)
+			return;
+
 		movement.SetMovementTypeWanted(movementType);
+	}
+
+	// A hop and a climb are the same command. It stays up through the
+	// landing. STATE_FINISH is the handoff back to a normal move.
+	static bool CrossingObstacle(notnull AIAgent agent)
+	{
+		IEntity body = agent.GetControlledEntity();
+		if (!body)
+			return false;
+
+		CharacterCommandHandlerComponent handler =
+			CharacterCommandHandlerComponent.Cast(
+				body.FindComponent(CharacterCommandHandlerComponent)
+			);
+		if (!handler)
+			return false;
+
+		CharacterCommandClimb climb = handler.GetCommandClimb();
+		if (!climb)
+			return false;
+
+		return climb.GetState() != ClimbStates.STATE_FINISH;
+	}
+
+	// A goal on the far lip of a vault or a climb lands inside the obstacle,
+	// and he drops back on the near side. The landing is a body-length past
+	// the far face. A building wall is taller than a climb, so it is left.
+	protected static vector CommitPastObstacle(
+		SCR_AIGroup group,
+		notnull AIAgent agent,
+		vector position)
+	{
+		IEntity body = agent.GetControlledEntity();
+		BaseWorld world = GetGame().GetWorld();
+		if (!body || !world || !group)
+			return OnNavmesh(group, position);
+
+		vector origin = body.GetOrigin();
+		vector toGoal = position - origin;
+		toGoal[1] = 0;
+		float distance = toGoal.Length();
+		if (distance < 2.0 || distance > 45)
+			return OnNavmesh(group, position);
+
+		toGoal.Normalize();
+		float far;
+		if (!ObstacleFarFace(world, body, origin, toGoal, distance, far))
+			return OnNavmesh(group, position);
+
+		float past = distance - far;
+		if (past >= OBSTACLE_LANDING + 0.25)
+			return OnNavmesh(group, position);
+
+		float landing = far + OBSTACLE_LANDING;
+		vector desired = origin + (toGoal * landing);
+		desired[1] = position[1];
+		vector landed = OnNavmesh(group, desired);
+		float landedPast = vector.Dot(landed - origin, toGoal) - far;
+		if (landedPast < 0.9)
+		{
+			desired = origin + (toGoal * (far + OBSTACLE_LANDING + 0.6));
+			desired[1] = position[1];
+			landed = OnNavmesh(group, desired);
+			landedPast = vector.Dot(landed - origin, toGoal) - far;
+		}
+
+		if (landedPast < 0.9)
+			return OnNavmesh(group, position);
+
+		return landed;
+	}
+
+	// Thin, and clear above it. Fences, rails, and walls he can climb.
+	protected static bool ObstacleFarFace(
+		notnull BaseWorld world,
+		notnull IEntity body,
+		vector origin,
+		vector direction,
+		float distance,
+		out float far)
+	{
+		far = 0;
+		if (!s_ObstacleTrace)
+			s_ObstacleTrace = new TraceParam();
+
+		vector lowStart = origin + Vector(0, OBSTACLE_TRACE, 0);
+		s_ObstacleTrace.Flags = TraceFlags.WORLD | TraceFlags.ENTS;
+		s_ObstacleTrace.Exclude = body;
+		s_ObstacleTrace.Start = lowStart;
+		s_ObstacleTrace.End = lowStart + (direction * distance);
+
+		float low = world.TraceMove(s_ObstacleTrace, FilterObstacle);
+		if (low >= 0.98)
+			return false;
+
+		float near = low * distance;
+		vector overStart = origin + Vector(0, OBSTACLE_OVER, 0);
+		s_ObstacleTrace.Start = overStart;
+		s_ObstacleTrace.End = overStart + (direction * distance);
+		float over = world.TraceMove(s_ObstacleTrace, FilterObstacle);
+		if (over * distance < near + 0.8)
+			return false;
+
+		float cursor = near + 0.15;
+		float limit = near + OBSTACLE_THICK;
+		while (cursor < limit)
+		{
+			s_ObstacleTrace.Start = lowStart + (direction * cursor);
+			s_ObstacleTrace.End = s_ObstacleTrace.Start + (direction * 0.3);
+			float step = world.TraceMove(s_ObstacleTrace, FilterObstacle);
+			if (step >= 0.98)
+			{
+				far = cursor;
+				return true;
+			}
+
+			cursor += 0.3;
+		}
+
+		return false;
+	}
+
+	protected static bool FilterObstacle(
+		IEntity entity,
+		vector start = "0 0 0",
+		vector dir = "0 0 0")
+	{
+		IEntity current = entity;
+		int depth;
+
+		while (current && depth < 6)
+		{
+			if (ChimeraCharacter.Cast(current))
+				return false;
+
+			if (current.FindComponent(BaseDoorComponent))
+				return false;
+
+			current = current.GetParent();
+			depth++;
+		}
+
+		return true;
 	}
 
 	static void ReleaseHandlers(

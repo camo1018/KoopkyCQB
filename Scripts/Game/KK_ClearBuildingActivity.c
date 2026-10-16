@@ -3342,6 +3342,9 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 		// Rebuilding the spare every pass was broadcasting a new path to the
 		// same point and the soldier stuttered instead of walking it.
+		if (KK_AgentMove.CrossingObstacle(agent))
+			return;
+
 		if (!force && sameGoal && recent)
 		{
 			KK_AgentMove.SetWantedSpeed(agent, movementType);
