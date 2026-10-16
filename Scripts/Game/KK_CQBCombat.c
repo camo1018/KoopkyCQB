@@ -701,6 +701,12 @@ class KK_GarrisonHold
 	// Milliseconds the next shot check was scheduled with.
 	protected static int s_iShotTickMs;
 	protected static bool s_bShotTicking;
+	// Bodies whose trigger stays down between shot checks. The check decides
+	// to fire. Other behaviors clear the flag, and a full-auto gun was then
+	// limited to one shot each time the check wrote it again.
+	protected static ref set<IEntity> s_TriggerHeld = new set<IEntity>();
+	protected static ref array<IEntity> s_TriggerBodies = new array<IEntity>();
+	protected static bool s_bTriggerPumping;
 	protected static const float ROOM_SCAN_RADIUS = 35;
 	protected static const int SHOT_CANDIDATES = 8;
 	protected static const float LEAN_OFFSET = 0.4;
@@ -1376,7 +1382,7 @@ class KK_GarrisonHold
 			return;
 
 		s_PrimarySwitchAt.Set(body, now);
-		controller.SetFireWeaponWanted(false);
+		SetFireWanted(body, false);
 		SCR_AIWeaponHandling.StartWeaponSwitchCharacter(controller, primary);
 	}
 
@@ -1407,7 +1413,7 @@ class KK_GarrisonHold
 		}
 
 		s_PrimarySwitchAt.Set(body, now);
-		controller.SetFireWeaponWanted(false);
+		SetFireWanted(body, false);
 		SCR_AIWeaponHandling.StartWeaponSwitchCharacter(controller, weapon);
 	}
 
@@ -1830,7 +1836,7 @@ class KK_GarrisonHold
 
 		BaseMagazineComponent loaded = LoadedMagazine(body);
 		bool forceDetach = loaded && loaded.GetAmmoCount() > 0;
-		controller.SetFireWeaponWanted(false);
+		SetFireWanted(body, false);
 		s_MoveFiring.RemoveItem(body);
 		if (controller.ReloadWeaponWith(spare, forceDetach))
 		{
@@ -2240,9 +2246,9 @@ class KK_GarrisonHold
 	{
 
 		CharacterControllerComponent controller = Controller(body);
+		SetFireWanted(body, false);
 		if (controller)
 		{
-			controller.SetFireWeaponWanted(false);
 			if (!attack)
 				controller.SetMeleeAttack(false);
 			else if (!controller.IsMeleeAttack())
@@ -7715,9 +7721,89 @@ class KK_GarrisonHold
 
 	protected static void SetFireWanted(IEntity body, bool wanted)
 	{
+		if (!body)
+			return;
+
+		if (wanted)
+		{
+			s_TriggerHeld.Insert(body);
+			WriteFireWanted(body, true);
+			EnsureTriggerPump();
+			return;
+		}
+
+		s_TriggerHeld.RemoveItem(body);
+		WriteFireWanted(body, false);
+	}
+
+	protected static void WriteFireWanted(IEntity body, bool wanted)
+	{
 		CharacterControllerComponent controller = Controller(body);
 		if (controller)
 			controller.SetFireWeaponWanted(wanted);
+	}
+
+	// The weapon spaces its own rounds. This only puts the trigger back
+	// after something else cleared it, until the next shot check lets go.
+	protected static void EnsureTriggerPump()
+	{
+		if (s_bTriggerPumping || !GetGame())
+			return;
+
+		s_bTriggerPumping = true;
+		GetGame().GetCallqueue().CallLater(TriggerPump, 0, false);
+	}
+
+	static void TriggerPump()
+	{
+		if (!GetGame() || s_TriggerHeld.Count() == 0)
+		{
+			s_bTriggerPumping = false;
+			return;
+		}
+
+		s_TriggerBodies.Clear();
+		foreach (IEntity held : s_TriggerHeld)
+			s_TriggerBodies.Insert(held);
+
+		foreach (IEntity body : s_TriggerBodies)
+		{
+			if (!body || !s_TriggerHeld.Contains(body))
+			{
+				s_TriggerHeld.RemoveItem(body);
+				continue;
+			}
+
+			if (TriggerShouldDrop(body))
+			{
+				s_TriggerHeld.RemoveItem(body);
+				WriteFireWanted(body, false);
+				continue;
+			}
+
+			WriteFireWanted(body, true);
+		}
+
+		if (s_TriggerHeld.Count() == 0 || !GetGame())
+		{
+			s_bTriggerPumping = false;
+			return;
+		}
+
+		GetGame().GetCallqueue().CallLater(TriggerPump, 0, false);
+	}
+
+	protected static bool TriggerShouldDrop(IEntity body)
+	{
+		CharacterControllerComponent controller = Controller(body);
+		if (!controller || controller.IsDead() || controller.IsChangingItem() || IsDown(body))
+			return true;
+
+		return GunIsDry(body) ||
+			IsEmptyReload(body) ||
+			SprintBeforeReload(body) ||
+			s_ReloadBash.Contains(body) ||
+			HoldingThrowable(body);
 	}
 
 	protected static CharacterControllerComponent Controller(IEntity body)
