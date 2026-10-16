@@ -181,6 +181,8 @@ modded class SCR_AICombatComponent
 		out bool outRetreatTargetChanged,
 		out bool outCompartmentChanged)
 	{
+		KK_GarrisonHold.TickCustomHeal(GetOwner());
+
 		if (KK_GarrisonHold.IsIgnoringTargets(GetOwner()))
 		{
 			KK_ClearTarget();
@@ -3648,6 +3650,22 @@ class KK_GarrisonHold
 
 	protected static const float CLEAR_HEAL_HOLD_MS = 30000;
 
+	protected static ref map<IEntity, float> s_NextHealAt = new map<IEntity, float>();
+
+	// The item whose gesture is playing. Absent means he is not in one.
+	protected static ref map<IEntity, IEntity> s_HealGestureItem = new map<IEntity, IEntity>();
+
+	protected static ref map<IEntity, float> s_HealGestureAt = new map<IEntity, float>();
+
+	protected static ref set<IEntity> s_HealGestureSeen = new set<IEntity>();
+
+	protected static ref set<IEntity> s_HealFootLock = new set<IEntity>();
+
+	// No usable item. He is not held in the heal pose until this time.
+	protected static ref map<IEntity, float> s_HealEmptyUntil = new map<IEntity, float>();
+
+	protected static ref array<IEntity> s_HealItems = new array<IEntity>();
+
 	// Clearing a house, or holding one. Attack uses neither of these.
 	static bool OnHouseOrder(IEntity soldier)
 	{
@@ -3773,21 +3791,315 @@ class KK_GarrisonHold
 		return true;
 	}
 
-	// A clear that has not finished its cluster. Garrison is not in this.
+	// Vanilla heal stays off while a clear is still in the room, and while
+	// our own treatment is the thing using his medical items.
 	static bool ClearHealSuppressed(SCR_AIUtilityComponent utility)
 	{
 		IEntity body = UtilityBody(utility);
-		if (!OnClearOrder(body))
-			return false;
+		if (OnClearOrder(body) && !ClearHealOpen(body))
+			return true;
 
-		return !ClearHealOpen(body);
+		return CustomHealAllowed(body);
 	}
 
-	// The room is clear and he still needs the bandage. That outranks the
-	// next push.
+	// Our gesture is the bandage. The vanilla action would start a second
+	// one, and the two cut each other off.
 	static bool ClearHealBoost(SCR_AIUtilityComponent utility)
 	{
-		return ClearHealOpen(UtilityBody(utility));
+		return false;
+	}
+
+	// Hurt, and not still clearing the room he is in. A live cluster
+	// finishes first. Anywhere else, a wound is treated as soon as he
+	// has an item for it.
+	static bool CustomHealAllowed(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!NeedsMedical(body))
+			return false;
+
+		if (OnClearOrder(body) && !ClearHealOpen(body))
+			return false;
+
+		return true;
+	}
+
+	static void TickCustomHeal(IEntity soldier)
+	{
+		if (!Replication.IsServer())
+			return;
+
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		if (s_HealGestureItem.Contains(body))
+		{
+			WatchHealGesture(body);
+			return;
+		}
+
+		float now = WorldTime();
+		if (s_NextHealAt.Contains(body) && now < s_NextHealAt.Get(body))
+			return;
+
+		if (!CustomHealAllowed(body))
+		{
+			ReleaseHealHold(body);
+			return;
+		}
+
+		HoldForHeal(body);
+
+		CharacterControllerComponent controller = Controller(body);
+		if (!controller)
+			return;
+
+		// The gesture will not start while the rifle is up, a swap is
+		// playing, or he is still in the run. Wait for those to finish.
+		if (
+			controller.IsWeaponRaised() ||
+			controller.IsWeaponADS() ||
+			controller.IsChangingItem() ||
+			controller.IsReloading() ||
+			controller.IsSprinting() ||
+			controller.IsUsingItem()
+		)
+		{
+			return;
+		}
+
+		IEntity item = FindMedicalItem(body);
+		if (!item)
+		{
+			// Nothing he is carrying can treat this. Holding the pose
+			// will not grow a bandage.
+			ReleaseHealHold(body);
+			s_HealEmptyUntil.Set(body, now + 2000);
+			s_NextHealAt.Set(body, now + 2000);
+			if (OnClearOrder(body))
+				CloseClearHeal(body);
+			return;
+		}
+
+		s_HealEmptyUntil.Remove(body);
+		if (!StartMedicalGesture(body, item))
+		{
+			s_NextHealAt.Set(body, now + 400);
+			return;
+		}
+
+		s_HealGestureItem.Set(body, item);
+		s_HealGestureAt.Set(body, now);
+		s_HealGestureSeen.RemoveItem(body);
+	}
+
+	// The gesture owns him until the item use ends. A second start
+	// while it is playing cuts the first one off.
+	protected static void WatchHealGesture(IEntity body)
+	{
+		HoldForHeal(body);
+
+		CharacterControllerComponent controller = Controller(body);
+		if (!controller)
+			return;
+
+		float now = WorldTime();
+		float started = 0;
+		if (s_HealGestureAt.Contains(body))
+			started = s_HealGestureAt.Get(body);
+
+		if (controller.IsUsingItem())
+		{
+			s_HealGestureSeen.Insert(body);
+			return;
+		}
+
+		// Taking the bandage out is still the gesture.
+		if (controller.IsChangingItem())
+			return;
+
+		if (!s_HealGestureSeen.Contains(body) && now - started < 800)
+			return;
+
+		s_HealGestureItem.Remove(body);
+		s_HealGestureAt.Remove(body);
+		s_HealGestureSeen.RemoveItem(body);
+
+		// A short gap so the next item does not cut the recover.
+		s_NextHealAt.Set(body, now + 400);
+	}
+
+	// Bandage or tourniquet while he is bleeding. A health item once
+	// the bleed is dealt with, or when the wound is only missing health.
+	protected static IEntity FindMedicalItem(IEntity body)
+	{
+		SCR_InventoryStorageManagerComponent inventory =
+			SCR_InventoryStorageManagerComponent.Cast(
+				body.FindComponent(SCR_InventoryStorageManagerComponent)
+			);
+		if (!inventory)
+			return null;
+
+		s_HealItems.Clear();
+		inventory.GetItems(s_HealItems);
+
+		bool bleeding = false;
+		SCR_CharacterDamageManagerComponent damage =
+			SCR_CharacterDamageManagerComponent.Cast(
+				body.FindComponent(SCR_CharacterDamageManagerComponent)
+			);
+		if (damage)
+			bleeding = damage.IsBleeding();
+
+		IEntity best;
+		int bestRank = 0;
+		foreach (IEntity item : s_HealItems)
+		{
+			if (!item)
+				continue;
+
+			SCR_ConsumableItemComponent consumable =
+				SCR_ConsumableItemComponent.Cast(
+					item.FindComponent(SCR_ConsumableItemComponent)
+				);
+			if (!consumable)
+				continue;
+
+			SCR_ConsumableEffectHealthItems effect =
+				SCR_ConsumableEffectHealthItems.Cast(consumable.GetConsumableEffect());
+			if (!effect)
+				continue;
+
+			int rank = MedicalRank(consumable.GetConsumableType(), bleeding);
+			if (rank <= 0)
+				continue;
+
+			if (best && rank >= bestRank)
+				continue;
+
+			SCR_EConsumableFailReason reason;
+			if (!effect.CanApplyEffect(body, body, reason))
+				continue;
+
+			if (!effect.GetAnimationParameters(item, body))
+				continue;
+
+			best = item;
+			bestRank = rank;
+		}
+
+		return best;
+	}
+
+	protected static int MedicalRank(SCR_EConsumableType type, bool bleeding)
+	{
+		if (bleeding)
+		{
+			if (type == SCR_EConsumableType.BANDAGE)
+				return 1;
+
+			if (type == SCR_EConsumableType.TOURNIQUET)
+				return 2;
+
+			if (type == SCR_EConsumableType.MED_KIT)
+				return 3;
+		}
+
+		if (type == SCR_EConsumableType.SALINE)
+			return 4;
+
+		if (type == SCR_EConsumableType.MED_KIT)
+			return 5;
+
+		if (type == SCR_EConsumableType.HEALTH)
+			return 6;
+
+		return 0;
+	}
+
+	// Starts the consumable gesture. The effect lands when that gesture
+	// finishes. Applying it here would skip the animation.
+	protected static bool StartMedicalGesture(IEntity body, IEntity item)
+	{
+		if (!body || !item)
+			return false;
+
+		SCR_ConsumableItemComponent consumable =
+			SCR_ConsumableItemComponent.Cast(
+				item.FindComponent(SCR_ConsumableItemComponent)
+			);
+		if (!consumable)
+			return false;
+
+		SCR_ConsumableEffectHealthItems effect =
+			SCR_ConsumableEffectHealthItems.Cast(consumable.GetConsumableEffect());
+		if (!effect)
+			return false;
+
+		return effect.ActivateEffect(body, body, item, null);
+	}
+
+	// True while he should be bandaging, or a gesture is already playing.
+	// An empty inventory does not count, or he would stand in the pose
+	// with nothing to use.
+	static bool HealingNow(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return false;
+
+		if (s_HealGestureItem.Contains(body))
+			return true;
+
+		float now = WorldTime();
+		if (s_HealEmptyUntil.Contains(body) && now < s_HealEmptyUntil.Get(body))
+			return false;
+
+		return CustomHealAllowed(body);
+	}
+
+	// Rifle down, feet stopped. Repeated while the gesture plays so a
+	// later move or raise does not cut it off.
+	static void HoldForHeal(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		LeaveWeaponForHeal(body);
+
+		CharacterControllerComponent controller = Controller(body);
+		if (controller && controller.IsWeaponADS())
+			controller.SetWeaponADS(false);
+
+		if (controller && !s_HealFootLock.Contains(body))
+		{
+			s_HealFootLock.Insert(body);
+			controller.OverrideMaxSpeed(0);
+		}
+
+		AICharacterMovementComponent movement =
+			AICharacterMovementComponent.Cast(
+				body.FindComponent(AICharacterMovementComponent)
+			);
+		if (movement)
+			movement.SetMovementTypeWanted(EMovementType.IDLE);
+	}
+
+	static void ReleaseHealHold(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !s_HealFootLock.Contains(body))
+			return;
+
+		s_HealFootLock.RemoveItem(body);
+		if (IsPinned(body))
+			return;
+
+		CharacterControllerComponent controller = Controller(body);
+		if (controller)
+			controller.OverrideMaxSpeed(1);
 	}
 
 	// A bandage needs the hands. Drawing the gun, or holding it up,
@@ -3798,7 +4110,7 @@ class KK_GarrisonHold
 		if (!body)
 			return false;
 
-		if (ClearHealOpen(body))
+		if (HealingNow(body))
 			return true;
 
 		return HealBehaviorRunning(body);
@@ -8808,6 +9120,18 @@ modded class SCR_AICombatMoveLogicBase
 		if (owner)
 			body = owner.GetControlledEntity();
 
+		if (KK_GarrisonHold.HealingNow(body) || KK_GarrisonHold.HealingNow(owner))
+		{
+			if (m_State && m_State.IsExecutingRequest())
+				m_State.CancelRequest();
+
+			IEntity healer = body;
+			if (!healer)
+				healer = owner;
+			KK_GarrisonHold.HoldForHeal(healer);
+			return ENodeResult.RUNNING;
+		}
+
 		// The route is the move for the whole clear or garrison, outside
 		// as well. A combat-move step is the strafe.
 		if (
@@ -9030,9 +9354,9 @@ modded class SCR_AIObserveThreatSystemBehavior
 	}
 }
 
-// Self heal, and waiting on a medic. Both outrank the clear move once
-// the man is hurt. The cluster finishes first. The cleared room is
-// where the bandage happens, and then it outranks the next push.
+// Vanilla self heal, medic, and waiting on a medic. A clear that is
+// still inside the room keeps them off. Once our treatment is running
+// they stay off too, or the gesture and the item apply fight.
 modded class SCR_AIHealBehavior
 {
 	override float CustomEvaluate()
@@ -9737,6 +10061,9 @@ modded class SCR_AIMoveIndividuallyBehavior
 		if (PlantHoldsFeet())
 			return 0;
 
+		if (HealHoldsFeet())
+			return 0;
+
 		float score = super.CustomEvaluate();
 		if (!m_Utility)
 			return score;
@@ -9783,6 +10110,31 @@ modded class SCR_AIMoveIndividuallyBehavior
 		if (movement)
 			movement.SetMovementTypeWanted(EMovementType.IDLE);
 
+		return true;
+	}
+
+	// The route move outranks a heal. While a bandage gesture is owed,
+	// that move has to step aside or the run cuts the animation off.
+	protected bool HealHoldsFeet()
+	{
+		if (!m_Utility)
+			return false;
+
+		IEntity body = m_Utility.m_OwnerEntity;
+		bool healing =
+			KK_GarrisonHold.HealingNow(body) ||
+			KK_GarrisonHold.HealingNow(m_Utility.GetOwner());
+		if (!healing)
+			return false;
+
+		if (!body)
+		{
+			AIAgent agent = AIAgent.Cast(m_Utility.GetOwner());
+			if (agent)
+				body = agent.GetControlledEntity();
+		}
+
+		KK_GarrisonHold.HoldForHeal(body);
 		return true;
 	}
 }

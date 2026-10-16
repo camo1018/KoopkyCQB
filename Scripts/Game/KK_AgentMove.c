@@ -81,6 +81,9 @@ class KK_AgentMove
 		EMovementType movementType = EMovementType.RUN)
 	{
 		ClaimSoloHandler(group, agent, soloHandlers);
+		if (KK_GarrisonHold.HealingNow(agent))
+			return;
+
 		position = OnNavmesh(group, position);
 
 		SCR_AIMessage_Move message = SCR_AIMessage_Move.Create(
@@ -151,6 +154,9 @@ class KK_AgentMove
 		notnull AIAgent agent,
 		EMovementType movementType)
 	{
+		if (KK_GarrisonHold.HealingNow(agent))
+			return;
+
 		AICharacterMovementComponent movement =
 			AICharacterMovementComponent.Cast(
 				agent.FindComponent(AICharacterMovementComponent)

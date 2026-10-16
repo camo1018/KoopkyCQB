@@ -562,6 +562,14 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					timerDelta = 0;
 				assignment.m_fLastTimerUpdate = currentTime;
 
+				if (KK_GarrisonHold.HealingNow(assignment.m_Agent))
+				{
+					assignment.m_fStartedAt += timerDelta;
+					assignment.m_fStillSince = currentTime;
+					KK_GarrisonHold.HoldForHeal(assignment.m_Agent);
+					continue;
+				}
+
 				// Alert after the body is gone is not a firefight. A living
 				// target still pauses the clocks for a short grace after
 				// the trace breaks. The threat bar stays up much longer

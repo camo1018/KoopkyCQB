@@ -530,6 +530,18 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				continue;
 			}
 
+			if (KK_GarrisonHold.HealingNow(assignment.m_Agent))
+			{
+				float healDelta = currentTime - assignment.m_fLastTimerUpdate;
+				if (healDelta < 0)
+					healDelta = 0;
+				assignment.m_fLastTimerUpdate = currentTime;
+				assignment.m_fStartedAt += healDelta;
+				assignment.m_fStillSince = currentTime;
+				KK_GarrisonHold.HoldForHeal(assignment.m_Agent);
+				continue;
+			}
+
 			vector unitPosition = controlledEntity.GetOrigin();
 			vector moveGoal = AssignmentMoveGoal(assignment);
 			bool onFinalGoal = KK_AuthoredRouteHelper.IsOnFinalGoal(
