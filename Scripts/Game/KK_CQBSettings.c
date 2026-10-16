@@ -188,6 +188,9 @@ modded class SCR_BaseGameMode
 	[Attribute("75", UIWidgets.EditBox, "How often a clearing or garrison soldier inside a building checks for a shot (ms). 50 to 100.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_ShotInterval;
 
+	[Attribute("2", UIWidgets.EditBox, "Soldiers checked for a shot in one frame. 0 checks everyone who is due, which is the old single wake.", category: "Koopky CQB/Combat")]
+	protected float m_fKK_ShotMenPerTick;
+
 	[Attribute("30", UIWidgets.EditBox, "Top off once the loaded magazine is under this percent, after the enemy has stayed out of sight. An empty gun still reloads immediately.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_ReloadRemainder;
 
@@ -417,6 +420,8 @@ modded class SCR_BaseGameMode
 			KK_ReadFloat(context, "LostContactLook", m_fKK_LostContactLook);
 			KK_ReadFloat(context, "ShotInterval", m_fKK_ShotInterval);
 			m_fKK_ShotInterval = KK_ClampShotInterval(m_fKK_ShotInterval);
+			KK_ReadFloat(context, "ShotMenPerTick", m_fKK_ShotMenPerTick);
+			m_fKK_ShotMenPerTick = KK_ClampShotMenPerTick(m_fKK_ShotMenPerTick);
 			KK_ReadFloat(context, "ReloadRemainder", m_fKK_ReloadRemainder);
 			KK_ReadFloat(context, "OutOfSight", m_fKK_OutOfSight);
 			KK_ReadBool(context, "ReloadCover", m_bKK_ReloadCover);
@@ -607,6 +612,7 @@ modded class SCR_BaseGameMode
 		context.WriteValue("BarrelCool", KK_GetBarrelCool());
 		context.WriteValue("LostContactLook", KK_GetLostContactLook());
 		context.WriteValue("ShotInterval", KK_GetShotInterval());
+		context.WriteValue("ShotMenPerTick", KK_GetShotMenPerTick());
 		context.WriteValue("ReloadRemainder", m_fKK_ReloadRemainder);
 		context.WriteValue("OutOfSight", m_fKK_OutOfSight);
 		context.WriteValue("ReloadCover", m_bKK_ReloadCover);
@@ -905,6 +911,11 @@ modded class SCR_BaseGameMode
 		return KK_ClampShotInterval(m_fKK_ShotInterval);
 	}
 
+	int KK_GetShotMenPerTick()
+	{
+		return (int)KK_ClampShotMenPerTick(m_fKK_ShotMenPerTick);
+	}
+
 	// 0 to 1. 0.3 means the loaded magazine is under 30 percent.
 	float KK_GetReloadRemainder()
 	{
@@ -1113,6 +1124,7 @@ modded class SCR_BaseGameMode
 	void KK_SetBarrelCool(float value) { m_fKK_BarrelCool = Math.Max(value, 0); }
 	void KK_SetLostContactLook(float value) { m_fKK_LostContactLook = Math.Max(value, 0); }
 	void KK_SetShotInterval(float value) { m_fKK_ShotInterval = KK_ClampShotInterval(value); }
+	void KK_SetShotMenPerTick(float value) { m_fKK_ShotMenPerTick = KK_ClampShotMenPerTick(value); }
 	void KK_SetReloadRemainder(float value)
 	{
 		if (value < 0)
@@ -1149,6 +1161,17 @@ modded class SCR_BaseGameMode
 			return 100;
 
 		return value;
+	}
+
+	protected float KK_ClampShotMenPerTick(float value)
+	{
+		if (value < 0)
+			return 0;
+
+		if (value > 24)
+			return 24;
+
+		return Math.Round(value);
 	}
 	void KK_SetPerceptionFactor(float value) { m_fKK_PerceptionFactor = value; }
 	void KK_SetOpenDoors(bool value) { m_bKK_OpenDoors = value; }

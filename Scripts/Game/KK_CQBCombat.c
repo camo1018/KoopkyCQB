@@ -886,8 +886,6 @@ class KK_GarrisonHold
 	// When this tick last ran him. Due men are spread across frames.
 	protected static ref map<IEntity, float> s_ShotServedAt =
 		new map<IEntity, float>();
-	// Men run in one wake. The rest of a crowded pass waits a frame.
-	protected static const int SHOT_MEN_PER_TICK = 2;
 	// Last interval found him with a full search. This interval keeps him
 	// when the center ray still hits, and the interval after searches again.
 	protected static ref set<IEntity> s_MayHoldShot = new set<IEntity>();
@@ -3881,6 +3879,16 @@ class KK_GarrisonHold
 		return (int)Math.Round(mode.KK_GetShotInterval());
 	}
 
+	// 0 runs every due man in the one wake.
+	static int ShotMenPerTick()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return 2;
+
+		return mode.KK_GetShotMenPerTick();
+	}
+
 	// An enemy inside this building. The shot owns his facing, even when
 	// the threat state has dropped below alerted.
 	static bool FightingInside(IEntity soldier)
@@ -4896,7 +4904,8 @@ class KK_GarrisonHold
 
 	// Soldiers on a clear or garrison stay in the building map, including
 	// while they are still outside. The tick drops itself once that map
-	// is empty. A wake runs two due men. A longer pass continues next frame.
+	// is empty. A wake runs the configured number of due men. A longer
+	// pass continues next frame. 0 runs every due man in that wake.
 	protected static void EnsureShotTick()
 	{
 		if (s_bShotTicking || s_Buildings.Count() == 0 || !GetGame())
@@ -4961,9 +4970,10 @@ class KK_GarrisonHold
 		}
 
 		int ran = 0;
+		int budget = ShotMenPerTick();
 		foreach (IEntity body : s_ShotBodies)
 		{
-			if (ran >= SHOT_MEN_PER_TICK)
+			if (budget > 0 && ran >= budget)
 				break;
 
 			SCR_AIUtilityComponent utility = UtilityOf(body);
