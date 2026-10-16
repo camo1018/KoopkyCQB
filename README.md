@@ -67,6 +67,8 @@ While a soldier is clearing, garrisoning, or attacking, **Recognition speed** re
 
 **Shot check** is how often he looks, in milliseconds, from 50 to 100. It is 75 by default. **Shot delay** is how long that clear sight has to last before the round, in milliseconds, from 0 to 2000. It is 150 by default. 0 fires on the next check. **Shot delay by skill** is on by default. A noob waits four times the delay, a rookie twice, a veteran half, an expert a quarter, and a cylon does not wait. Off uses the delay for every skill. If only a step to his left or right can see the enemy, he leans that way and shoots from the peek. The rifle stays up on a clear while the room gun is aimed.
 
+**Aim point** is where that rifle goes. **Chest, then head** is the default: the upper chest, and the head when the chest is behind cover. **Head, then chest** does the reverse. **Chest** and **Head** stay on that point, with no fallback when it is behind cover. **Random** picks chest or head for each man and keeps that point.
+
 **Snap aim** is experimental and off by default. While he is aiming at a man inside CQB range, it snaps heading and weapon aim onto that point instead of turning at the normal rate. A man past that range is not snapped. **Snap aim error** is on by default. It scatters that point by skill, distance, weapon, and light. A regular misses by about 1.25 degrees, and a lower skill opens that up. The same angle is a larger miss farther out.
 
 **Barrel try** is how long he keeps shooting a man who has taken none of his damage (1 s by default). A round from someone else does not count. Then he leaves that spot and takes the route up again. **Barrel cool off** is how long that move lasts before he will plant and shoot from the next spot (2 s by default).

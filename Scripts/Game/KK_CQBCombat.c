@@ -634,6 +634,12 @@ class KK_GarrisonHold
 		new map<IEntity, float>();
 	protected static ref map<IEntity, IEntity> s_SnapErrorEnemy =
 		new map<IEntity, IEntity>();
+	// Random aim picks chest or head once per man. A new roll each frame
+	// would saw the rifle between the two.
+	protected static ref map<IEntity, IEntity> s_AimPickEnemy =
+		new map<IEntity, IEntity>();
+	protected static ref map<IEntity, int> s_AimPick =
+		new map<IEntity, int>();
 	protected static ref map<IEntity, float> s_SnapLogAt =
 		new map<IEntity, float>();
 	protected static const float SNAP_AIM_ERROR_MS = 400;
@@ -688,9 +694,8 @@ class KK_GarrisonHold
 	protected static const float LEAN_OFFSET = 0.4;
 	// Origin is the feet. A look at that point from arm's length points the rifle down.
 	protected static const float SHOT_AIM_HEIGHT = 1.5;
-	// Upper chest first. The head is used only when the chest is behind cover.
-	// The head point is the skull, not the eyes. Spine2 sits on the abdomen,
-	// and from a muzzle above it a close shot pitches down into the stomach.
+	// Upper chest. Spine2 sits on the abdomen, and from a muzzle above it a
+	// close shot pitches down into the stomach. The head point is the skull.
 	protected static const float CHEST_AIM_HEIGHT = 1.4;
 	protected static const float HEAD_AIM_HEIGHT = 1.5;
 	// Long enough that a fight does not reissue the look and restart the turn.
@@ -6444,25 +6449,97 @@ class KK_GarrisonHold
 
 	static vector ShotAimPoint(IEntity shooter, IEntity enemy)
 	{
+		if (!enemy)
+			return vector.Zero;
+
+		int mode = AimMode();
+		if (mode == KK_EAimMode.RANDOM)
+			mode = LatchedAim(shooter, enemy);
+
 		vector chest = ChestPoint(enemy);
-		if (!shooter || chest == vector.Zero)
-			return chest;
-
 		vector head = HeadPoint(enemy);
-		if (PointVisible(shooter, enemy, chest))
-			return chest;
+		if (mode == KK_EAimMode.HEAD)
+		{
+			if (head == vector.Zero)
+				return chest;
 
-		if (PointVisible(shooter, enemy, head))
 			return head;
+		}
 
-		return chest;
+		if (mode == KK_EAimMode.CHEST)
+		{
+			if (chest == vector.Zero)
+				return head;
+
+			return chest;
+		}
+
+		vector preferred = chest;
+		vector other = head;
+		if (mode == KK_EAimMode.HEAD_THEN_CHEST)
+		{
+			preferred = head;
+			other = chest;
+		}
+
+		if (preferred != vector.Zero && (!shooter || PointVisible(shooter, enemy, preferred)))
+			return preferred;
+
+		if (other != vector.Zero && shooter && PointVisible(shooter, enemy, other))
+			return other;
+
+		if (preferred != vector.Zero)
+			return preferred;
+
+		return other;
 	}
 
-	// Chest unless the caller has no body to test. The eyes sit above the
-	// barrel and were the miss.
+	// Preferred point when there is no shooter to test cover with. The eyes
+	// sit above the barrel and were the miss, so this is still not the eyes.
 	static vector ShotAimPoint(IEntity enemy)
 	{
+		int mode = AimMode();
+		if (mode == KK_EAimMode.HEAD || mode == KK_EAimMode.HEAD_THEN_CHEST)
+			return HeadPoint(enemy);
+
 		return ChestPoint(enemy);
+	}
+
+	protected static int AimMode()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return KK_EAimMode.CHEST_THEN_HEAD;
+
+		return mode.KK_GetAimMode();
+	}
+
+	// Chest or head for this man, and that choice stays. Either one is the
+	// only point. Cover does not switch it.
+	protected static int LatchedAim(IEntity shooter, IEntity enemy)
+	{
+		IEntity body = CharacterBody(shooter);
+		if (!body)
+			body = shooter;
+
+		if (
+			body &&
+			s_AimPick.Contains(body) &&
+			s_AimPickEnemy.Contains(body) &&
+			s_AimPickEnemy.Get(body) == enemy
+		)
+			return s_AimPick.Get(body);
+
+		int pick = KK_EAimMode.CHEST;
+		if (Math.RandomFloat01() < 0.5)
+			pick = KK_EAimMode.HEAD;
+
+		if (!body)
+			return pick;
+
+		s_AimPick.Set(body, pick);
+		s_AimPickEnemy.Set(body, enemy);
+		return pick;
 	}
 
 	protected static vector ChestPoint(IEntity enemy)

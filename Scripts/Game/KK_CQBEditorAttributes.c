@@ -324,6 +324,76 @@ class KK_CQBAttrSnapAim : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrSnapAimError : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrAimMode : SCR_BaseEditorAttribute
+{
+	[Attribute()]
+	protected ref array<ref SCR_EditorAttributeFloatStringValueHolder> m_aValues;
+
+	override SCR_BaseEditorAttributeVar ReadVariable(
+		Managed item,
+		SCR_AttributesManagerEditorComponent manager)
+	{
+		if (!IsGameMode(item))
+			return null;
+
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return null;
+
+		return SCR_BaseEditorAttributeVar.CreateInt(mode.KK_GetAimMode());
+	}
+
+	override void WriteVariable(
+		Managed item,
+		SCR_BaseEditorAttributeVar var,
+		SCR_AttributesManagerEditorComponent manager,
+		int playerID)
+	{
+		Apply(var);
+	}
+
+	override void UpdateInterlinkedVariables(
+		SCR_BaseEditorAttributeVar var,
+		SCR_AttributesManagerEditorComponent manager,
+		bool isInit = false)
+	{
+		super.UpdateInterlinkedVariables(var, manager, isInit);
+
+		if (isInit)
+			return;
+
+		Apply(var);
+	}
+
+	protected void Apply(SCR_BaseEditorAttributeVar var)
+	{
+		if (!var)
+			return;
+
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return;
+
+		int value = var.GetInt();
+		float asFloat = var.GetFloat();
+		if (asFloat > value)
+			value = Math.Round(asFloat);
+
+		mode.KK_SetAimMode(value);
+	}
+
+	override int GetEntries(notnull array<ref SCR_BaseEditorAttributeEntry> outEntries)
+	{
+		int count = 5;
+		if (m_aValues)
+			count = m_aValues.Count();
+
+		outEntries.Insert(new SCR_EditorAttributePresetEntry(count, false));
+		outEntries.Insert(new SCR_BaseEditorAttributeFloatStringValues(m_aValues));
+		return outEntries.Count();
+	}
+}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrBarrelStuck : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrBarrelCool : KK_CQBFloatEditorAttribute {}
