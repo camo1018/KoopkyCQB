@@ -830,6 +830,16 @@ class KK_GarrisonHold
 		return controller.GetLifeState() == ECharacterLifeState.INCAPACITATED;
 	}
 
+	// On his feet and in the CQB fight. Dead, unconscious, and incapacitated
+	// are not. Snap aim writes the body, so it stays off for all three.
+	protected static bool LifeStanding(CharacterControllerComponent controller)
+	{
+		if (!controller || controller.IsDead() || controller.IsUnconscious())
+			return false;
+
+		return controller.GetLifeState() == ECharacterLifeState.ALIVE;
+	}
+
 	// The assignment stays. The shot, the plant, the raised rifle, and the
 	// move lock do not. The next pass after he is up puts those back.
 	static void PauseDownedCQB(IEntity soldier)
@@ -5353,11 +5363,7 @@ class KK_GarrisonHold
 	// Dead and unconscious are not a standing fight. Vanilla combat leaves both alone.
 	protected static bool IsLiving(IEntity character)
 	{
-		CharacterControllerComponent controller = Controller(character);
-		if (!controller || controller.IsDead() || controller.IsUnconscious())
-			return false;
-
-		return controller.GetLifeState() == ECharacterLifeState.ALIVE;
+		return LifeStanding(Controller(character));
 	}
 
 	// Still a body to shoot. Unconscious and incapacitated count. Dead does not.
@@ -5749,13 +5755,13 @@ class KK_GarrisonHold
 			return;
 
 		// The contact look runs for every soldier. The snap is the clear
-		// and the garrison only. A man on the ground, or with no gun left
-		// that can fire, does not get it.
+		// and the garrison only. Dead, downed, or otherwise out of the
+		// CQB fight does not get it, and neither does a gun that cannot fire.
 		if (
 			!SnapAimEnabled() ||
 			!OwnsShot(body) ||
 			point == vector.Zero ||
-			IsDown(body) ||
+			!IsLiving(body) ||
 			!HasGunAmmo(body) ||
 			IsBoundSprint(body) ||
 			SprintBeforeReload(body) ||
@@ -5784,6 +5790,20 @@ class KK_GarrisonHold
 		DropSnapTurn(body);
 	}
 
+	// The game callqueue keeps ticking while the simulation is paused.
+	// Game time is the pause the menu and the workbench use.
+	protected static bool SimPaused()
+	{
+		if (!GetGame())
+			return false;
+
+		ChimeraWorld world = ChimeraWorld.CastFrom(GetGame().GetWorld());
+		if (!world)
+			return false;
+
+		return world.IsGameTimePaused() || world.GetTimeScale() <= 0;
+	}
+
 	protected static void EnsureSnapAimPump()
 	{
 		if (s_bSnapAimPumping || !GetGame())
@@ -5804,6 +5824,13 @@ class KK_GarrisonHold
 			s_SnapLogAt.Clear();
 			s_SnapTurn.Clear();
 			s_bSnapAimPumping = false;
+			return;
+		}
+
+		// Stay scheduled, but do not write the body or the rifle.
+		if (SimPaused())
+		{
+			GetGame().GetCallqueue().CallLater(SnapAimPump, 0, false);
 			return;
 		}
 
@@ -5868,11 +5895,11 @@ class KK_GarrisonHold
 		GetGame().GetCallqueue().CallLater(SnapAimPump, 0, false);
 	}
 
-	// Still on the clear or the garrison, and on his feet. The controller
-	// is the one the pump already resolved.
+	// Still on the clear or the garrison, and still in the CQB fight.
+	// The controller is the one the pump already resolved.
 	protected static bool SnapStillOwned(IEntity body, CharacterControllerComponent controller)
 	{
-		if (!body || LifeIsDown(controller))
+		if (!body || !LifeStanding(controller))
 			return false;
 
 		return s_OrderBehavior.Contains(body) || OnHouseOrder(body);
@@ -5885,10 +5912,16 @@ class KK_GarrisonHold
 		SCR_AIUtilityComponent utility,
 		IEntity enemy)
 	{
+		if (SimPaused())
+			return;
+
 		if (!controller)
 			controller = Controller(body);
-		if (!controller || LifeIsDown(controller))
+		if (!LifeStanding(controller))
+		{
+			ClearSnapAim(body);
 			return;
+		}
 
 		if (!utility)
 			utility = UtilityOf(body);
@@ -6482,6 +6515,12 @@ class KK_GarrisonHold
 		if (!shooter || !s_SnapAim.Contains(shooter))
 			return;
 
+		if (!IsLiving(shooter))
+		{
+			ClearSnapAim(shooter);
+			return;
+		}
+
 		vector origin;
 		vector barrelDir;
 		if (!SnapBarrel(shooter, origin, barrelDir))
@@ -6537,7 +6576,7 @@ class KK_GarrisonHold
 		if (
 			!body ||
 			!OwnsShot(body) ||
-			IsDown(body) ||
+			!IsLiving(body) ||
 			!HasGunAmmo(body) ||
 			!s_SnapAim.Contains(body)
 		)
@@ -7493,10 +7532,15 @@ class KK_GarrisonHold
 		float fraction = TraceThroughGlass(world);
 		s_SightViewer = null;
 
-		// A wall stops the ray well short. A graze on the frame near the
-		// target still counts as a clear shot. Glass is stepped through
-		// before that test.
-		return fraction >= 0.9;
+		// Glass is already stepped through. A frame can still clip the
+		// last bit of the ray. Judging that by a fraction of the whole
+		// ray treated a wall a few metres in front of him as open air
+		// once the shot was long.
+		if (fraction >= 1)
+			return true;
+
+		float span = vector.Distance(s_SightTrace.Start, s_SightTrace.End);
+		return span - (fraction * span) <= 0.4;
 	}
 
 	// A pane stops the ray on the first hit. Step past it and trace again.
@@ -7508,7 +7552,7 @@ class KK_GarrisonHold
 		vector end = s_SightTrace.End;
 		for (int hop = 0; hop < 8; hop++)
 		{
-			if (fraction >= 0.9)
+			if (fraction >= 1)
 				return fraction;
 
 			if (!HitIsTransparent())
