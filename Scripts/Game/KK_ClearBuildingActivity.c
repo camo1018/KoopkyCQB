@@ -3129,8 +3129,8 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		}
 
 		bool hold = seeing || KK_GarrisonHold.WantsSteadyShot(body);
-		// Eyes past a sill keep him planted on a shot the barrel cannot
-		// make. After the try, the route has to move him.
+		// A stretch with none of his damage on the man means this spot
+		// is not hitting. After the try, the route has to move him.
 		if (hold && KK_GarrisonHold.BarrelWantsMove(body))
 			hold = false;
 

@@ -164,10 +164,10 @@ modded class SCR_BaseGameMode
 	[Attribute("1", UIWidgets.CheckBox, "Snap aim scatters around the aim point by skill, distance, weapon, and light. Off puts the snap on the point itself.", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_SnapAimError;
 
-	[Attribute("1", UIWidgets.EditBox, "Seconds he keeps engaging a man he can see while the barrel cannot hit him. Then he moves until the barrel can. 0 moves as soon as the barrel is blocked.", category: "Koopky CQB/Combat")]
+	[Attribute("1", UIWidgets.EditBox, "Seconds he keeps shooting a man who has taken none of his damage. Then he moves. 0 moves as soon as he starts the shot.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_BarrelStuck;
 
-	[Attribute("2", UIWidgets.EditBox, "Seconds after that move starts before he will stand and try an eyes-only shot again.", category: "Koopky CQB/Combat")]
+	[Attribute("2", UIWidgets.EditBox, "Seconds he keeps moving after a stretch with no damage on the man before he will plant and shoot from the next spot.", category: "Koopky CQB/Combat")]
 	protected float m_fKK_BarrelCool;
 
 	[Attribute("2", UIWidgets.EditBox, "Seconds the rifle stays on the last place a man was seen after the sight line breaks, while clearing or garrisoning. 0 looks back along the route immediately.", category: "Koopky CQB/Combat")]

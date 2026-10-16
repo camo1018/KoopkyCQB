@@ -69,7 +69,7 @@ While a soldier is clearing, garrisoning, or attacking, **Recognition speed** re
 
 **Snap aim** is experimental and off by default. While he is aiming at a man inside CQB range, it snaps heading and weapon aim onto that point instead of turning at the normal rate. A man past that range is not snapped. **Snap aim error** is on by default. It scatters that point by skill, distance, weapon, and light. A regular misses by about 1.25 degrees, and a lower skill opens that up. The same angle is a larger miss farther out.
 
-If his eyes can see the man but the barrel cannot, **Barrel try** is how long he keeps engaging before he moves for a clear barrel line (1 s by default). **Barrel cool off** is how long after that move starts before he will stand and try an eyes-only shot again (2 s by default).
+**Barrel try** is how long he keeps shooting a man who has taken none of his damage (1 s by default). A round from someone else does not count. Then he leaves that spot and takes the route up again. **Barrel cool off** is how long that move lasts before he will plant and shoot from the next spot (2 s by default).
 
 Under threat, **Run while reloading** is on by default. It starts the reload and runs to the cluster node farthest from the threat. Off reloads in place. **Sprint to cover** is experimental and off by default: with run while reloading on, an empty gun with the target still visible sprints to a hidden node, then reloads. **Reload below** tops off once the magazine is under that percent (30 by default) after the enemy has stayed out of sight for **Out of sight** (8 s by default). An empty gun still reloads immediately.
 

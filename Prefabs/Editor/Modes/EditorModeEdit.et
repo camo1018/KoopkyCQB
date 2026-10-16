@@ -29,7 +29,7 @@ SCR_EditorModeEntity : "{E56F54E533ACE527}Prefabs/Editor/Modes/EditorModeBase.et
     KK_GarrisonCommandAction "{6A696941DD0BF3A6}" {
      m_Info SCR_UIInfo "{6A696941C4BD964E}" {
       Name "Garrison"
-      Description "Occupy the building under the cursor. Open ground uses the nearest building."
+      Description "Hold the building under the cursor, including the nearest building on open ground."
       Icon "{8083D425A749EE46}UI/Textures/Editor/Toolbar/Commanding/Toolbar_Commanding_Objective_Custom.edds"
      }
      m_ActionGroup COMMAND_TASK
@@ -38,7 +38,7 @@ SCR_EditorModeEntity : "{E56F54E533ACE527}Prefabs/Editor/Modes/EditorModeBase.et
     KK_ClearCommandAction "{6A696947AA2BCB61}" {
      m_Info SCR_UIInfo "{6A69694712B2A2D5}" {
       Name "Clear"
-      Description "Clear the building under the cursor. Open ground uses the nearest building."
+      Description "Clear the building under the cursor, including the nearest building on open ground."
       Icon "{36106BA9CF5483B0}UI/Textures/Editor/Toolbar/Commanding/Toolbar_Commanding_Waypoint_Attack.edds"
      }
      m_ActionGroup COMMAND_TASK
@@ -47,7 +47,7 @@ SCR_EditorModeEntity : "{E56F54E533ACE527}Prefabs/Editor/Modes/EditorModeBase.et
     KK_AttackCommandAction "{6A7B0A1000000030}" {
      m_Info SCR_UIInfo "{6A7B0A1000000031}" {
       Name "Advance"
-      Description "Advance to the point in pairs. They jog, pause beside cover, and scan."
+      Description "Advance to the point in pairs, including a jog, a pause beside cover, and a scan."
       Icon "{2006D8738EA93571}UI/Textures/Editor/Toolbar/Commanding/Toolbar_Commanding_Waypoint_Move.edds"
      }
      m_ActionGroup COMMAND_TASK
@@ -57,7 +57,7 @@ SCR_EditorModeEntity : "{E56F54E533ACE527}Prefabs/Editor/Modes/EditorModeBase.et
     KK_AttackCommandAction "{6A7B0A1000000032}" {
      m_Info SCR_UIInfo "{6A7B0A1000000033}" {
       Name "Bound"
-      Description "Bound to the point. One pair runs while the other watches."
+      Description "Bound to the point, including one pair running while the other watches."
       Icon "{87265C14C67EDDE7}UI/Textures/Editor/Toolbar/Commanding/Toolbar_Commanding_Waypoint_ForcedMove.edds"
      }
      m_ActionGroup COMMAND_TASK
@@ -67,7 +67,7 @@ SCR_EditorModeEntity : "{E56F54E533ACE527}Prefabs/Editor/Modes/EditorModeBase.et
     KK_AttackCommandAction "{6A7B0A1000000034}" {
      m_Info SCR_UIInfo "{6A7B0A1000000035}" {
       Name "Take cover"
-      Description "Push to the point under fire, take cover there, and fight from it."
+      Description "Push to the point under fire, including cover there and the fight from it."
       Icon "{8083D425A749EE46}UI/Textures/Editor/Toolbar/Commanding/Toolbar_Commanding_Objective_Custom.edds"
      }
      m_ActionGroup COMMAND_TASK

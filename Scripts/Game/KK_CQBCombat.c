@@ -568,6 +568,7 @@ class KK_GarrisonHold
 	// The raise was requested and the pose has since been up. Until then
 	// another SetWeaponRaised restarts the animation and cuts off the step.
 	protected static ref set<IEntity> s_RaiseSettled = new set<IEntity>();
+	protected static ref map<IEntity, float> s_RaiseSentAt = new map<IEntity, float>();
 	// This order has not seen a living enemy yet. Last-seen points from
 	// the previous clear of this house stay out of the selector.
 	protected static ref set<IEntity> s_FreshOrder = new set<IEntity>();
@@ -653,8 +654,9 @@ class KK_GarrisonHold
 	protected static ref map<IEntity, ref BaseTarget> s_ShotBase =
 		new map<IEntity, ref BaseTarget>();
 	protected static ref set<IEntity> s_ShotLive = new set<IEntity>();
-	// Eyes can see him and the barrel cannot. The try starts here. After it
-	// runs out, he moves, and the cool-off is when that try may start again.
+	// He is shooting this man and the man has not taken his damage yet.
+	// After the try he moves, and the cool-off is how long that move
+	// lasts before he plants and shoots again.
 	protected static ref map<IEntity, float> s_BarrelBlockedSince =
 		new map<IEntity, float>();
 	protected static ref map<IEntity, IEntity> s_BarrelBlockedTarget =
@@ -1234,16 +1236,13 @@ class KK_GarrisonHold
 				canShoot = SideStillClear(body, lookAt, lean);
 		}
 
-		// His eyes can be past a sill the barrel still hits. He tries, then
-		// the plant drops so the route can find a place the barrel can use.
-		if (canShoot)
-			canShoot = BarrelShotReady(body, lookAt);
-
 		float command = 0;
 		if (canShoot)
 			command = lean;
 
 		RememberLean(body, command);
+		if (canShoot && lookAt)
+			NoteNoDamage(body, lookAt);
 
 		bool fire = AimReady(body, lookAt, canShoot);
 		bool raise = canShoot || FeelsThreatened(utility);
@@ -3634,6 +3633,17 @@ class KK_GarrisonHold
 
 		RefreshShot(body, utility.m_PerceptionComponent, selected);
 
+		if (
+			!s_ShotLive.Contains(body) &&
+			selected &&
+			SeesTarget(body, selected)
+		)
+		{
+			IEntity selectedEnemy = selected.GetTargetEntity();
+			if (selectedEnemy && !PastOrderContact(body, selectedEnemy))
+				ConsiderSelected(body, selected);
+		}
+
 		if (!s_ShotLive.Contains(body))
 		{
 			ClearAim(body);
@@ -3677,14 +3687,26 @@ class KK_GarrisonHold
 		if (!canShoot && lean != 0)
 			canShoot = SideStillClear(body, enemy, lean);
 
-		if (canShoot && enemy)
-			canShoot = BarrelShotReady(body, enemy);
+		// The selected man is who the plant and the aim are holding.
+		// The shot record can be a side peek that the second trace drops,
+		// and that left him aimed with the trigger off.
+		if (!canShoot && selected && SeesTarget(body, selected))
+		{
+			IEntity seen = selected.GetTargetEntity();
+			if (seen && IsTargetable(seen) && !PastOrderContact(body, seen))
+			{
+				enemy = seen;
+				canShoot = true;
+			}
+		}
 
 		float command = 0;
 		if (canShoot)
 			command = lean;
 
 		RememberLean(body, command);
+		if (canShoot && enemy)
+			NoteNoDamage(body, enemy);
 
 		bool fire = AimReady(body, enemy, canShoot);
 		bool raised = canShoot || FeelsThreatened(utility);
@@ -4323,6 +4345,14 @@ class KK_GarrisonHold
 			return false;
 		}
 
+		// Snap aim was making the raised flag flicker. Sending the raise
+		// again restarts it, and the shot never leaves the rifle.
+		if (raised && !liveRaised && s_RaiseSentAt.Contains(body))
+		{
+			if (WorldTime() - s_RaiseSentAt.Get(body) < 500)
+				return false;
+		}
+
 		if (!known || wasRaised != raised)
 			return true;
 
@@ -4367,6 +4397,8 @@ class KK_GarrisonHold
 		}
 
 		SetWeaponRaised(body, raised);
+		if (raised)
+			s_RaiseSentAt.Set(body, WorldTime());
 		return true;
 	}
 
@@ -4528,7 +4560,7 @@ class KK_GarrisonHold
 		if (!body || !s_ShotLive.Contains(body))
 			return false;
 
-		// The route stays free while he is walking for a barrel line.
+		// The route stays free while he is walking off a blocked shot.
 		return !BarrelWantsMove(body);
 	}
 
@@ -5670,13 +5702,18 @@ class KK_GarrisonHold
 				continue;
 			}
 
-			// The stored point is only a fallback. While the man is still the
-			// target, follow his body. Gating that on the sight trace left
-			// the rifle on the last place the trace succeeded.
+			// The stored point is only a fallback. A man the trace no longer
+			// reaches is not a lock, so the rifle does not stay on him.
 			vector point = s_SnapAim.Get(body);
 			IEntity enemy = EngagedEnemy(body);
 			if (enemy && IsTargetable(enemy))
 			{
+				if (!CanSeeEntity(body, enemy))
+				{
+					ClearSnapAim(body);
+					continue;
+				}
+
 				vector live = ShotAimPoint(body, enemy);
 				if (live != vector.Zero)
 				{
@@ -6483,16 +6520,33 @@ class KK_GarrisonHold
 		return clear;
 	}
 
-	// True while he should leave the plant. The barrel cannot hit the man,
-	// and the try at the blocked shot has already run out.
+	// True while he should leave the plant. This man took none of his
+	// damage through the try, and the cool-off is still walking him off.
 	static bool BarrelWantsMove(IEntity soldier)
 	{
 		IEntity body = CharacterBody(soldier);
-		IEntity enemy = EngagedEnemy(body);
-		if (!body || !enemy || !CanSeeEntity(body, enemy))
+		if (!body || !s_BarrelCoolUntil.Contains(body))
 			return false;
 
-		return !BarrelShotReady(body, enemy);
+		if (WorldTime() >= s_BarrelCoolUntil.Get(body))
+		{
+			s_BarrelCoolUntil.Remove(body);
+			s_BarrelBlockedTarget.Remove(body);
+			return false;
+		}
+
+		IEntity enemy = EngagedEnemy(body);
+		IEntity blocked = null;
+		if (s_BarrelBlockedTarget.Contains(body))
+			blocked = s_BarrelBlockedTarget.Get(body);
+
+		if (!enemy || enemy != blocked || !CanSeeEntity(body, enemy))
+		{
+			ForgetBarrelBlock(body);
+			return false;
+		}
+
+		return true;
 	}
 
 	protected static IEntity EngagedEnemy(IEntity body)
@@ -6518,32 +6572,16 @@ class KK_GarrisonHold
 		return target.GetTargetEntity();
 	}
 
-	// The barrel has to be able to reach the same point the rifle is aimed
-	// at. A blocked barrel still gets one try. After that he moves, and
-	// that try stays off through the cool-off.
-	protected static bool BarrelShotReady(IEntity body, IEntity enemy)
+	// Shooting this man. The try is how long he may go without his own
+	// damage landing. A hit from him clears it.
+	protected static void NoteNoDamage(IEntity body, IEntity enemy)
 	{
 		if (!body || !enemy)
-			return false;
-
-		vector point = ShotAimPoint(body, enemy);
-		float side;
-		if (BarrelClear(body, enemy, point, side))
-		{
-			if (side != 0)
-				s_ShotLean.Set(body, side);
-
-			ForgetBarrelBlock(body);
-			return true;
-		}
-
-		float stuckMs = BarrelStuckMs();
-		if (stuckMs <= 0)
-			return false;
+			return;
 
 		float now = WorldTime();
 		if (s_BarrelCoolUntil.Contains(body) && now < s_BarrelCoolUntil.Get(body))
-			return false;
+			return;
 
 		bool same =
 			s_BarrelBlockedSince.Contains(body) &&
@@ -6553,16 +6591,77 @@ class KK_GarrisonHold
 		{
 			s_BarrelBlockedSince.Set(body, now);
 			s_BarrelBlockedTarget.Set(body, enemy);
-			return true;
+			if (BarrelStuckMs() <= 0)
+				StartBarrelMove(body, enemy, now);
+
+			return;
 		}
 
-		if (now - s_BarrelBlockedSince.Get(body) < stuckMs)
-			return true;
+		if (now - s_BarrelBlockedSince.Get(body) < BarrelStuckMs())
+			return;
 
-		s_BarrelCoolUntil.Set(body, now + BarrelCoolMs());
+		StartBarrelMove(body, enemy, now);
+	}
+
+	// A real hit from this shooter. Another man's round does not count,
+	// and neither does damage he deals to himself.
+	static void NoteTargetDamaged(IEntity hitOwner, BaseDamageContext damageContext)
+	{
+		if (!damageContext || damageContext.damageValue <= 0 || !damageContext.instigator)
+			return;
+
+		IEntity victim = hitOwner;
+		if (!ChimeraCharacter.Cast(victim))
+			victim = damageContext.hitEntity;
+
+		victim = CharacterBody(victim);
+		IEntity shooter = InstigatorBody(damageContext.instigator);
+		if (!victim || !shooter || shooter == victim)
+			return;
+
+		if (!s_BarrelBlockedTarget.Contains(shooter))
+			return;
+
+		if (s_BarrelBlockedTarget.Get(shooter) != victim)
+			return;
+
+		ForgetBarrelBlock(shooter);
+	}
+
+	protected static IEntity InstigatorBody(Instigator instigator)
+	{
+		if (!instigator)
+			return null;
+
+		IEntity cursor = instigator.GetInstigatorEntity();
+		while (cursor)
+		{
+			if (ChimeraCharacter.Cast(cursor))
+				return cursor;
+
+			cursor = cursor.GetParent();
+		}
+
+		return null;
+	}
+
+	protected static void StartBarrelMove(IEntity body, IEntity enemy, float now)
+	{
+		if (!body)
+			return;
+
 		s_BarrelBlockedSince.Remove(body);
-		s_BarrelBlockedTarget.Remove(body);
-		return false;
+		s_BarrelBlockedTarget.Set(body, enemy);
+		// A zero cool-off still has to outlast the plant check that
+		// releases him, or he plants again on the same step.
+		float cool = BarrelCoolMs();
+		if (cool < 100)
+			cool = 100;
+
+		s_BarrelCoolUntil.Set(body, now + cool);
+
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			Print("KK: No hit, leaving the spot");
 	}
 
 	protected static void ForgetBarrelBlock(IEntity body)
@@ -6572,6 +6671,7 @@ class KK_GarrisonHold
 
 		s_BarrelBlockedSince.Remove(body);
 		s_BarrelBlockedTarget.Remove(body);
+		s_BarrelCoolUntil.Remove(body);
 	}
 
 	protected static float BarrelStuckMs()
@@ -6592,55 +6692,10 @@ class KK_GarrisonHold
 		return mode.KK_GetBarrelCool() * 1000;
 	}
 
-	// Center, then a lean to either side. A window the shoulder can clear
-	// is still a shot. side is -1 left, 1 right, and 0 from the shoulder.
-	protected static bool BarrelClear(
-		IEntity body,
-		IEntity enemy,
-		vector point,
-		out float side)
-	{
-		side = 0;
-		if (!body || point == vector.Zero)
-			return false;
-
-		BaseWorld world = GetGame().GetWorld();
-		if (!world)
-			world = body.GetWorld();
-
-		if (!world)
-			return false;
-
-		s_SightTarget = enemy;
-		bool center = SightClear(world, body, MuzzlePosition(body, 0), point, 0.05);
-		if (center)
-		{
-			s_SightTarget = null;
-			return true;
-		}
-
-		if (SightClear(world, body, MuzzlePosition(body, -1), point, 0.05))
-		{
-			side = -1;
-			s_SightTarget = null;
-			return true;
-		}
-
-		if (SightClear(world, body, MuzzlePosition(body, 1), point, 0.05))
-		{
-			side = 1;
-			s_SightTarget = null;
-			return true;
-		}
-
-		s_SightTarget = null;
-		return false;
-	}
-
 	protected static vector MuzzlePosition(IEntity body, float lean)
 	{
 		vector bone;
-		if (lean == 0 && MuzzleBone(body, bone))
+		if (lean == 0 && MuzzleBone(body, bone) && MuzzleNearBody(body, bone))
 			return bone;
 
 		vector transform[4];
@@ -6681,6 +6736,16 @@ class KK_GarrisonHold
 		anim.GetBoneMatrix(index, mat);
 		muzzle = weaponEnt.CoordToParent(mat[3]);
 		return muzzle != vector.Zero;
+	}
+
+	// A detached weapon or a bad bone sits tens of meters away. The barrel
+	// trace from there never clears, so the shot stays off.
+	protected static bool MuzzleNearBody(IEntity body, vector muzzle)
+	{
+		vector gap = muzzle - body.GetOrigin();
+		float height = Math.AbsFloat(gap[1]);
+		gap[1] = 0;
+		return gap.Length() <= 2 && height <= 2.5;
 	}
 
 	static vector ShotAimPoint(vector feet)
@@ -7138,15 +7203,8 @@ class KK_GarrisonHold
 
 		vector start = eye + (toAim * inset);
 
-		if (!s_SightTrace)
-			s_SightTrace = new TraceParam();
-
 		s_SightViewer = body;
-		s_SightTrace.Flags = TraceFlags.ENTS | TraceFlags.WORLD;
-		s_SightTrace.Exclude = body;
-		s_SightTrace.Start = start;
-		s_SightTrace.End = aim;
-		ClearSightHit();
+		BeginSightTrace(start, aim);
 
 		float fraction = TraceThroughGlass(world);
 		s_SightViewer = null;
@@ -7183,22 +7241,22 @@ class KK_GarrisonHold
 			if (vector.Distance(next, end) < 0.1)
 				return 1;
 
-			s_SightTrace.Start = next;
-			s_SightTrace.End = end;
-			ClearSightHit();
+			BeginSightTrace(next, end);
 			fraction = world.TraceMove(s_SightTrace, FilterMoveSight);
 		}
 
 		return fraction;
 	}
 
-	protected static void ClearSightHit()
+	// A new param starts with empty hit fields. Writing TraceMaterial,
+	// ColliderName, or SurfaceProps on a used param corrupts the heap.
+	protected static void BeginSightTrace(vector start, vector aim)
 	{
-		s_SightTrace.TraceEnt = null;
-		s_SightTrace.TraceMaterial = string.Empty;
-		s_SightTrace.ColliderName = string.Empty;
-		s_SightTrace.SurfaceProps = null;
-		s_SightTrace.ColliderIndex = -1;
+		s_SightTrace = new TraceParam();
+		s_SightTrace.Flags = TraceFlags.ENTS | TraceFlags.WORLD;
+		s_SightTrace.Exclude = s_SightViewer;
+		s_SightTrace.Start = start;
+		s_SightTrace.End = aim;
 	}
 
 	// TraceMaterial is filled for the ground. A pane on a house is the
@@ -8795,5 +8853,15 @@ modded class SCR_MuzzleEffectComponent
 		super.OnFired(effectEntity, muzzle, projectileEntity);
 		KK_GarrisonHold.LogSnapShot(effectEntity, muzzle, projectileEntity);
 		KK_GarrisonHold.QueueSnapShot(effectEntity, muzzle, projectileEntity);
+	}
+}
+
+// His own round landed. The no-hit try on this man starts over.
+modded class SCR_CharacterHitZone
+{
+	override void OnDamage(notnull BaseDamageContext damageContext)
+	{
+		super.OnDamage(damageContext);
+		KK_GarrisonHold.NoteTargetDamaged(GetOwner(), damageContext);
 	}
 }
