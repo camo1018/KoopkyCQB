@@ -175,6 +175,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				continue;
 
 			KK_GarrisonHold.SetClearing(body, true);
+			KK_GarrisonHold.SetClearOrder(body, true);
 			KK_GarrisonHold.SetOrderBehavior(body, true);
 		}
 	}
@@ -196,6 +197,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				continue;
 
 			KK_GarrisonHold.SetClearing(body, false);
+			KK_GarrisonHold.SetClearOrder(body, false);
 			KK_GarrisonHold.SetOrderBehavior(body, false);
 		}
 	}
@@ -492,6 +494,11 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					assignment.m_Agent.GetControlledEntity(),
 					true
 				);
+				KK_GarrisonHold.SetClearOrder(
+					assignment.m_Agent.GetControlledEntity(),
+					true
+				);
+				SyncClearHeal(assignment, currentTime);
 
 				if (m_Building)
 				{
@@ -2442,7 +2449,8 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				!assignment ||
 				assignment.m_bClearsPoint ||
 				!assignment.m_Agent ||
-				!assignment.m_Agent.GetControlledEntity()
+				!assignment.m_Agent.GetControlledEntity() ||
+				KK_GarrisonHold.ClearHealOpen(assignment.m_Agent.GetControlledEntity())
 			)
 			{
 				continue;
@@ -2470,6 +2478,14 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			if (!assignment || assignment.m_bClearsPoint)
 				continue;
 
+			if (
+				assignment.m_Agent &&
+				KK_GarrisonHold.ClearHealOpen(assignment.m_Agent.GetControlledEntity())
+			)
+			{
+				continue;
+			}
+
 			ReleaseAssignment(i);
 		}
 	}
@@ -2495,7 +2511,8 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 					!assignment ||
 					assignment.m_bClearsPoint ||
 					!assignment.m_Agent ||
-					!assignment.m_Agent.GetControlledEntity()
+					!assignment.m_Agent.GetControlledEntity() ||
+					KK_GarrisonHold.ClearHealOpen(assignment.m_Agent.GetControlledEntity())
 				)
 				{
 					continue;
@@ -2541,6 +2558,25 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		}
 	}
 
+	// An open cluster keeps the bandage off. A finished one lets a
+	// wounded man stop there before the next room.
+	protected void SyncClearHeal(
+		notnull KK_InteriorAgentAssignment assignment,
+		float currentTime)
+	{
+		if (!assignment.m_Agent || !assignment.m_Target)
+			return;
+
+		IEntity body = assignment.m_Agent.GetControlledEntity();
+		if (!body)
+			return;
+
+		if (RoomNeedsClear(assignment.m_Target.m_iFloor, assignment.m_Target.m_iCluster))
+			KK_GarrisonHold.CloseClearHeal(body);
+		else
+			KK_GarrisonHold.OfferClearHeal(body, currentTime);
+	}
+
 	protected void CollectFreeAgents(notnull array<AIAgent> free)
 	{
 		array<AIAgent> agents = {};
@@ -2552,7 +2588,8 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				!agent ||
 				!agent.GetControlledEntity() ||
 				HasAssignment(agent) ||
-				m_mAmmoReleased.Contains(agent)
+				m_mAmmoReleased.Contains(agent) ||
+				KK_GarrisonHold.ClearHealOpen(agent.GetControlledEntity())
 			)
 			{
 				continue;
@@ -3957,7 +3994,20 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		{
 			target.m_eState =
 				KK_EInteriorTargetState.VISITED;
-	
+
+			// The room is done. A man who still needs a bandage stays
+			// here instead of being pulled into the next cluster.
+			if (
+				assignment.m_Agent &&
+				!RoomNeedsClear(target.m_iFloor, target.m_iCluster)
+			)
+			{
+				KK_GarrisonHold.OfferClearHeal(
+					assignment.m_Agent.GetControlledEntity(),
+					GetGame().GetWorld().GetWorldTime()
+				);
+			}
+
 			if (SCR_BaseGameMode.KK_LogEnabled())
 				PrintFormat(
 					"KK: Interior target visited %1",

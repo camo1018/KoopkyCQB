@@ -769,6 +769,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				}
 
 				KK_GarrisonHold.SetPinned(controlledEntity, true);
+				KK_GarrisonHold.SetGarrisonPost(controlledEntity, true);
 				if (KK_GarrisonHold.ShouldHoldToReload(controlledEntity, true))
 					KK_GarrisonHold.ConsiderTopOff(controlledEntity);
 				assignment.m_bBounding = false;
@@ -788,6 +789,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			if (assignment.m_bHolding && !passageOverride)
 			{
 				KK_GarrisonHold.SetPinned(controlledEntity, false);
+				KK_GarrisonHold.SetGarrisonPost(controlledEntity, false);
 				assignment.m_bFacingApplied = false;
 				assignment.m_bHolding = false;
 				assignment.m_bInteriorHold = false;
@@ -814,6 +816,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 				if (passageOverride)
 				{
 					KK_GarrisonHold.SetPinned(controlledEntity, false);
+					KK_GarrisonHold.SetGarrisonPost(controlledEntity, false);
 					assignment.m_bHolding = false;
 				}
 			}
@@ -1180,6 +1183,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 		next.m_eState = KK_EInteriorTargetState.ACTIVE;
 		assignment.m_Target = next;
 		assignment.m_bHolding = false;
+		KK_GarrisonHold.SetGarrisonPost(assignment.m_Agent.GetControlledEntity(), false);
 		assignment.m_bRotating = true;
 		assignment.m_bCombatYield = false;
 		assignment.m_bFacingApplied = false;
@@ -1972,6 +1976,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 		KK_GarrisonHold.LogReload(body, "bash");
 		assignment.m_bHolding = false;
+		KK_GarrisonHold.SetGarrisonPost(body, false);
 		assignment.m_bBounding = false;
 		assignment.m_bHeldDoor = false;
 		assignment.m_fFireUntil = 0;
@@ -2069,6 +2074,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 				KK_GarrisonHold.LogReload(controlledEntity, choice);
 				assignment.m_bHolding = false;
+				KK_GarrisonHold.SetGarrisonPost(controlledEntity, false);
 				assignment.m_bBounding = false;
 				assignment.m_bHeldDoor = false;
 				assignment.m_fFireUntil = 0;
@@ -2390,6 +2396,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			return;
 
 		KK_GarrisonHold.SetPinned(body, false);
+		KK_GarrisonHold.SetGarrisonPost(body, false);
 		KK_GarrisonHold.ClearApproachGoal(body);
 		KK_GarrisonHold.SetIgnoringTargets(body, false);
 		KK_GarrisonHold.SetDoorFiring(body, false);

@@ -3350,6 +3350,20 @@ class KK_GarrisonHold
 	// Set the moment a clear or garrison is selected, before a route exists.
 	protected static ref set<IEntity> s_OrderBehavior = new set<IEntity>();
 
+	// The whole clear, including the gap between one node and the next.
+	// IsClearing drops in that gap, and heal would take it.
+	protected static ref set<IEntity> s_ClearOrder = new set<IEntity>();
+
+	// World time the cleared cluster started waiting on a bandage.
+	// Absent means this man is still clearing, or he does not need one.
+	protected static ref map<IEntity, float> s_ClearHealSince =
+		new map<IEntity, float>();
+
+	// A garrison hold. Binoculars are allowed only here.
+	protected static ref set<IEntity> s_GarrisonPost = new set<IEntity>();
+
+	protected static const float CLEAR_HEAL_HOLD_MS = 30000;
+
 	// Clearing a house, or holding one. Attack uses neither of these.
 	static bool OnHouseOrder(IEntity soldier)
 	{
@@ -3382,6 +3396,147 @@ class KK_GarrisonHold
 			return false;
 
 		return s_OrderBehavior.Contains(body) || OnHouseOrder(body);
+	}
+
+	// On for every man from the moment the clear is selected until it ends.
+	static void SetClearOrder(IEntity soldier, bool active)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		if (active)
+		{
+			s_ClearOrder.Insert(body);
+			return;
+		}
+
+		s_ClearOrder.RemoveItem(body);
+		s_ClearHealSince.Remove(body);
+	}
+
+	static bool OnClearOrder(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		return body && s_ClearOrder.Contains(body);
+	}
+
+	// Bleeding, or health already taken off. A full man does not stay behind.
+	static bool NeedsMedical(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || IsDown(body))
+			return false;
+
+		SCR_CharacterDamageManagerComponent damage =
+			SCR_CharacterDamageManagerComponent.Cast(
+				body.FindComponent(SCR_CharacterDamageManagerComponent)
+			);
+		if (!damage)
+			return false;
+
+		if (damage.IsBleeding())
+			return true;
+
+		return damage.GetHealthScaled() < 0.999;
+	}
+
+	// The cluster he was clearing is done, and he still needs a bandage.
+	// The next cluster waits. The hold ends when he is patched, or when
+	// it has gone on long enough that he is going on without one.
+	static void OfferClearHeal(IEntity soldier, float now)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		if (!NeedsMedical(body))
+		{
+			s_ClearHealSince.Remove(body);
+			return;
+		}
+
+		if (!s_ClearHealSince.Contains(body))
+			s_ClearHealSince.Set(body, now);
+	}
+
+	static void CloseClearHeal(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		s_ClearHealSince.Remove(body);
+	}
+
+	static bool ClearHealOpen(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !s_ClearHealSince.Contains(body))
+			return false;
+
+		float now = 0;
+		if (GetGame() && GetGame().GetWorld())
+			now = GetGame().GetWorld().GetWorldTime();
+
+		float started = s_ClearHealSince.Get(body);
+		if (!NeedsMedical(body) || now - started > CLEAR_HEAL_HOLD_MS)
+		{
+			s_ClearHealSince.Remove(body);
+			return false;
+		}
+
+		return true;
+	}
+
+	// A clear that has not finished its cluster. Garrison is not in this.
+	static bool ClearHealSuppressed(SCR_AIUtilityComponent utility)
+	{
+		IEntity body = UtilityBody(utility);
+		if (!OnClearOrder(body))
+			return false;
+
+		return !ClearHealOpen(body);
+	}
+
+	// The room is clear and he still needs the bandage. That outranks the
+	// next push.
+	static bool ClearHealBoost(SCR_AIUtilityComponent utility)
+	{
+		return ClearHealOpen(UtilityBody(utility));
+	}
+
+	static void SetGarrisonPost(IEntity soldier, bool holding)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		if (holding)
+			s_GarrisonPost.Insert(body);
+		else
+			s_GarrisonPost.RemoveItem(body);
+	}
+
+	static bool AllowsBinoculars(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		return body && s_GarrisonPost.Contains(body);
+	}
+
+	protected static IEntity UtilityBody(SCR_AIUtilityComponent utility)
+	{
+		if (!utility)
+			return null;
+
+		if (utility.m_OwnerEntity)
+			return utility.m_OwnerEntity;
+
+		AIAgent agent = AIAgent.Cast(utility.GetOwner());
+		if (!agent)
+			return null;
+
+		return agent.GetControlledEntity();
 	}
 
 	static bool HasBuilding(IEntity soldier)
@@ -8111,6 +8266,82 @@ modded class SCR_AIObserveThreatSystemBehavior
 			return 0;
 
 		return super.CustomEvaluate();
+	}
+}
+
+// Self heal, and waiting on a medic. Both outrank the clear move once
+// the man is hurt. The cluster finishes first. The cleared room is
+// where the bandage happens, and then it outranks the next push.
+modded class SCR_AIHealBehavior
+{
+	override float CustomEvaluate()
+	{
+		if (KK_GarrisonHold.ClearHealSuppressed(m_Utility))
+			return 0;
+
+		float score = super.CustomEvaluate();
+		if (KK_GarrisonHold.ClearHealBoost(m_Utility))
+			return Math.Max(score, SCR_AIActionBase.PRIORITY_BEHAVIOR_HEAL_HIGH_PRIORITY);
+
+		return score;
+	}
+}
+
+modded class SCR_AIHealWaitBehavior
+{
+	override float CustomEvaluate()
+	{
+		if (KK_GarrisonHold.ClearHealSuppressed(m_Utility))
+			return 0;
+
+		float score = super.CustomEvaluate();
+		if (KK_GarrisonHold.ClearHealBoost(m_Utility))
+			return Math.Max(score, SCR_AIActionBase.PRIORITY_BEHAVIOR_HEAL_HIGH_PRIORITY);
+
+		return score;
+	}
+}
+
+modded class SCR_AIMedicHealBehavior
+{
+	override float CustomEvaluate()
+	{
+		if (KK_GarrisonHold.ClearHealSuppressed(m_Utility))
+			return 0;
+
+		float score = super.CustomEvaluate();
+		if (KK_GarrisonHold.ClearHealBoost(m_Utility))
+			return Math.Max(score, SCR_AIActionBase.PRIORITY_BEHAVIOR_HEAL_HIGH_PRIORITY);
+
+		return score;
+	}
+}
+
+// Idle observe pulls binoculars. That stays off except on a garrison post.
+modded class SCR_AITakeGadgetInLeftHand
+{
+	protected IEntity m_KKSoldier;
+
+	override void OnInit(AIAgent owner)
+	{
+		super.OnInit(owner);
+
+		m_KKSoldier = null;
+		if (owner)
+			m_KKSoldier = owner.GetControlledEntity();
+	}
+
+	override IEntity FindItem()
+	{
+		if (
+			m_eGadgetType == EGadgetType.BINOCULARS &&
+			!KK_GarrisonHold.AllowsBinoculars(m_KKSoldier)
+		)
+		{
+			return null;
+		}
+
+		return super.FindItem();
 	}
 }
 
