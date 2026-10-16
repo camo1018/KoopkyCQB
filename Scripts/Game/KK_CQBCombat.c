@@ -38,6 +38,14 @@ modded class SCR_AICombatComponent
 		if (KK_GarrisonHold.IsBoundSprint(GetOwner()))
 			return;
 
+		// The remembered man is put back when the sprint ends, while the
+		// attack is still his. After that order he is a normal target.
+		if (!KK_GarrisonHold.IsAttackSearch(GetOwner()))
+		{
+			KK_GarrisonHold.ForgetSprintEnemy(GetOwner());
+			return;
+		}
+
 		BaseTarget known = KK_GarrisonHold.SprintKnown(GetOwner());
 		if (!known)
 			return;
@@ -239,7 +247,9 @@ modded class SCR_AICombatComponent
 
 		// A reload already in the gun shows up as a new magazine. That catch-up
 		// is not another swap, or he would start the animation twice.
+		// Outside an order, that event is the normal reload.
 		if (
+			KK_GarrisonHold.OnCqbOrder(GetOwner()) &&
 			outWeaponEvent &&
 			m_SelectedWeaponComp == previousWeapon &&
 			m_iSelectedMuzzle == previousMuzzle &&
@@ -411,6 +421,11 @@ modded class SCR_AICombatComponent
 	// normal attack already has.
 	protected void KK_StampPathLook()
 	{
+		// Seeing a man is not enough. This look is the clear, garrison, or
+		// attack route. Anyone else keeps the aim the base game just wrote.
+		if (!KK_GarrisonHold.OnCqbOrder(GetOwner()))
+			return;
+
 		if (KK_GarrisonHold.DistantBaseFight(GetOwner()))
 		{
 			KK_GarrisonHold.YieldLookToAttack(GetOwner());
@@ -781,7 +796,8 @@ class KK_GarrisonHold
 	// This order has not seen a living enemy yet. Last-seen points from
 	// the previous clear of this house stay out of the selector.
 	protected static ref set<IEntity> s_FreshOrder = new set<IEntity>();
-	protected static ref set<AIAgent> s_OrderNoted = new set<AIAgent>();
+	protected static ref map<AIAgent, SCR_AIGroup> s_OrderNoted =
+		new map<AIAgent, SCR_AIGroup>();
 	protected static ref TraceParam s_SightTrace;
 	protected static ref TraceParam s_ConditionTrace;
 	protected static IEntity s_ConditionBody;
@@ -1197,10 +1213,14 @@ class KK_GarrisonHold
 
 	static void NoteOrderSoldier(AIAgent agent)
 	{
-		if (!agent || s_OrderNoted.Contains(agent))
+		if (!agent)
 			return;
 
-		s_OrderNoted.Insert(agent);
+		SCR_AIGroup group = SCR_AIGroup.Cast(agent.GetParentGroup());
+		bool seen = s_OrderNoted.Contains(agent);
+		s_OrderNoted.Set(agent, group);
+		if (seen)
+			return;
 
 		IEntity body = CharacterBody(agent);
 		if (!body)
@@ -1230,7 +1250,22 @@ class KK_GarrisonHold
 			if (!agent)
 				continue;
 
-			s_OrderNoted.RemoveItem(agent);
+			s_OrderNoted.Remove(agent);
+			EndFreshOrder(agent);
+		}
+
+		// A man who left this group is not in that list. His fresh-order
+		// flag would keep clearing targets on the squad he joined.
+		array<AIAgent> noted = {};
+		for (int i = 0; i < s_OrderNoted.Count(); i++)
+			noted.Insert(s_OrderNoted.GetKey(i));
+
+		foreach (AIAgent agent : noted)
+		{
+			if (!agent || s_OrderNoted.Get(agent) != group)
+				continue;
+
+			s_OrderNoted.Remove(agent);
 			EndFreshOrder(agent);
 		}
 	}
@@ -1238,7 +1273,45 @@ class KK_GarrisonHold
 	static bool IsFreshOrder(IEntity soldier)
 	{
 		IEntity body = CharacterBody(soldier);
-		return body && s_FreshOrder.Contains(body);
+		if (!body || !s_FreshOrder.Contains(body))
+			return false;
+
+		if (!LeftNotedGroup(soldier))
+			return true;
+
+		s_FreshOrder.RemoveItem(body);
+		return false;
+	}
+
+	// True when this man was noted on a squad and he is no longer in it.
+	protected static bool LeftNotedGroup(IEntity soldier)
+	{
+		AIAgent agent = AIAgent.Cast(soldier);
+		if (!agent)
+		{
+			IEntity body = CharacterBody(soldier);
+			AIControlComponent control;
+			if (body)
+			{
+				control = AIControlComponent.Cast(
+					body.FindComponent(AIControlComponent)
+				);
+			}
+
+			if (control)
+				agent = control.GetAIAgent();
+		}
+
+		if (!agent || !s_OrderNoted.Contains(agent))
+			return false;
+
+		SCR_AIGroup noted = s_OrderNoted.Get(agent);
+		SCR_AIGroup parent = SCR_AIGroup.Cast(agent.GetParentGroup());
+		if (noted && parent == noted)
+			return false;
+
+		s_OrderNoted.Remove(agent);
+		return true;
 	}
 
 	static void EndFreshOrder(IEntity soldier)
@@ -2272,7 +2345,9 @@ class KK_GarrisonHold
 	static bool MustDashToReload(IEntity soldier)
 	{
 		IEntity body = CharacterBody(soldier);
-		if (!body || !ReloadCoverEnabled())
+		// The cover run is a clear or garrison step. Anyone else keeps
+		// the combat move he already has.
+		if (!body || !ReloadCoverEnabled() || !OrderOwnsBehavior(body))
 			return false;
 
 		if (s_ReloadBash.Contains(body))
@@ -2326,7 +2401,7 @@ class KK_GarrisonHold
 	static bool SprintBeforeReload(IEntity soldier)
 	{
 		IEntity body = CharacterBody(soldier);
-		if (!body || !ReloadSprintEnabled() || !ReloadCoverEnabled() || !GunIsDry(body))
+		if (!body || !OrderOwnsBehavior(body) || !ReloadSprintEnabled() || !ReloadCoverEnabled() || !GunIsDry(body))
 			return false;
 
 		if (s_ReloadBash.Contains(body))
@@ -3688,6 +3763,20 @@ class KK_GarrisonHold
 		return IsClearing(soldier) || HasBuilding(soldier);
 	}
 
+	// Clear, garrison, or attack, including while he is down. OrderOwnsBehavior
+	// drops out then, and these sets are what still mark the order.
+	static bool OnCqbOrder(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return false;
+
+		if (IsAttackSearch(body))
+			return true;
+
+		return s_OrderBehavior.Contains(body) || OnHouseOrder(body);
+	}
+
 	// The clear or garrison owns movement, aim, and the rifle. Perception
 	// still runs. This is on outside the building too.
 	static void SetOrderBehavior(IEntity soldier, bool active)
@@ -3825,13 +3914,15 @@ class KK_GarrisonHold
 		return false;
 	}
 
-	// Hurt, and not still clearing the room he is in. A live cluster
-	// finishes first. Anywhere else, a wound is treated as soon as he
-	// has an item for it.
+	// Hurt, and on a clear, garrison, or attack. A live clear cluster
+	// finishes first. Anyone outside those orders keeps the normal heal.
 	static bool CustomHealAllowed(IEntity soldier)
 	{
 		IEntity body = CharacterBody(soldier);
 		if (!NeedsMedical(body))
+			return false;
+
+		if (!OrderOwnsBehavior(body) && !IsAttackSearch(body))
 			return false;
 
 		if (OnClearOrder(body) && !ClearHealOpen(body))
@@ -3855,15 +3946,17 @@ class KK_GarrisonHold
 			return;
 		}
 
-		float now = WorldTime();
-		if (s_NextHealAt.Contains(body) && now < s_NextHealAt.Get(body))
-			return;
-
+		// A retry timer must not keep the speed lock on a soldier who is
+		// not on a clear, garrison, or attack.
 		if (!CustomHealAllowed(body))
 		{
 			ReleaseHealHold(body);
 			return;
 		}
+
+		float now = WorldTime();
+		if (s_NextHealAt.Contains(body) && now < s_NextHealAt.Get(body))
+			return;
 
 		HoldForHeal(body);
 
@@ -4119,6 +4212,15 @@ class KK_GarrisonHold
 		CharacterControllerComponent controller = Controller(body);
 		if (controller)
 			controller.OverrideMaxSpeed(1);
+
+		// The hold left idle speed. Put a run back so he is not stuck
+		// after the bandage, including a hold that should not have started.
+		AICharacterMovementComponent movement =
+			AICharacterMovementComponent.Cast(
+				body.FindComponent(AICharacterMovementComponent)
+			);
+		if (movement)
+			movement.SetMovementTypeWanted(EMovementType.RUN);
 	}
 
 	// A bandage needs the hands. Drawing the gun, or holding it up,
@@ -4131,6 +4233,10 @@ class KK_GarrisonHold
 
 		if (HealingNow(body))
 			return true;
+
+		// A vanilla heal on someone outside these orders is his own.
+		if (!OnCqbOrder(body))
+			return false;
 
 		return HealBehaviorRunning(body);
 	}
@@ -4661,6 +4767,7 @@ class KK_GarrisonHold
 		}
 
 		s_AttackSearch.RemoveItem(body);
+		ForgetSprintEnemy(body);
 		RefreshSearchPerception(body);
 	}
 
@@ -8992,10 +9099,11 @@ modded class SCR_AIAttackBehavior
 		}
 
 		// A man on the ground does not take the attack. CQB is paused,
-		// and this behavior would aim and walk him anyway.
+		// and this behavior would aim and walk him anyway. Anyone else
+		// who is down keeps the normal attack.
 		if (
-			KK_GarrisonHold.IsDown(character) ||
-			KK_GarrisonHold.IsDown(agentEntity)
+			(KK_GarrisonHold.IsDown(character) || KK_GarrisonHold.IsDown(agentEntity)) &&
+			(KK_GarrisonHold.OnCqbOrder(character) || KK_GarrisonHold.OnCqbOrder(agentEntity))
 		)
 		{
 			m_bUseCombatMove = false;
@@ -9461,6 +9569,7 @@ modded class SCR_AITakeGadgetInLeftHand
 	{
 		if (
 			m_eGadgetType == EGadgetType.BINOCULARS &&
+			KK_GarrisonHold.OnCqbOrder(m_KKSoldier) &&
 			!KK_GarrisonHold.AllowsBinoculars(m_KKSoldier)
 		)
 		{
@@ -9640,8 +9749,14 @@ modded class SCR_AIUtilityComponent
 			);
 
 		bool downed =
-			KK_GarrisonHold.IsDown(m_OwnerEntity) ||
-			KK_GarrisonHold.IsDown(GetOwner());
+			(
+				KK_GarrisonHold.IsDown(m_OwnerEntity) ||
+				KK_GarrisonHold.IsDown(GetOwner())
+			) &&
+			(
+				KK_GarrisonHold.OnCqbOrder(m_OwnerEntity) ||
+				KK_GarrisonHold.OnCqbOrder(GetOwner())
+			);
 
 		SCR_AIBehaviorBase result;
 		if (ignore || staleUnknown || downed)
@@ -9719,7 +9834,10 @@ modded class SCR_AISetWeaponRaised
 		if (owner)
 			body = owner.GetControlledEntity();
 
-		if (KK_GarrisonHold.IsDown(body) || KK_GarrisonHold.IsDown(owner))
+		if (
+			(KK_GarrisonHold.IsDown(body) || KK_GarrisonHold.IsDown(owner)) &&
+			(KK_GarrisonHold.OnCqbOrder(body) || KK_GarrisonHold.OnCqbOrder(owner))
+		)
 			return ENodeResult.SUCCESS;
 
 		if (KK_GarrisonHold.YieldsWeaponForHeal(body) || KK_GarrisonHold.YieldsWeaponForHeal(owner))
