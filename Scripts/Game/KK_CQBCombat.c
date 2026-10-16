@@ -915,6 +915,9 @@ class KK_GarrisonHold
 		new map<IEntity, IEntity>();
 	protected static ref map<IEntity, float> s_BarrelCoolUntil =
 		new map<IEntity, float>();
+	// Garrison has him on the side node and the trigger is allowed,
+	// so that spot can be tested before the cool-off ends.
+	protected static ref set<IEntity> s_BarrelTest = new set<IEntity>();
 	protected static ref set<IEntity> s_RoomFire = new set<IEntity>();
 	protected static ref array<BaseTarget> s_Perceived = new array<BaseTarget>();
 	protected static ref array<IEntity> s_Candidates = new array<IEntity>();
@@ -1565,7 +1568,8 @@ class KK_GarrisonHold
 		}
 
 		// Rounds are not landing. The trigger stays off for the walk.
-		if (BarrelWantsMove(body))
+		// A garrison side node turns it back on once he is standing there.
+		if (BarrelWantsMove(body) && !IsBarrelTest(body))
 			canShoot = false;
 
 		float command = 0;
@@ -4661,7 +4665,8 @@ class KK_GarrisonHold
 		}
 
 		// Rounds are not landing. The trigger stays off for the walk.
-		if (BarrelWantsMove(body))
+		// A garrison side node turns it back on once he is standing there.
+		if (BarrelWantsMove(body) && !IsBarrelTest(body))
 			canShoot = false;
 
 		float command = 0;
@@ -7748,9 +7753,50 @@ class KK_GarrisonHold
 		{
 			s_BarrelCoolUntil.Remove(body);
 			s_BarrelBlockedTarget.Remove(body);
+			s_BarrelTest.RemoveItem(body);
 		}
 
 		return false;
+	}
+
+	// World time the cool-off ends. 0 when he is not in one.
+	static float BarrelCoolDeadline(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !s_BarrelCoolUntil.Contains(body))
+			return 0;
+
+		return s_BarrelCoolUntil.Get(body);
+	}
+
+	// The man the cool-off is about. Null once that move has ended.
+	static IEntity BarrelMoveTarget(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !s_BarrelBlockedTarget.Contains(body))
+			return null;
+
+		return s_BarrelBlockedTarget.Get(body);
+	}
+
+	// Garrison sets this once he is on the side node. The cool-off
+	// still ends the test, and a hit still ends it early.
+	static void SetBarrelTest(IEntity soldier, bool testing)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		if (testing)
+			s_BarrelTest.Insert(body);
+		else
+			s_BarrelTest.RemoveItem(body);
+	}
+
+	static bool IsBarrelTest(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		return body && s_BarrelTest.Contains(body);
 	}
 
 	protected static bool BarrelCooling(IEntity body)
@@ -7892,6 +7938,7 @@ class KK_GarrisonHold
 		s_BarrelBlockedSince.Remove(body);
 		s_BarrelBlockedTarget.Remove(body);
 		s_BarrelCoolUntil.Remove(body);
+		s_BarrelTest.RemoveItem(body);
 	}
 
 	protected static float BarrelStuckMs()

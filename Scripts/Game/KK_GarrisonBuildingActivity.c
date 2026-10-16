@@ -32,6 +32,15 @@ class KK_GarrisonAgentAssignment
 	EMovementType m_eApproachSpeed;
 	ref array<vector> m_aRouteGoals = {};
 	int m_iRouteIndex;
+	bool m_bBarrelNudge;
+	bool m_bBarrelPlanted;
+	bool m_bBarrelHold;
+	bool m_bBarrelReturn;
+	vector m_vBarrelHome;
+	vector m_vBarrelStep;
+	vector m_vBarrelRejected;
+	bool m_bHasBarrelRejected;
+	float m_fBarrelUntil;
 
 	void KK_GarrisonAgentAssignment(
 		notnull AIAgent agent,
@@ -95,6 +104,11 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 	// Long enough to fire, short enough that the fight still closes on the building.
 	protected static const float FIGHT_WINDOW_MS = 4000.0;
 	protected static const float FIGHT_BOUND_MS = 3000.0;
+	// A nudge, not a new post. Adjacent interior points sit about 2.5 m apart.
+	protected static const float BARREL_STEP_MIN = 1.4;
+	protected static const float BARREL_STEP_MAX = 4.5;
+	protected static const float BARREL_STEP_ARRIVE = 1.15;
+	protected static const float BARREL_HOME_ARRIVE = 1.3;
 
 	void KK_GarrisonBuildingActivity(
 		SCR_AIGroupUtilityComponent utility,
@@ -502,6 +516,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 			if (KK_GarrisonHold.IsDown(controlledEntity))
 			{
+				ClearBarrelNudge(assignment, controlledEntity);
 				KK_GarrisonHold.PauseDownedCQB(controlledEntity);
 				assignment.m_fStartedAt = currentTime;
 				assignment.m_fStillSince = currentTime;
@@ -555,6 +570,9 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			// not arriving. Advancing here would walk the route ahead of him.
 			if (
 				!onFinalGoal &&
+				!assignment.m_bBarrelNudge &&
+				!assignment.m_bBarrelHold &&
+				!assignment.m_bBarrelReturn &&
 				!KK_GarrisonHold.PausesRoute(controlledEntity) &&
 				assignment.m_fFireUntil <= currentTime &&
 				assignment.m_fSteadyUntil <= currentTime &&
@@ -718,6 +736,12 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			}
 			assignment.m_bReloadMove = reloadMove;
 			if (reloadMove)
+			{
+				i--;
+				continue;
+			}
+
+			if (DriveBarrelNudge(assignment, controlledEntity, unitPosition, currentTime))
 			{
 				i--;
 				continue;
@@ -2250,6 +2274,339 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 			priority,
 			speed
 		);
+	}
+
+	// A blocked barrel on garrison. Step to a nearby node and shoot from
+	// there. A hit keeps him on that node until the man is gone. No hit
+	// by the end of the cool-off walks him back to where he started.
+	// Clear does not use this.
+	protected bool DriveBarrelNudge(
+		notnull KK_GarrisonAgentAssignment assignment,
+		notnull IEntity controlledEntity,
+		vector unitPosition,
+		float currentTime)
+	{
+		if (
+			!assignment.m_bBarrelNudge &&
+			!assignment.m_bBarrelHold &&
+			!assignment.m_bBarrelReturn &&
+			!InContact(assignment, currentTime)
+		)
+			assignment.m_bHasBarrelRejected = false;
+
+		if (assignment.m_bBarrelHold)
+		{
+			if (!InContact(assignment, currentTime))
+			{
+				ClearBarrelNudge(assignment, controlledEntity);
+				return false;
+			}
+
+			PlantBarrelStep(assignment, controlledEntity);
+			return true;
+		}
+
+		if (assignment.m_bBarrelReturn)
+		{
+			KK_GarrisonHold.SetBarrelTest(controlledEntity, false);
+			if (FlatGap(unitPosition, assignment.m_vBarrelHome) <= BARREL_HOME_ARRIVE)
+			{
+				ClearBarrelNudge(assignment, controlledEntity);
+				return false;
+			}
+
+			KK_GarrisonHold.SetPinned(controlledEntity, false);
+			KK_GarrisonHold.SetGarrisonPost(controlledEntity, false);
+			IssueBarrelPoint(
+				assignment,
+				assignment.m_vBarrelHome,
+				EMovementType.RUN,
+				currentTime
+			);
+			return true;
+		}
+
+		if (assignment.m_bBarrelNudge)
+		{
+			bool cooling = KK_GarrisonHold.BarrelWantsMove(controlledEntity);
+			if (!cooling && currentTime < assignment.m_fBarrelUntil)
+			{
+				assignment.m_bBarrelNudge = false;
+				assignment.m_bBarrelHold = true;
+				KK_GarrisonHold.SetBarrelTest(controlledEntity, false);
+				PlantBarrelStep(assignment, controlledEntity);
+				if (SCR_BaseGameMode.KK_LogEnabled())
+					Print("KK: Garrison barrel held");
+				return true;
+			}
+
+			if (!cooling)
+			{
+				assignment.m_bBarrelNudge = false;
+				assignment.m_bBarrelPlanted = false;
+				assignment.m_bBarrelReturn = true;
+				assignment.m_vBarrelRejected = assignment.m_vBarrelStep;
+				assignment.m_bHasBarrelRejected = true;
+				KK_GarrisonHold.SetBarrelTest(controlledEntity, false);
+				KK_GarrisonHold.SetPinned(controlledEntity, false);
+				assignment.m_fLastOrderAt = 0;
+				IssueBarrelPoint(
+					assignment,
+					assignment.m_vBarrelHome,
+					EMovementType.RUN,
+					currentTime
+				);
+				if (SCR_BaseGameMode.KK_LogEnabled())
+					Print("KK: Garrison barrel back");
+				return true;
+			}
+
+			bool there =
+				FlatGap(unitPosition, assignment.m_vBarrelStep) <=
+				BARREL_STEP_ARRIVE;
+			if (there)
+			{
+				PlantBarrelStep(assignment, controlledEntity);
+				KK_GarrisonHold.SetBarrelTest(controlledEntity, true);
+				return true;
+			}
+
+			assignment.m_bBarrelPlanted = false;
+			KK_GarrisonHold.SetBarrelTest(controlledEntity, false);
+			KK_GarrisonHold.SetPinned(controlledEntity, false);
+			KK_GarrisonHold.SetGarrisonPost(controlledEntity, false);
+			IssueBarrelPoint(
+				assignment,
+				assignment.m_vBarrelStep,
+				EMovementType.RUN,
+				currentTime
+			);
+			return true;
+		}
+
+		if (!KK_GarrisonHold.BarrelWantsMove(controlledEntity))
+			return false;
+
+		vector step;
+		if (!PickBarrelStep(assignment, controlledEntity, unitPosition, step))
+			return false;
+
+		assignment.m_bBarrelNudge = true;
+		assignment.m_bBarrelPlanted = false;
+		assignment.m_bBarrelHold = false;
+		assignment.m_bBarrelReturn = false;
+		assignment.m_bHolding = false;
+		assignment.m_bBounding = false;
+		assignment.m_fSteadyUntil = 0;
+		assignment.m_fFireUntil = 0;
+		assignment.m_vBarrelHome = unitPosition;
+		assignment.m_vBarrelStep = step;
+		assignment.m_fBarrelUntil = KK_GarrisonHold.BarrelCoolDeadline(controlledEntity);
+		if (assignment.m_fBarrelUntil <= currentTime)
+			assignment.m_fBarrelUntil = currentTime + 2000;
+
+		KK_GarrisonHold.SetBarrelTest(controlledEntity, false);
+		KK_GarrisonHold.SetPinned(controlledEntity, false);
+		KK_GarrisonHold.SetGarrisonPost(controlledEntity, false);
+		assignment.m_fLastOrderAt = 0;
+		IssueBarrelPoint(
+			assignment,
+			step,
+			EMovementType.RUN,
+			currentTime
+		);
+
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			Print("KK: Garrison barrel step");
+
+		return true;
+	}
+
+	protected void PlantBarrelStep(
+		notnull KK_GarrisonAgentAssignment assignment,
+		notnull IEntity controlledEntity)
+	{
+		if (!assignment.m_bBarrelPlanted)
+		{
+			assignment.m_bBarrelPlanted = true;
+			CancelAgentOrder(assignment.m_Agent);
+		}
+
+		KK_GarrisonHold.SetGarrisonPost(controlledEntity, false);
+		KK_GarrisonHold.SetPinned(controlledEntity, true);
+		KK_AgentMove.SetWantedSpeed(assignment.m_Agent, EMovementType.IDLE);
+	}
+
+	protected void ClearBarrelNudge(
+		notnull KK_GarrisonAgentAssignment assignment,
+		IEntity controlledEntity)
+	{
+		assignment.m_bBarrelNudge = false;
+		assignment.m_bBarrelPlanted = false;
+		assignment.m_bBarrelHold = false;
+		assignment.m_bBarrelReturn = false;
+		assignment.m_fBarrelUntil = 0;
+		if (controlledEntity)
+		{
+			KK_GarrisonHold.SetBarrelTest(controlledEntity, false);
+			KK_GarrisonHold.SetPinned(controlledEntity, false);
+		}
+	}
+
+	protected void IssueBarrelPoint(
+		notnull KK_GarrisonAgentAssignment assignment,
+		vector position,
+		EMovementType speed,
+		float currentTime)
+	{
+		if (currentTime - assignment.m_fLastOrderAt < 700)
+		{
+			KK_AgentMove.SetWantedSpeed(assignment.m_Agent, speed);
+			return;
+		}
+
+		assignment.m_fLastOrderAt = currentTime;
+		bool entering;
+		float priority = PriorityForSoldier(
+			assignment,
+			true,
+			entering,
+			false,
+			assignment.m_bCanFight
+		);
+		ApplyMovePriority(assignment, entering);
+		KK_AgentMove.Issue(
+			this,
+			m_Group,
+			assignment.m_Agent,
+			position,
+			m_mSoloHandlers,
+			priority,
+			speed
+		);
+	}
+
+	// The nearest interior point that sits beside the man he cannot hit,
+	// on this floor, and not on another soldier.
+	protected bool PickBarrelStep(
+		notnull KK_GarrisonAgentAssignment assignment,
+		notnull IEntity body,
+		vector home,
+		out vector step)
+	{
+		step = vector.Zero;
+		if (!m_Plan)
+			return false;
+
+		IEntity enemy = KK_GarrisonHold.BarrelMoveTarget(body);
+		if (!enemy)
+			enemy = GarrisonCombatEnemy(assignment);
+
+		if (!enemy)
+			return false;
+
+		vector toEnemy = enemy.GetOrigin() - home;
+		toEnemy[1] = 0;
+		if (toEnemy.Length() < 0.5)
+			return false;
+
+		toEnemy.Normalize();
+		vector best = vector.Zero;
+		float bestDist = BARREL_STEP_MAX;
+		bool found = false;
+
+		array<ref KK_InteriorTarget> targets = m_Plan.GetTargets();
+		foreach (KK_InteriorTarget target : targets)
+		{
+			if (!target)
+				continue;
+
+			vector point = target.m_vPosition;
+			if (Math.AbsFloat(point[1] - home[1]) > SAME_FLOOR_HEIGHT)
+				continue;
+
+			vector offset = point - home;
+			offset[1] = 0;
+			float distance = offset.Length();
+			if (distance < BARREL_STEP_MIN || distance > BARREL_STEP_MAX)
+				continue;
+
+			if (
+				assignment.m_bHasBarrelRejected &&
+				FlatGap(point, assignment.m_vBarrelRejected) < 0.75
+			)
+				continue;
+
+			if (distance >= bestDist)
+				continue;
+
+			float forward = vector.Dot(offset, toEnemy);
+			float lateral = Math.AbsFloat(
+				(offset[0] * toEnemy[2]) - (offset[2] * toEnemy[0])
+			);
+			if (lateral < 1 || lateral < Math.AbsFloat(forward))
+				continue;
+
+			if (BarrelStepTaken(point, body))
+				continue;
+
+			best = point;
+			bestDist = distance;
+			found = true;
+		}
+
+		if (!found)
+			return false;
+
+		step = best;
+		return true;
+	}
+
+	protected IEntity GarrisonCombatEnemy(
+		notnull KK_GarrisonAgentAssignment assignment)
+	{
+		if (!assignment.m_Agent)
+			return null;
+
+		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(assignment.m_Agent);
+		if (!soldier || !soldier.m_UtilityComponent)
+			return null;
+
+		SCR_AICombatComponent combat =
+			soldier.m_UtilityComponent.m_CombatComponent;
+		if (!combat)
+			return null;
+
+		BaseTarget target = combat.GetCurrentTarget();
+		if (!target)
+			return null;
+
+		return target.GetTargetEntity();
+	}
+
+	protected bool BarrelStepTaken(vector point, IEntity self)
+	{
+		foreach (KK_GarrisonAgentAssignment other : m_aAssignments)
+		{
+			if (!other || !other.m_Agent)
+				continue;
+
+			IEntity body = other.m_Agent.GetControlledEntity();
+			if (!body || body == self)
+				continue;
+
+			if (FlatGap(body.GetOrigin(), point) < BARREL_STEP_MIN)
+				return true;
+		}
+
+		return false;
+	}
+
+	protected float FlatGap(vector from, vector to)
+	{
+		vector gap = to - from;
+		gap[1] = 0;
+		return gap.Length();
 	}
 
 	protected void IssueMoveOrder(
