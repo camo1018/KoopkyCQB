@@ -9,6 +9,7 @@ class KK_AttackPair
 	bool m_bArrived;
 	float m_fPauseSince;
 	float m_fFirstStopAt;
+	float m_fRifleAt;
 	int m_iSide;
 	float m_fLastOrderAt;
 	float m_fStillSince;
@@ -71,6 +72,10 @@ class KK_AttackActivity : SCR_AIActivityBase
 	// Below this he has stopped. Faster than this he is still on the sprint,
 	// and taking the sprint flag off turns that move into a sidestep.
 	protected static const float MEMBER_STOP = 1.25;
+	// Long enough that a raise already in progress is not restarted. The
+	// crouch on a bound stop can eat the first one, and this sends another
+	// while the rifle is still down.
+	protected static const float OVERWATCH_RAISE_MS = 800;
 	protected static const float STUCK_MS = 8000;
 	protected static const float EMPTY_MS = 10000;
 	protected static const float SCAN_AHEAD = 40;
@@ -351,9 +356,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 				continue;
 			}
 
-			if (!pair.m_bHolding)
-				BeginHold(pair);
-
+			HoldForOverwatch(pair, now);
 			LookDownLane(pair);
 		}
 
@@ -397,7 +400,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 			if (IsTakeCover())
 				CoverHold(runner, now);
 			else
-				BeginHold(runner);
+				HoldForOverwatch(runner, now);
 
 			bool holdForPause = IsTakeCover() && FightersArrived(runner);
 			if (holdForPause && PauseMs() > 0)
@@ -517,6 +520,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 		pair.m_vStillPosition = PairCenter(pair);
 		pair.m_iNudges = 0;
 		pair.m_fFirstStopAt = 0;
+		pair.m_fRifleAt = 0;
 		SetPairCrouch(pair, false);
 		// The step does not shoot. A sprint lowers the rifle. The contact
 		// shot from the hold has to drop here, or the aim stays on him.
@@ -543,6 +547,39 @@ class KK_AttackActivity : SCR_AIActivityBase
 		pair.m_bPaused = false;
 		pair.m_bHasGoal = false;
 		StopPair(pair);
+	}
+
+	// Bound overwatch. The sprint left the rifle down. Crouch first, then
+	// raise, and raise again if that crouch cancelled it.
+	protected void HoldForOverwatch(notnull KK_AttackPair pair, float now)
+	{
+		if (!pair.m_bHolding)
+		{
+			BeginHold(pair);
+			pair.m_fRifleAt = now;
+			return;
+		}
+
+		if (now - pair.m_fRifleAt < OVERWATCH_RAISE_MS)
+			return;
+
+		bool asked = false;
+
+		foreach (AIAgent agent : pair.m_aAgents)
+		{
+			if (!agent || IsReleased(agent) || KK_GarrisonHold.IsBoundSprint(agent))
+				continue;
+
+			IEntity body = agent.GetControlledEntity();
+			if (!body || KK_GarrisonHold.WeaponIsRaised(body))
+				continue;
+
+			KK_GarrisonHold.RaiseAfterSprint(agent);
+			asked = true;
+		}
+
+		if (asked)
+			pair.m_fRifleAt = now;
 	}
 
 	protected void MaintainMove(
@@ -906,10 +943,19 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 			CancelAgent(agent);
 			KK_AgentMove.SetWantedSpeed(agent, EMovementType.IDLE);
-			ApplyWeaponForSpeed(agent, EMovementType.IDLE);
 		}
 
+		// Crouch before the raise. A stance change after the raise puts the
+		// rifle back down, and the next ask then thinks it is already up.
 		SetPairCrouch(pair, true);
+
+		foreach (AIAgent agent : pair.m_aAgents)
+		{
+			if (!agent || IsReleased(agent))
+				continue;
+
+			ApplyWeaponForSpeed(agent, EMovementType.IDLE);
+		}
 	}
 
 	protected void SetPairCrouch(notnull KK_AttackPair pair, bool crouch)
@@ -2366,6 +2412,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 			pair.m_fProgressBoost = 0;
 			pair.m_iNudges = 0;
 			pair.m_fFirstStopAt = 0;
+			pair.m_fRifleAt = 0;
 		}
 	}
 
