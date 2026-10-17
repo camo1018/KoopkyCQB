@@ -524,7 +524,7 @@ bool EnsureNavmeshLoaded(
 
 		KK_BuildingWaypointLibrary.EnsureLoaded();
 		string prefabName =
-			KK_BuildingWaypointLibrary.ResolvePrefabName(building);
+			KK_BuildingWaypointLibrary.ResolveStorageKey(building);
 		KK_PrefabWaypointSet prefabSet =
 			KK_BuildingWaypointLibrary.FindSet(prefabName);
 

@@ -119,11 +119,14 @@ class KK_WaypointAuthoring
 		}
 
 		string prefabName =
-			KK_BuildingWaypointLibrary.ResolvePrefabName(building);
+			KK_BuildingWaypointLibrary.ResolveStorageKey(building);
 
 		if (prefabName.IsEmpty())
 		{
-			Notify("This building has no prefab name");
+			if (KK_BuildingWaypointLibrary.FindPlacedName(building).IsEmpty())
+				Notify("Name this building in World Editor to save waypoints");
+			else
+				Notify("Could not read the world file for this building");
 			return false;
 		}
 
@@ -146,9 +149,9 @@ class KK_WaypointAuthoring
 		if (!hadSamples && !samples)
 			KK_AuthorEditHistory.Discard();
 		if (samples)
-			Notify("Locked this building");
+			Notify("Locked " + KK_BuildingWaypointLibrary.StorageKeyLabel(s_sLockedPrefab));
 		else
-			Notify("Locked this building, but samples failed");
+			Notify("Locked " + KK_BuildingWaypointLibrary.StorageKeyLabel(s_sLockedPrefab) + ", but samples failed");
 
 		RefreshDebugDraw();
 		return true;
@@ -185,8 +188,7 @@ class KK_WaypointAuthoring
 		if (!player)
 			return false;
 
-		string prefabName = KK_BuildingWaypointLibrary.ResolvePrefabName(building);
-		KK_AuthorEditHistory.Remember(prefabName, s_iLastWaypointId);
+		KK_AuthorEditHistory.Remember(s_sLockedPrefab, s_iLastWaypointId);
 
 		KK_EBuildingWaypointType type;
 		int removedId;
@@ -753,11 +755,11 @@ class KK_WaypointAuthoring
 		}
 		else if (ready)
 		{
-			Notify("Locked this building");
+			Notify("Locked " + KK_BuildingWaypointLibrary.StorageKeyLabel(s_sLockedPrefab));
 		}
 		else
 		{
-			Notify("Locked this building, but samples failed");
+			Notify("Locked " + KK_BuildingWaypointLibrary.StorageKeyLabel(s_sLockedPrefab) + ", but samples failed");
 		}
 
 		RefreshDebugDraw();
@@ -776,7 +778,7 @@ class KK_WaypointAuthoring
 			if (!candidate)
 				continue;
 
-			if (KK_BuildingWaypointLibrary.ResolvePrefabName(candidate) != prefabName)
+			if (KK_BuildingWaypointLibrary.ResolveStorageKey(candidate) != prefabName)
 				continue;
 
 			float distance = vector.Distance(

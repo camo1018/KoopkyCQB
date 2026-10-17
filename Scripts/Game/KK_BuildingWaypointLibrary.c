@@ -48,6 +48,7 @@ class KK_BuildingWaypointLibrary
 {
 	protected static const string PROFILE_DIR = "$profile:KoopkyCQB";
 	protected static const string WAYPOINTS_DIR = "$profile:KoopkyCQB/Waypoints";
+	protected static const string WORLD_DIR = "$profile:KoopkyCQB/Waypoints/World";
 	protected static const string LEGACY_LIBRARY_PATH = "$profile:KoopkyCQB_waypoints.json";
 	protected static const float FLOOR_BAND = 0.75;
 	protected static const float SCALE_EPSILON = 0.01;
@@ -76,6 +77,72 @@ class KK_BuildingWaypointLibrary
 			return string.Empty;
 
 		return string.Format("%1", prefabName);
+	}
+
+	// Prefab instances share one waypoint file. A placed entity with no prefab
+	// uses the world file plus the name set on it in World Editor.
+	static string ResolveStorageKey(notnull BaseBuilding building)
+	{
+		string prefabName = ResolvePrefabName(building);
+		if (!prefabName.IsEmpty())
+			return prefabName;
+
+		string placedName = FindPlacedName(building);
+		if (placedName.IsEmpty())
+			return string.Empty;
+
+		string worldFile = WorldFileKey();
+		if (worldFile.IsEmpty())
+			return string.Empty;
+
+		return "world:" + worldFile + ":" + placedName;
+	}
+
+	static string FindPlacedName(notnull IEntity entity)
+	{
+		string name = entity.GetName();
+		if (!name || name.IsEmpty())
+			return string.Empty;
+
+		return name;
+	}
+
+	static bool IsWorldStorageKey(string key)
+	{
+		if (!key || key.Length() < 6)
+			return false;
+
+		return key.Substring(0, 6) == "world:";
+	}
+
+	static string StorageKeyLabel(string key)
+	{
+		if (!IsWorldStorageKey(key))
+			return "this building";
+
+		int split = -1;
+		for (int i = 0; i < key.Length(); i++)
+		{
+			if (key[i] == ":")
+				split = i;
+		}
+
+		if (split < 0 || split >= key.Length() - 1)
+			return "this building";
+
+		return key.Substring(split + 1, key.Length() - split - 1);
+	}
+
+	protected static string WorldFileKey()
+	{
+		if (!GetGame())
+			return string.Empty;
+
+		ResourceName worldFile = GetGame().GetWorldFile();
+		if (!worldFile || worldFile.IsEmpty())
+			return string.Empty;
+
+		return string.Format("%1", worldFile);
 	}
 
 	static void ReadScale(notnull IEntity entity, out float scaleX, out float scaleY, out float scaleZ)
@@ -237,7 +304,7 @@ class KK_BuildingWaypointLibrary
 		vector worldFacing,
 		int linkFromId = -1)
 	{
-		string prefabName = ResolvePrefabName(building);
+		string prefabName = ResolveStorageKey(building);
 		KK_PrefabWaypointSet prefabSet = GetOrCreateSet(prefabName);
 		if (!prefabSet)
 			return null;
@@ -276,7 +343,7 @@ class KK_BuildingWaypointLibrary
 		type = KK_EBuildingWaypointType.POST;
 		removedId = -1;
 
-		KK_PrefabWaypointSet prefabSet = FindSet(ResolvePrefabName(building));
+		KK_PrefabWaypointSet prefabSet = FindSet(ResolveStorageKey(building));
 		if (!prefabSet)
 			return false;
 
@@ -327,7 +394,7 @@ class KK_BuildingWaypointLibrary
 		float verticalSpacing,
 		float deduplicateDistance)
 	{
-		string prefabName = ResolvePrefabName(building);
+		string prefabName = ResolveStorageKey(building);
 		KK_PrefabWaypointSet prefabSet = GetOrCreateSet(prefabName);
 		if (!prefabSet)
 			return false;
@@ -361,7 +428,7 @@ class KK_BuildingWaypointLibrary
 		float maxAlong,
 		float maxOffRay)
 	{
-		KK_PrefabWaypointSet prefabSet = FindSet(ResolvePrefabName(building));
+		KK_PrefabWaypointSet prefabSet = FindSet(ResolveStorageKey(building));
 		if (!prefabSet)
 			return -1;
 
@@ -405,7 +472,7 @@ class KK_BuildingWaypointLibrary
 		float maxAlong,
 		float maxOffRay)
 	{
-		KK_PrefabWaypointSet prefabSet = FindSet(ResolvePrefabName(building));
+		KK_PrefabWaypointSet prefabSet = FindSet(ResolveStorageKey(building));
 		if (!prefabSet)
 			return -1;
 
@@ -442,7 +509,7 @@ class KK_BuildingWaypointLibrary
 
 	static bool RemoveSampleAt(notnull BaseBuilding building, int sampleIndex)
 	{
-		KK_PrefabWaypointSet prefabSet = FindSet(ResolvePrefabName(building));
+		KK_PrefabWaypointSet prefabSet = FindSet(ResolveStorageKey(building));
 		if (!prefabSet)
 			return false;
 
@@ -459,7 +526,7 @@ class KK_BuildingWaypointLibrary
 		int sampleIndex,
 		float clusterRadius)
 	{
-		KK_PrefabWaypointSet prefabSet = FindSet(ResolvePrefabName(building));
+		KK_PrefabWaypointSet prefabSet = FindSet(ResolveStorageKey(building));
 		if (!prefabSet)
 			return 0;
 
@@ -621,7 +688,7 @@ class KK_BuildingWaypointLibrary
 		float deduplicateDistance,
 		notnull array<ref KK_InteriorTarget> targets)
 	{
-		string prefabName = ResolvePrefabName(building);
+		string prefabName = ResolveStorageKey(building);
 		KK_PrefabWaypointSet prefabSet = GetOrCreateSet(prefabName);
 		if (!prefabSet)
 			return;
@@ -826,6 +893,8 @@ class KK_BuildingWaypointLibrary
 	protected static void SaveSet(notnull KK_PrefabWaypointSet prefabSet)
 	{
 		EnsureDirectories();
+		if (IsWorldStorageKey(prefabSet.m_sPrefabName))
+			EnsureWorldDirectory(prefabSet.m_sPrefabName);
 
 		SCR_JsonSaveContext context = new SCR_JsonSaveContext();
 		WriteSet(context, prefabSet);
@@ -835,12 +904,93 @@ class KK_BuildingWaypointLibrary
 		{
 			if (SCR_BaseGameMode.KK_LogEnabled())
 				Print("KK: Failed to write " + path, LogLevel.ERROR);
+			return;
 		}
+
+		DeleteFlatWorldFile(prefabSet.m_sPrefabName, path);
 	}
 
 	protected static string PrefabFilePath(string prefabName)
 	{
+		if (IsWorldStorageKey(prefabName))
+			return WorldFilePath(prefabName);
+
 		return WAYPOINTS_DIR + "/" + PrefabFileName(prefabName);
+	}
+
+	protected static string WorldFilePath(string storageKey)
+	{
+		string worldFile;
+		string placedName;
+		if (!SplitWorldStorageKey(storageKey, worldFile, placedName))
+			return WAYPOINTS_DIR + "/world_unknown.json";
+
+		string fileName = SanitizeFileToken(placedName);
+		if (fileName.IsEmpty())
+			fileName = "building";
+
+		return WorldDirectory(worldFile) + "/" + fileName + ".json";
+	}
+
+	protected static string WorldDirectory(string worldFile)
+	{
+		string folder = GuidFromPrefab(worldFile);
+		if (folder.IsEmpty())
+			folder = SanitizeFileToken(worldFile);
+		if (folder.IsEmpty())
+			folder = "world";
+
+		return WORLD_DIR + "/" + folder;
+	}
+
+	protected static bool SplitWorldStorageKey(
+		string storageKey,
+		out string worldFile,
+		out string placedName)
+	{
+		worldFile = string.Empty;
+		placedName = string.Empty;
+
+		if (!IsWorldStorageKey(storageKey))
+			return false;
+
+		int split = -1;
+		for (int i = 0; i < storageKey.Length(); i++)
+		{
+			if (storageKey[i] == ":")
+				split = i;
+		}
+
+		if (split <= 6)
+			return false;
+
+		worldFile = storageKey.Substring(6, split - 6);
+		placedName = storageKey.Substring(split + 1, storageKey.Length() - split - 1);
+		return !worldFile.IsEmpty() && !placedName.IsEmpty();
+	}
+
+	protected static void EnsureWorldDirectory(string storageKey)
+	{
+		string worldFile;
+		string placedName;
+		if (!SplitWorldStorageKey(storageKey, worldFile, placedName))
+			return;
+
+		FileIO.MakeDirectory(WORLD_DIR);
+		FileIO.MakeDirectory(WorldDirectory(worldFile));
+	}
+
+	protected static void DeleteFlatWorldFile(string storageKey, string writtenPath)
+	{
+		if (!IsWorldStorageKey(storageKey))
+			return;
+
+		string flatPath = WAYPOINTS_DIR + "/" + SanitizeFileToken(storageKey) + ".json";
+		if (flatPath == writtenPath)
+			return;
+
+		if (FileIO.FileExists(flatPath))
+			FileIO.DeleteFile(flatPath);
 	}
 
 	protected static string PrefabFileName(string prefabName)
@@ -849,11 +999,20 @@ class KK_BuildingWaypointLibrary
 		if (!guid.IsEmpty())
 			return guid + ".json";
 
+		string safe = SanitizeFileToken(prefabName);
+		if (safe.IsEmpty())
+			safe = "prefab";
+
+		return safe + ".json";
+	}
+
+	protected static string SanitizeFileToken(string value)
+	{
 		string safe;
-		int length = prefabName.Length();
+		int length = value.Length();
 		for (int i = 0; i < length; i++)
 		{
-			string character = prefabName[i];
+			string character = value[i];
 			bool allowed =
 				(character >= "a" && character <= "z") ||
 				(character >= "A" && character <= "Z") ||
@@ -867,10 +1026,7 @@ class KK_BuildingWaypointLibrary
 				safe = safe + "_";
 		}
 
-		if (safe.IsEmpty())
-			safe = "prefab";
-
-		return safe + ".json";
+		return safe;
 	}
 
 	protected static string GuidFromPrefab(string prefabName)
@@ -1007,22 +1163,43 @@ class KK_BuildingWaypointLibrary
 		FileIO.FindFiles(files.Insert, WAYPOINTS_DIR, ".json");
 
 		if (files.IsEmpty())
-		{
 			LoadLegacyLibrary();
-			return;
+		else
+		{
+			foreach (string fileName : files)
+			{
+				string path = fileName;
+				if (!path.Contains("/") && !path.Contains("\\"))
+					path = WAYPOINTS_DIR + "/" + fileName;
+
+				LoadSetFile(path);
+			}
 		}
+
+		LoadWorldDirectory();
+
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat("KK: Loaded waypoint library with %1 prefabs", s_mSets.Count());
+	}
+
+	protected static void LoadWorldDirectory()
+	{
+		string worldFile = WorldFileKey();
+		if (worldFile.IsEmpty())
+			return;
+
+		string directory = WorldDirectory(worldFile);
+		array<string> files = {};
+		FileIO.FindFiles(files.Insert, directory, ".json");
 
 		foreach (string fileName : files)
 		{
 			string path = fileName;
 			if (!path.Contains("/") && !path.Contains("\\"))
-				path = WAYPOINTS_DIR + "/" + fileName;
+				path = directory + "/" + fileName;
 
 			LoadSetFile(path);
 		}
-
-		if (SCR_BaseGameMode.KK_LogEnabled())
-			PrintFormat("KK: Loaded waypoint library with %1 prefabs", s_mSets.Count());
 	}
 
 	protected static void LoadLegacyLibrary()
