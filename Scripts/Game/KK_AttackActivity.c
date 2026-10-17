@@ -422,9 +422,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 			return;
 		}
 
-		if (IsTakeCover())
-			SettleArrivedMembers(runner, now);
-
+		SettleArrivedMembers(runner, now);
 		MaintainMove(runner, EMovementType.SPRINT, now);
 	}
 
@@ -1455,14 +1453,25 @@ class KK_AttackActivity : SCR_AIActivityBase
 				CancelAgent(agent);
 				// Sprint keeps the rifle down in the engine. Walk now, and
 				// send the stay on a later pass so this cancel cannot drop it.
+				// Crouch before the raise, or the stance change puts it down
+				// and the next ask thinks it is already up.
 				KK_AgentMove.SetWantedSpeed(agent, EMovementType.WALK);
-				ApplyWeaponForSpeed(agent, EMovementType.WALK);
 				SetCrouch(agent, true);
+				ApplyWeaponForSpeed(agent, EMovementType.WALK);
 				m_mSettledAt.Set(agent, now);
+				pair.m_fRifleAt = now;
 			}
 			else if (now - m_mSettledAt.Get(agent) >= KK_AgentMove.REISSUE_INTERVAL_MS)
 			{
 				IssueSettledStay(agent, now);
+			}
+			else if (
+				now - pair.m_fRifleAt >= OVERWATCH_RAISE_MS &&
+				!KK_GarrisonHold.WeaponIsRaised(agent.GetControlledEntity())
+			)
+			{
+				KK_GarrisonHold.RaiseAfterSprint(agent);
+				pair.m_fRifleAt = now;
 			}
 
 			KK_GarrisonHold.SetPinned(agent.GetControlledEntity(), true);
