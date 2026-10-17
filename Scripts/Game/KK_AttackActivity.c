@@ -657,7 +657,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 			return;
 
 		float side = 4;
-		if (pair.m_iNudges % 2 == 0)
+		if (Math.Mod(pair.m_iNudges, 2) == 0)
 			side = -4;
 
 		pair.m_vGoal = pair.m_vGoal + (right * side);
@@ -682,7 +682,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (finalStep)
 		{
 			float stagger = 2;
-			if (pair.m_iIndex % 2 == 0)
+			if (Math.Mod(pair.m_iIndex, 2) == 0)
 				stagger = -2;
 
 			goal = m_vTarget + (right * stagger);
@@ -701,7 +701,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 	{
 		int band = pairIndex / 2 + 1;
 		float sign = 1;
-		if (pairIndex % 2 == 0)
+		if (Math.Mod(pairIndex, 2) == 0)
 			sign = -1;
 
 		return right * (LaneSpacing() * band * sign);
@@ -2115,7 +2115,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 			index = m_mCoverSlot.Get(agent);
 
 		int count = m_aPointCovers.Count();
-		vector spot = m_aPointCovers[index % count];
+		vector spot = m_aPointCovers[Math.Mod(index, count)];
 		return SpreadCover(spot, index / count);
 	}
 
@@ -2141,7 +2141,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 		int count = m_aPointCovers.Count();
 		// Later men leave a little after the first, so the squad does not
 		// step off together. The setting is the first man's wait.
-		float wait = CoverRotateMs() * (1 + ((index % count) * 0.25));
+		float wait = CoverRotateMs() * (1 + (Math.Mod(index, count) * 0.25));
 		return now - m_mCoverHold.Get(agent) >= wait;
 	}
 
@@ -2310,7 +2310,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 		for (int step = 1; step <= count; step++)
 		{
-			int index = (from + step) % count;
+			int index = Math.Mod(from + step, count);
 			KK_AttackPair pair = PairAt(index);
 			if (!pair || !PairAlive(pair))
 				continue;
