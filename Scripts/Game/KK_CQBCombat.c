@@ -334,6 +334,21 @@ modded class SCR_AICombatComponent
 			}
 		}
 
+		// The ray reached him and vanilla kept him. The light check still
+		// says he is not visible. That is the same as the ray missing:
+		// he is not a target, and holding him here only stops the unit.
+		if (
+			m_SelectedTarget &&
+			KK_GarrisonHold.BlockedByConditions(GetOwner(), m_SelectedTarget)
+		)
+		{
+			KK_ClearTarget();
+			m_SelectedTargetVisible = false;
+			outCurrentTarget = null;
+			outSelectedTargetChanged = false;
+			KK_GarrisonHold.DropRememberedAim(GetOwner());
+		}
+
 		if (!KK_GarrisonHold.UseRoomCombat() || !KK_GarrisonHold.HasBuilding(GetOwner()))
 		{
 			KK_StampPathLook();
@@ -881,6 +896,19 @@ class KK_GarrisonHold
 	protected static IEntity s_SeeTarget;
 	protected static float s_SeeAt = -1;
 	protected static bool s_SeeResult;
+	// The ray reached him and the light check still rejected him.
+	// A blocked ray leaves this false. Callers treat the two differently.
+	protected static bool s_SeeConditionBlock;
+	// One gear answer per world-time. The sight check asks again for the
+	// same man while it walks the room. Viewer and target stay apart so
+	// a new target does not throw away the viewer's answer.
+	protected static IEntity s_ViewerGearBody;
+	protected static float s_ViewerGearAt = -1;
+	protected static bool s_ViewerNightVision;
+	protected static bool s_ViewerFlashlight;
+	protected static IEntity s_TargetGearBody;
+	protected static float s_TargetGearAt = -1;
+	protected static bool s_TargetFlashlight;
 	protected static IEntity s_MuzzleEnt;
 	protected static int s_MuzzleBone = -1;
 	protected static ref array<WeaponSlotComponent> s_WeaponSlots =
@@ -6418,7 +6446,7 @@ class KK_GarrisonHold
 		if (!left && !right)
 			return false;
 
-		if (!ConditionsAllow(enemy))
+		if (!ConditionsAllow(body, enemy))
 			return false;
 
 		if (left && !right)
@@ -8247,24 +8275,43 @@ class KK_GarrisonHold
 		// His collider sits on the ray. Counting that hit as a block made
 		// a man on the ground invisible, so the finish never started.
 		s_SightTarget = enemy;
-		bool seen = SightClear(world, body, eye, aim);
-		if (!seen)
-			seen = SightClear(world, body, eye, enemy.GetOrigin() + Vector(0, 0.35, 0));
+		bool rayClear = SightClear(world, body, eye, aim);
+		if (!rayClear)
+			rayClear = SightClear(world, body, eye, enemy.GetOrigin() + Vector(0, 0.35, 0));
 		s_SightTarget = null;
+
+		bool seen = rayClear;
 		if (seen)
-			seen = ConditionsAllow(enemy);
+			seen = ConditionsAllow(body, enemy);
 
 		s_SeeViewer = body;
 		s_SeeTarget = enemy;
 		s_SeeAt = now;
 		s_SeeResult = seen;
+		s_SeeConditionBlock = rayClear && !seen;
 		return seen;
 	}
 
+	// The ray is clear and he still does not count as seen. A blocked
+	// ray is not this. Callers that only ask SeesTarget cannot tell them apart.
+	static bool BlockedByConditions(IEntity soldier, BaseTarget target)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!target || CanSeeTarget(body, target))
+			return false;
+
+		IEntity enemy = target.GetTargetEntity();
+		return enemy &&
+			s_SeeViewer == body &&
+			s_SeeTarget == enemy &&
+			s_SeeConditionBlock;
+	}
+
 	// The ray already succeeded. This asks whether he can pick the man
-	// out. Distance is not part of it. He sees the man when the light on
-	// him, reduced by concealment, is still enough.
-	protected static bool ConditionsAllow(IEntity enemy)
+	// out. Full dark still shows a standing man across a room. Farther
+	// than that needs light on him, a flashlight, or night vision.
+	// Concealment shortens that reach. A body at arm's length is seen.
+	protected static bool ConditionsAllow(IEntity viewer, IEntity enemy)
 	{
 		if (!UseSightConditions())
 			return true;
@@ -8278,8 +8325,183 @@ class KK_GarrisonHold
 		if (conceal > 0.85)
 			conceal = 0.85;
 
-		float apparent = IlluminationOf(enemy) * (1 - conceal);
-		return apparent >= 0.2;
+		float distance = 0;
+		if (viewer)
+			distance = vector.Distance(viewer.GetOrigin(), enemy.GetOrigin());
+
+		if (distance <= 2.5)
+			return true;
+
+		float light = IlluminationOf(enemy);
+		if (ViewerNightVision(viewer))
+			light = Math.Max(light, 0.8);
+
+		bool lit = TargetFlashlight(enemy);
+		if (!lit && ViewerFlashlight(viewer) && FlashlightCone(viewer, enemy, distance))
+			lit = true;
+
+		if (lit)
+			light = Math.Max(light, 0.75);
+
+		// 12 m in full dark, about 110 m in daylight. Night vision and a
+		// light use the floors above, so they land near the day reach.
+		float reach = 12 + (light * 100);
+		reach = reach * (1 - conceal);
+		return distance <= reach;
+	}
+
+	protected static bool ViewerNightVision(IEntity viewer)
+	{
+		RefreshViewerGear(viewer);
+		return s_ViewerNightVision;
+	}
+
+	protected static bool ViewerFlashlight(IEntity viewer)
+	{
+		RefreshViewerGear(viewer);
+		return s_ViewerFlashlight;
+	}
+
+	protected static bool TargetFlashlight(IEntity enemy)
+	{
+		float now = WorldTime();
+		if (enemy == s_TargetGearBody && now == s_TargetGearAt)
+			return s_TargetFlashlight;
+
+		s_TargetGearBody = enemy;
+		s_TargetGearAt = now;
+		s_TargetFlashlight = false;
+		if (!enemy)
+			return false;
+
+		SCR_GadgetManagerComponent manager = SCR_GadgetManagerComponent.Cast(
+			enemy.FindComponent(SCR_GadgetManagerComponent)
+		);
+		if (manager && GearListActive(manager, EGadgetType.FLASHLIGHT))
+			s_TargetFlashlight = true;
+
+		if (!s_TargetFlashlight)
+		{
+			BaseWeaponComponent weapon = CurrentWeapon(enemy);
+			if (weapon && WeaponLightOn(weapon.GetOwner(), 0))
+				s_TargetFlashlight = true;
+		}
+
+		return s_TargetFlashlight;
+	}
+
+	protected static void RefreshViewerGear(IEntity viewer)
+	{
+		float now = WorldTime();
+		if (viewer == s_ViewerGearBody && now == s_ViewerGearAt)
+			return;
+
+		s_ViewerGearBody = viewer;
+		s_ViewerGearAt = now;
+		s_ViewerNightVision = false;
+		s_ViewerFlashlight = false;
+		if (!viewer)
+			return;
+
+		SCR_GadgetManagerComponent manager = SCR_GadgetManagerComponent.Cast(
+			viewer.FindComponent(SCR_GadgetManagerComponent)
+		);
+		if (manager)
+		{
+			s_ViewerNightVision = GearListActive(manager, EGadgetType.NIGHT_VISION);
+			s_ViewerFlashlight = GearListActive(manager, EGadgetType.FLASHLIGHT);
+		}
+
+		if (s_ViewerFlashlight)
+			return;
+
+		BaseWeaponComponent weapon = CurrentWeapon(viewer);
+		if (weapon && WeaponLightOn(weapon.GetOwner(), 0))
+			s_ViewerFlashlight = true;
+	}
+
+	protected static bool GearListActive(
+		notnull SCR_GadgetManagerComponent manager,
+		EGadgetType type)
+	{
+		array<SCR_GadgetComponent> gadgets = manager.GetGadgetsByType(type);
+		if (!gadgets)
+			return false;
+
+		foreach (SCR_GadgetComponent gadget : gadgets)
+		{
+			if (GearIsActive(gadget))
+				return true;
+		}
+
+		return false;
+	}
+
+	// Worn or in the hand, and switched on. One in a pack does not light
+	// anything, and night vision that is still down does not either.
+	protected static bool GearIsActive(SCR_GadgetComponent gadget)
+	{
+		if (!gadget || !gadget.IsToggledOn())
+			return false;
+
+		EGadgetMode mode = gadget.GetMode();
+		return mode == EGadgetMode.IN_HAND || mode == EGadgetMode.IN_SLOT;
+	}
+
+	// A light mounted on the gun is not in the gadget list. The weapon's
+	// own pieces are.
+	protected static bool WeaponLightOn(IEntity entity, int depth)
+	{
+		if (!entity || depth > 3)
+			return false;
+
+		SCR_GadgetComponent gadget = SCR_GadgetComponent.Cast(
+			entity.FindComponent(SCR_GadgetComponent)
+		);
+		// A rail light is not in a vest slot. Switched on is enough.
+		if (
+			gadget &&
+			gadget.IsToggledOn() &&
+			gadget.GetType() == EGadgetType.FLASHLIGHT
+		)
+		{
+			return true;
+		}
+
+		IEntity child = entity.GetChildren();
+		while (child)
+		{
+			if (WeaponLightOn(child, depth + 1))
+				return true;
+
+			child = child.GetSibling();
+		}
+
+		return false;
+	}
+
+	// The handheld light points with him. A man beside him is not in it.
+	// Past the beam, the light does not count.
+	protected static bool FlashlightCone(IEntity viewer, IEntity enemy, float distance)
+	{
+		if (!viewer || !enemy || distance > 40)
+			return false;
+
+		vector transform[4];
+		viewer.GetWorldTransform(transform);
+		vector forward = transform[2];
+		forward[1] = 0;
+		if (forward.Length() < 0.01)
+			return true;
+
+		forward.Normalize();
+		vector toEnemy = enemy.GetOrigin() - viewer.GetOrigin();
+		toEnemy[1] = 0;
+		if (toEnemy.Length() < 1)
+			return true;
+
+		toEnemy.Normalize();
+		return vector.Dot(forward, toEnemy) >= 0.5;
 	}
 
 	protected static bool UseSightConditions()
