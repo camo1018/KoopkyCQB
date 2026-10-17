@@ -203,7 +203,6 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 17: return mode.KK_GetDebugLog();
 			case 18: return mode.KK_GetSidearmThenRelease();
 			case 19: return mode.KK_GetStartFromOrder();
-			case 21: return mode.KK_GetTakeCoverAttack();
 			case 22: return mode.KK_GetSnapAim();
 			case 23: return mode.KK_GetSnapAimError();
 			case 24: return mode.KK_GetShotDelaySkill();
@@ -236,7 +235,6 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 17: mode.KK_SetDebugLog(value); break;
 			case 18: mode.KK_SetSidearmThenRelease(value); break;
 			case 19: mode.KK_SetStartFromOrder(value); break;
-			case 21: mode.KK_SetTakeCoverAttack(value); break;
 			case 22: mode.KK_SetSnapAim(value); break;
 			case 23: mode.KK_SetSnapAimError(value); break;
 			case 24: mode.KK_SetShotDelaySkill(value); break;
@@ -523,8 +521,6 @@ class KK_CQBAttrCoverHandoff : KK_CQBFloatEditorAttribute {}
 class KK_CQBAttrAttackContactDuration : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrAttackArrivalRadius : KK_CQBFloatEditorAttribute {}
-[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
-class KK_CQBAttrTakeCoverAttack : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrTakeCoverReturn : KK_CQBFloatEditorAttribute {}
 

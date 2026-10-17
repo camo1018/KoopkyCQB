@@ -143,9 +143,6 @@ modded class SCR_BaseGameMode
 	[Attribute("8", UIWidgets.EditBox, "Distance to the point that finishes an attack (m)", category: "Koopky CQB/Attack")]
 	protected float m_fKK_AttackArrivalRadius;
 
-	[Attribute("1", UIWidgets.CheckBox, "At the point, normal attack runs the fight. Off, this order keeps them on the cover spot.", category: "Koopky CQB/Attack")]
-	protected bool m_bKK_TakeCoverAttack;
-
 	[Attribute("40", UIWidgets.EditBox, "Distance from the point before a soldier is walked back into cover (m)", category: "Koopky CQB/Attack")]
 	protected float m_fKK_TakeCoverReturn;
 
@@ -390,7 +387,6 @@ modded class SCR_BaseGameMode
 			KK_ReadFloat(context, "CoverHandoff", m_fKK_CoverHandoff);
 			KK_ReadFloat(context, "ContactDuration", m_fKK_AttackContactDuration);
 			KK_ReadFloat(context, "ArrivalRadius", m_fKK_AttackArrivalRadius);
-			KK_ReadBool(context, "TakeCoverAttack", m_bKK_TakeCoverAttack);
 			KK_ReadFloat(context, "TakeCoverReturn", m_fKK_TakeCoverReturn);
 			context.EndObject();
 		}
@@ -594,7 +590,6 @@ modded class SCR_BaseGameMode
 		context.WriteValue("CoverHandoff", m_fKK_CoverHandoff);
 		context.WriteValue("ContactDuration", m_fKK_AttackContactDuration);
 		context.WriteValue("ArrivalRadius", m_fKK_AttackArrivalRadius);
-		context.WriteValue("TakeCoverAttack", m_bKK_TakeCoverAttack);
 		context.WriteValue("TakeCoverReturn", m_fKK_TakeCoverReturn);
 		context.EndObject();
 
@@ -769,11 +764,6 @@ modded class SCR_BaseGameMode
 	float KK_GetAttackArrivalRadius()
 	{
 		return Math.Max(m_fKK_AttackArrivalRadius, 3);
-	}
-
-	bool KK_GetTakeCoverAttack()
-	{
-		return m_bKK_TakeCoverAttack;
 	}
 
 	float KK_GetTakeCoverReturn()
@@ -1069,7 +1059,6 @@ modded class SCR_BaseGameMode
 	void KK_SetCoverHandoff(float value) { m_fKK_CoverHandoff = value; }
 	void KK_SetAttackContactDuration(float value) { m_fKK_AttackContactDuration = value; }
 	void KK_SetAttackArrivalRadius(float value) { m_fKK_AttackArrivalRadius = value; }
-	void KK_SetTakeCoverAttack(bool value) { m_bKK_TakeCoverAttack = value; }
 	void KK_SetTakeCoverReturn(float value) { m_fKK_TakeCoverReturn = value; }
 	void KK_SetGarrisonSearchRadius(float value) { m_fKK_GarrisonSearchRadius = value; }
 	void KK_SetGarrisonArrivalRadius(float value) { m_fKK_GarrisonArrivalRadius = value; }
