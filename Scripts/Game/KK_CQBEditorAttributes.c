@@ -85,6 +85,7 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 36: return mode.KK_GetAttackArrivalRadius();
 			case 37: return mode.KK_GetTakeCoverReturn();
 			case 47: return mode.KK_GetCoverRotate();
+			case 48: return mode.KK_GetCoverRadius();
 			case 41: return mode.KK_GetRoomCombatRange();
 			case 43: return mode.KK_GetBarrelStuck();
 			case 44: return mode.KK_GetBarrelCool();
@@ -139,6 +140,7 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 36: mode.KK_SetAttackArrivalRadius(value); break;
 			case 37: mode.KK_SetTakeCoverReturn(value); break;
 			case 47: mode.KK_SetCoverRotate(value); break;
+			case 48: mode.KK_SetCoverRadius(value); break;
 			case 41: mode.KK_SetRoomCombatRange(value); break;
 			case 43: mode.KK_SetBarrelStuck(value); break;
 			case 44: mode.KK_SetBarrelCool(value); break;
@@ -521,6 +523,8 @@ class KK_CQBAttrAttackPause : KK_CQBFloatEditorAttribute {}
 class KK_CQBAttrCoverHandoff : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrCoverRotate : KK_CQBFloatEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrCoverRadius : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrAttackContactDuration : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
