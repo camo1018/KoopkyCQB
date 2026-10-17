@@ -146,6 +146,9 @@ modded class SCR_BaseGameMode
 	[Attribute("40", UIWidgets.EditBox, "Distance from the point before a soldier is walked back into cover (m)", category: "Koopky CQB/Attack")]
 	protected float m_fKK_TakeCoverReturn;
 
+	[Attribute("12", UIWidgets.EditBox, "Take cover: seconds a soldier stays in one cover at the point before he moves to the next. 0 stays in the first cover.", category: "Koopky CQB/Attack")]
+	protected float m_fKK_CoverRotate;
+
 	[Attribute("1", UIWidgets.CheckBox, "While clearing, garrisoning, or on an attack waypoint, suppression does not slow recognition and the first shot does not wait. An attack stays at the alerted rate for the whole order.", category: "Koopky CQB/Combat")]
 	protected bool m_bKK_SharpCombat;
 
@@ -388,6 +391,7 @@ modded class SCR_BaseGameMode
 			KK_ReadFloat(context, "ContactDuration", m_fKK_AttackContactDuration);
 			KK_ReadFloat(context, "ArrivalRadius", m_fKK_AttackArrivalRadius);
 			KK_ReadFloat(context, "TakeCoverReturn", m_fKK_TakeCoverReturn);
+			KK_ReadFloat(context, "CoverRotate", m_fKK_CoverRotate);
 			context.EndObject();
 		}
 
@@ -591,6 +595,7 @@ modded class SCR_BaseGameMode
 		context.WriteValue("ContactDuration", m_fKK_AttackContactDuration);
 		context.WriteValue("ArrivalRadius", m_fKK_AttackArrivalRadius);
 		context.WriteValue("TakeCoverReturn", m_fKK_TakeCoverReturn);
+		context.WriteValue("CoverRotate", m_fKK_CoverRotate);
 		context.EndObject();
 
 		context.StartObject("Combat");
@@ -769,6 +774,11 @@ modded class SCR_BaseGameMode
 	float KK_GetTakeCoverReturn()
 	{
 		return Math.Max(m_fKK_TakeCoverReturn, 3);
+	}
+
+	float KK_GetCoverRotate()
+	{
+		return Math.Max(m_fKK_CoverRotate, 0);
 	}
 
 	float KK_GetGarrisonSearchRadius()
@@ -1060,6 +1070,7 @@ modded class SCR_BaseGameMode
 	void KK_SetAttackContactDuration(float value) { m_fKK_AttackContactDuration = value; }
 	void KK_SetAttackArrivalRadius(float value) { m_fKK_AttackArrivalRadius = value; }
 	void KK_SetTakeCoverReturn(float value) { m_fKK_TakeCoverReturn = value; }
+	void KK_SetCoverRotate(float value) { m_fKK_CoverRotate = value; }
 	void KK_SetGarrisonSearchRadius(float value) { m_fKK_GarrisonSearchRadius = value; }
 	void KK_SetGarrisonArrivalRadius(float value) { m_fKK_GarrisonArrivalRadius = value; }
 	void KK_SetHoldRadius(float value) { m_fKK_HoldRadius = value; }

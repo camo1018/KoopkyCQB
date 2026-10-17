@@ -32,6 +32,9 @@ class KK_AttackWaypoint : SCR_AIWaypoint
 	[Attribute("8", UIWidgets.EditBox, "Distance to the point that finishes the order (m)")]
 	protected float m_fArrivalRadius;
 
+	[Attribute("12", UIWidgets.EditBox, "Seconds in one cover at the point before moving to the next. 0 stays.")]
+	protected float m_fCoverRotate;
+
 	protected bool m_bReplaced;
 
 	KK_EAttackPace GetPace()
@@ -83,6 +86,11 @@ class KK_AttackWaypoint : SCR_AIWaypoint
 		return Math.Max(m_fArrivalRadius, 3);
 	}
 
+	float GetCoverRotate()
+	{
+		return Math.Max(m_fCoverRotate, 0);
+	}
+
 	void ApplyScenarioSettings()
 	{
 		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
@@ -95,6 +103,7 @@ class KK_AttackWaypoint : SCR_AIWaypoint
 		m_fReturnFire = mode.KK_GetAttackContactDuration();
 		m_fLaneOffset = mode.KK_GetAttackLaneOffset();
 		m_fArrivalRadius = mode.KK_GetAttackArrivalRadius();
+		m_fCoverRotate = mode.KK_GetCoverRotate();
 	}
 
 	void MarkReplaced()

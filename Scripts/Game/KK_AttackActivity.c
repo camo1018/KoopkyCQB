@@ -16,8 +16,6 @@ class KK_AttackPair
 	vector m_vStillPosition;
 	int m_iNudges;
 	float m_fProgressBoost;
-	vector m_vPointCover;
-	bool m_bPointCover;
 
 	void KK_AttackPair()
 	{
@@ -48,6 +46,13 @@ class KK_AttackActivity : SCR_AIActivityBase
 	protected ref set<AIAgent> m_Released = new set<AIAgent>();
 	protected ref map<AIAgent, float> m_mReturnAt = new map<AIAgent, float>();
 	protected ref map<AIAgent, float> m_mCoverAt = new map<AIAgent, float>();
+	// Cover spots around the point, in order around the circle. Each man
+	// who arrives takes the next one.
+	protected ref array<vector> m_aPointCovers = {};
+	protected bool m_bPointCovers;
+	protected ref map<AIAgent, int> m_mCoverSlot = new map<AIAgent, int>();
+	protected ref map<AIAgent, float> m_mCoverHold = new map<AIAgent, float>();
+	protected int m_iCoverAssign;
 	protected ref map<AIAgent, float> m_mPerceptionFactors =
 		new map<AIAgent, float>();
 
@@ -1830,6 +1835,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (m_mCoverAt.Contains(agent))
 			m_mCoverAt.Remove(agent);
 
+		if (m_mCoverHold.Contains(agent))
+			m_mCoverHold.Remove(agent);
+
 		ApplyWeaponForSpeed(agent, EMovementType.IDLE);
 		SetCrouch(agent, false);
 		CancelLook(agent);
@@ -2021,11 +2029,22 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 		vector slot = CoverSlot(pair, agent);
 		bool planted = FlatDistance(body.GetOrigin(), slot) <= COVER_REACH;
+		if (planted && CoverRotateDue(agent, now))
+		{
+			AdvanceCover(agent);
+			slot = CoverSlot(pair, agent);
+			planted = false;
+			m_mCoverAt.Remove(agent);
+		}
+
 		bool due = !m_mCoverAt.Contains(agent) ||
 			now - m_mCoverAt.Get(agent) >= KK_AgentMove.REISSUE_INTERVAL_MS;
 
 		if (!planted)
 		{
+			if (m_mCoverHold.Contains(agent))
+				m_mCoverHold.Remove(agent);
+
 			KK_GarrisonHold.SetPinned(body, false);
 			SetCrouch(agent, false);
 
@@ -2051,6 +2070,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 			return;
 		}
 
+		if (!m_mCoverHold.Contains(agent))
+			m_mCoverHold.Set(agent, now);
+
 		SetCrouch(agent, true);
 		ApplyWeaponForSpeed(agent, EMovementType.WALK);
 
@@ -2073,112 +2095,204 @@ class KK_AttackActivity : SCR_AIActivityBase
 			LookAgentDownLane(agent, axis);
 	}
 
+	// Each man who reaches the point takes the next cover around it.
+	// He keeps that spot until the rotate time, including a walk back.
 	protected vector CoverSlot(notnull KK_AttackPair pair, AIAgent agent)
 	{
-		vector axis;
-		vector right;
-		if (!BuildAxis(axis, right))
-			return PointCoverFor(pair);
+		EnsurePointCovers();
 
-		return PointCoverFor(pair) + (right * CoverSlotSide(pair, agent));
-	}
-
-	protected float CoverSlotSide(notnull KK_AttackPair pair, AIAgent agent)
-	{
-		int slot = 0;
-
-		foreach (AIAgent member : pair.m_aAgents)
-		{
-			if (!member || !member.GetControlledEntity())
-				continue;
-
-			float side = -1.5;
-			if (slot == 1)
-				side = 1.5;
-
-			if (member == agent)
-				return side;
-
-			slot++;
-		}
-
-		return 0;
-	}
-
-	protected vector PointCoverFor(notnull KK_AttackPair pair)
-	{
-		if (!pair.m_bPointCover)
-		{
-			pair.m_vPointCover = CoverAroundPoint(pair);
-			pair.m_bPointCover = true;
-		}
-
-		return pair.m_vPointCover;
-	}
-
-	// A ring around the point, still inside the finish distance. The first
-	// spot with something solid beside it wins. An open point keeps the
-	// staggered seed.
-	protected vector CoverAroundPoint(notnull KK_AttackPair pair)
-	{
-		vector axis;
-		vector right;
-		if (!BuildAxis(axis, right))
+		if (!m_aPointCovers || m_aPointCovers.Count() == 0)
 			return OnNavmesh(m_vTarget);
 
-		float stagger = 2;
-		if (pair.m_iIndex % 2 == 0)
-			stagger = -2;
+		if (!agent || !m_mCoverSlot.Contains(agent))
+		{
+			m_mCoverSlot.Set(agent, m_iCoverAssign);
+			m_iCoverAssign++;
+		}
 
-		vector seed = m_vTarget + (right * stagger);
+		int index = 0;
+		if (agent)
+			index = m_mCoverSlot.Get(agent);
+
+		int count = m_aPointCovers.Count();
+		vector spot = m_aPointCovers[index % count];
+		return SpreadCover(spot, index / count);
+	}
+
+	// Planted long enough, and not in a shot. One cover has nowhere to go.
+	protected bool CoverRotateDue(AIAgent agent, float now)
+	{
+		if (!agent || !m_aPointCovers || m_aPointCovers.Count() < 2)
+			return false;
+
+		if (CoverRotateMs() <= 0)
+			return false;
+
+		if (!m_mCoverHold.Contains(agent))
+			return false;
+
+		if (CanReturnFire(agent))
+			return false;
+
+		int index = 0;
+		if (m_mCoverSlot.Contains(agent))
+			index = m_mCoverSlot.Get(agent);
+
+		int count = m_aPointCovers.Count();
+		// Later men leave a little after the first, so the squad does not
+		// step off together. The setting is the first man's wait.
+		float wait = CoverRotateMs() * (1 + ((index % count) * 0.25));
+		return now - m_mCoverHold.Get(agent) >= wait;
+	}
+
+	protected float CoverRotateMs()
+	{
+		if (!m_AttackWaypoint)
+			return 12000;
+
+		return m_AttackWaypoint.GetCoverRotate() * 1000;
+	}
+
+	protected void AdvanceCover(AIAgent agent)
+	{
+		if (!agent)
+			return;
+
+		int index = 0;
+		if (m_mCoverSlot.Contains(agent))
+			index = m_mCoverSlot.Get(agent);
+
+		m_mCoverSlot.Set(agent, index + 1);
+		m_mCoverHold.Remove(agent);
+	}
+
+	// Spots in order around the point. One direction keeps the sample
+	// closest to something solid, and a second sample of that same
+	// cover is dropped.
+	protected void EnsurePointCovers()
+	{
+		if (m_bPointCovers)
+			return;
+
+		m_bPointCovers = true;
+		m_aPointCovers.Clear();
+
+		vector axis;
+		vector right;
+		if (!BuildAxis(axis, right))
+		{
+			m_aPointCovers.Insert(OnNavmesh(m_vTarget));
+			return;
+		}
+
 		float limit = Arrival() - 1;
 		if (limit < 3)
 			limit = 3;
-
-		vector best = OnNavmesh(seed);
-		float bestHit = 99;
-		bool found = false;
-		TakeCoverSpot(seed, right, limit, best, bestHit, found);
 
 		for (int step = 0; step < 8; step++)
 		{
 			float angle = (Math.PI2 * step) / 8;
 			vector dir = (right * Math.Sin(angle)) + (axis * Math.Cos(angle));
-			TakeCoverSpot(seed + (dir * 2.5), right, limit, best, bestHit, found);
-			TakeCoverSpot(seed + (dir * 5), right, limit, best, bestHit, found);
+			vector place;
+			float hit;
+			bool found = false;
+			float bestHit = 99;
+
+			if (ReadCover(m_vTarget + (dir * 2.5), right, limit, place, hit))
+			{
+				found = true;
+				bestHit = hit;
+			}
+
+			vector farther;
+			float fartherHit;
+			if (
+				ReadCover(m_vTarget + (dir * 5), right, limit, farther, fartherHit) &&
+				(!found || fartherHit < bestHit)
+			)
+			{
+				place = farther;
+				found = true;
+			}
+
+			if (!found || NearPointCover(place))
+				continue;
+
+			m_aPointCovers.Insert(place);
 		}
 
-		return best;
+		if (m_aPointCovers.Count() > 0)
+			return;
+
+		for (int step = 0; step < 8; step++)
+		{
+			float angle = (Math.PI2 * step) / 8;
+			vector dir = (right * Math.Sin(angle)) + (axis * Math.Cos(angle));
+			vector place = OnNavmesh(m_vTarget + (dir * 3));
+			if (FlatDistance(place, m_vTarget) > limit)
+				continue;
+
+			if (NearPointCover(place))
+				continue;
+
+			m_aPointCovers.Insert(place);
+		}
+
+		if (m_aPointCovers.Count() == 0)
+			m_aPointCovers.Insert(OnNavmesh(m_vTarget));
 	}
 
-	protected void TakeCoverSpot(
+	protected bool ReadCover(
 		vector candidate,
 		vector right,
 		float limit,
-		inout vector best,
-		inout float bestHit,
-		inout bool found)
+		out vector place,
+		out float hit)
 	{
-		vector place = OnNavmesh(candidate);
-		float hit = -1;
-		bool keep = found;
-		float keptHit = bestHit;
-		vector kept = best;
+		place = OnNavmesh(candidate);
+		hit = -1;
 
-		if (FlatDistance(place, m_vTarget) <= limit)
-			hit = CoverDistance(place, right);
+		if (FlatDistance(place, m_vTarget) > limit)
+			return false;
 
-		if (hit >= 0 && (!keep || hit < keptHit))
+		hit = CoverDistance(place, right);
+		return hit >= 0;
+	}
+
+	protected bool NearPointCover(vector place)
+	{
+		foreach (vector kept : m_aPointCovers)
 		{
-			found = true;
-			bestHit = hit;
-			best = place;
-			return;
+			if (FlatDistance(kept, place) < 2.5)
+				return true;
 		}
 
-		found = keep;
-		bestHit = keptHit;
-		best = kept;
+		return false;
+	}
+
+	// More men than covers. The next man stands along that same cover
+	// instead of on the first man. Stay inside the finish distance.
+	protected vector SpreadCover(vector spot, int lap)
+	{
+		if (lap <= 0)
+			return spot;
+
+		vector flat = spot - m_vTarget;
+		flat[1] = 0;
+		if (flat.Length() < 0.2)
+			return spot;
+
+		flat.Normalize();
+		vector side = Vector(-flat[2], 0, flat[0]);
+		float limit = Arrival() - 1;
+		vector shifted = spot + (side * (1.5 * lap));
+		if (FlatDistance(shifted, m_vTarget) > limit)
+			shifted = spot - (side * (1.5 * lap));
+
+		if (FlatDistance(shifted, m_vTarget) > limit)
+			return spot;
+
+		return OnNavmesh(shifted);
 	}
 
 	protected bool RunnerIsLive()
@@ -2492,6 +2606,11 @@ class KK_AttackActivity : SCR_AIActivityBase
 		m_Released.Clear();
 		m_mReturnAt.Clear();
 		m_mCoverAt.Clear();
+		m_aPointCovers.Clear();
+		m_bPointCovers = false;
+		m_mCoverSlot.Clear();
+		m_mCoverHold.Clear();
+		m_iCoverAssign = 0;
 
 		foreach (KK_AttackPair pair : m_aPairs)
 		{
@@ -2502,7 +2621,6 @@ class KK_AttackActivity : SCR_AIActivityBase
 				KK_GarrisonHold.SetRecalled(agent, false);
 
 			pair.m_bHasGoal = false;
-			pair.m_bPointCover = false;
 			pair.m_bHolding = false;
 			pair.m_bPaused = false;
 			pair.m_bArrived = false;
