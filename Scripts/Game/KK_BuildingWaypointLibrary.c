@@ -80,7 +80,8 @@ class KK_BuildingWaypointLibrary
 	}
 
 	// Prefab instances share one waypoint file. A placed entity with no prefab
-	// uses the world file plus the name set on it in World Editor.
+	// uses the world file plus its World Editor name, or its editor entity id
+	// when that name is empty.
 	static string ResolveStorageKey(notnull BaseBuilding building)
 	{
 		string prefabName = ResolvePrefabName(building);
@@ -88,6 +89,8 @@ class KK_BuildingWaypointLibrary
 			return prefabName;
 
 		string placedName = FindPlacedName(building);
+		if (placedName.IsEmpty())
+			placedName = EditorEntityIdKey(building);
 		if (placedName.IsEmpty())
 			return string.Empty;
 
@@ -105,6 +108,23 @@ class KK_BuildingWaypointLibrary
 			return string.Empty;
 
 		return name;
+	}
+
+	static bool HasPlacedIdentity(notnull IEntity entity)
+	{
+		if (!FindPlacedName(entity).IsEmpty())
+			return true;
+
+		return !EditorEntityIdKey(entity).IsEmpty();
+	}
+
+	protected static string EditorEntityIdKey(notnull IEntity entity)
+	{
+		string token = SanitizeFileToken(string.Format("%1", entity.GetID()));
+		if (token.IsEmpty() || token == "0" || token == "_")
+			return string.Empty;
+
+		return "eid_" + token;
 	}
 
 	static bool IsWorldStorageKey(string key)
@@ -130,7 +150,11 @@ class KK_BuildingWaypointLibrary
 		if (split < 0 || split >= key.Length() - 1)
 			return "this building";
 
-		return key.Substring(split + 1, key.Length() - split - 1);
+		string label = key.Substring(split + 1, key.Length() - split - 1);
+		if (label.Length() > 4 && label.Substring(0, 4) == "eid_")
+			return "entity " + label.Substring(4, label.Length() - 4);
+
+		return label;
 	}
 
 	protected static string WorldFileKey()

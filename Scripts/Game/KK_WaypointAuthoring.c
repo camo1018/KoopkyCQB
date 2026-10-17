@@ -123,10 +123,10 @@ class KK_WaypointAuthoring
 
 		if (prefabName.IsEmpty())
 		{
-			if (KK_BuildingWaypointLibrary.FindPlacedName(building).IsEmpty())
-				Notify("Name this building in World Editor to save waypoints");
-			else
+			if (KK_BuildingWaypointLibrary.HasPlacedIdentity(building))
 				Notify("Could not read the world file for this building");
+			else
+				Notify("Could not identify this building");
 			return false;
 		}
 
