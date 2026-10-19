@@ -11,6 +11,7 @@ class KK_InteriorAgentAssignment
 	IEntity m_DoorEntity;
 	bool m_bClearsPoint;
 	bool m_bHoldsDoor;
+	bool m_bOuterStack;
 	bool m_bFacingApplied;
 	bool m_bWeaponUp;
 	bool m_bRunSet;
@@ -75,6 +76,16 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 	// flips between two nearby nodes as the squad center wobbles.
 	protected ref map<AIAgent, ref KK_InteriorTarget> m_mSparePost =
 		new map<AIAgent, ref KK_InteriorTarget>();
+
+	// Waiting men line up outside the near wall. These are not clear
+	// points, and the line is fixed from where the squad started.
+	protected ref array<ref KK_InteriorTarget> m_aOuterSlots = {};
+	protected vector m_vOuterApproach;
+	protected vector m_vOuterCenter;
+	protected vector m_vOuterOutward;
+	protected vector m_vOuterAlong;
+	protected bool m_bOuterApproachSet;
+	protected bool m_bOuterBasisReady;
 
 	protected ref map<AIAgent, vector> m_mLastMoveGoal =
 		new map<AIAgent, vector>();
@@ -528,6 +539,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			}
 			else if (
 				!assignment.m_bClearsPoint &&
+				!assignment.m_bOuterStack &&
 				SpareHoldExpired(assignment.m_Target)
 			)
 			{
@@ -1146,12 +1158,30 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			}
 		}
 
+		// A spread still has to take men off the outer wall when a
+		// point is open. Anyone the split does not take stays there.
+		if (
+			mode == KK_EClearSpareMode.FREE_PAIRS ||
+			mode == KK_EClearSpareMode.SPREAD ||
+			mode == KK_EClearSpareMode.SPREAD_PAIRS
+		)
+		{
+			int slots = OpenClearerSlots(mode, floor, floors, clusters);
+			array<AIAgent> alreadyFree = {};
+			CollectFreeAgents(alreadyFree);
+			int pullOuter = slots - alreadyFree.Count();
+
+			if (pullOuter > 0)
+				ReleaseSparesForClearers(floor, -1, pullOuter, anchor);
+		}
+
 		array<AIAgent> free = {};
 		CollectFreeAgents(free);
 
 		if (mode == KK_EClearSpareMode.SPREAD)
 		{
 			AssignSpread(free, floor, anchor, currentTime);
+			HoldIdleOnOuter(currentTime);
 			return;
 		}
 
@@ -1165,6 +1195,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				anchor,
 				currentTime
 			);
+			HoldIdleOnOuter(currentTime);
 			return;
 		}
 
@@ -1187,11 +1218,15 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				);
 			}
 
+			HoldIdleOnOuter(currentTime);
 			return;
 		}
 
 		if (activeIndex < 0)
+		{
+			HoldIdleOnOuter(currentTime);
 			return;
+		}
 
 		AssignClearersToRoom(
 			floors[activeIndex],
@@ -1234,6 +1269,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				free,
 				currentTime
 			);
+			HoldIdleOnOuter(currentTime);
 			return;
 		}
 
@@ -1246,7 +1282,10 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		);
 
 		if (!post)
+		{
+			HoldIdleOnOuter(currentTime);
 			return;
+		}
 
 		foreach (AIAgent spare : free)
 		{
@@ -1255,6 +1294,8 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 			AssignSpare(spare, StableSparePost(spare, post), currentTime);
 		}
+
+		HoldIdleOnOuter(currentTime);
 	}
 
 	protected bool HasAssignment(notnull AIAgent agent)
@@ -2228,7 +2269,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 
 		for (int i = pool.Count() - 1; i >= 0; i--)
 		{
-			if (!pool[i])
+			if (!pool[i] || AgentHoldsOuterStack(pool[i]))
 				continue;
 
 			ReleaseSpareAgent(pool[i]);
@@ -2503,7 +2544,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 		for (int i = m_aAssignments.Count() - 1; i >= 0; i--)
 		{
 			KK_InteriorAgentAssignment assignment = m_aAssignments[i];
-			if (!assignment || assignment.m_bClearsPoint)
+			if (!assignment || assignment.m_bClearsPoint || assignment.m_bOuterStack)
 				continue;
 
 			if (
@@ -2833,6 +2874,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			assignment.m_Agent.GetControlledEntity().GetOrigin();
 
 		assignment.m_bFacingApplied = false;
+		assignment.m_bOuterStack = false;
 		assignment.m_Target = target;
 		assignment.m_fStartedAt = currentTime;
 		assignment.m_fStillSince = currentTime;
@@ -2884,6 +2926,445 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 			return m_ClearWaypoint.GetOrigin();
 
 		return sum / count;
+	}
+
+	// The floor the sweep starts on. The outside line uses its ground.
+	protected int EntryFloor()
+	{
+		array<ref KK_InteriorTarget> targets = m_Plan.GetTargets();
+
+		foreach (KK_InteriorTarget target : targets)
+		{
+			if (!target)
+				continue;
+
+			return target.m_iFloor;
+		}
+
+		return 0;
+	}
+
+	protected int OpenClearerSlots(
+		int mode,
+		int floor,
+		notnull array<int> floors,
+		notnull array<int> clusters)
+	{
+		if (mode == KK_EClearSpareMode.SPREAD)
+		{
+			array<KK_InteriorTarget> pending = {};
+			CollectPendingOnFloor(floor, pending);
+			return pending.Count();
+		}
+
+		if (
+			mode != KK_EClearSpareMode.FREE_PAIRS &&
+			mode != KK_EClearSpareMode.SPREAD_PAIRS
+		)
+		{
+			return 0;
+		}
+
+		int slots;
+
+		for (int i = 0; i < clusters.Count(); i++)
+		{
+			if (floors[i] != floor)
+				continue;
+
+			if (!RoomNeedsClear(floors[i], clusters[i]))
+				continue;
+
+			array<KK_InteriorTarget> pending = {};
+			CollectPendingInRoom(floors[i], clusters[i], pending);
+
+			int cap = 2;
+			if (pending.Count() < cap)
+				cap = pending.Count();
+
+			int have = CountClearers(floors[i], clusters[i]);
+			if (have >= cap)
+				continue;
+
+			slots += cap - have;
+		}
+
+		return slots;
+	}
+
+	// Men the split has not sent in. They line up outside the near
+	// wall. An interior hold would walk them in with the entry pair.
+	protected void HoldIdleOnOuter(float currentTime)
+	{
+		if (!m_Plan || !m_Building)
+			return;
+
+		array<AIAgent> free = {};
+		CollectFreeAgents(free);
+
+		int waiting = free.Count();
+
+		foreach (KK_InteriorAgentAssignment assignment : m_aAssignments)
+		{
+			if (!assignment || !assignment.m_bOuterStack || assignment.m_bHoldsDoor)
+				continue;
+
+			waiting++;
+		}
+
+		if (waiting <= 0)
+			return;
+
+		if (!EnsureOuterSlots(waiting))
+			return;
+
+		array<KK_InteriorTarget> taken = {};
+
+		foreach (KK_InteriorAgentAssignment assignment : m_aAssignments)
+		{
+			if (
+				!assignment ||
+				!assignment.m_bOuterStack ||
+				assignment.m_bHoldsDoor ||
+				!assignment.m_Target
+			)
+			{
+				continue;
+			}
+
+			if (m_aOuterSlots.Find(assignment.m_Target) >= 0)
+			{
+				taken.Insert(assignment.m_Target);
+				continue;
+			}
+
+			KK_InteriorTarget slot = TakeOuterSlot(taken, assignment.m_Agent);
+			if (!slot)
+				continue;
+
+			taken.Insert(slot);
+			MoveToOuter(assignment, slot, currentTime);
+		}
+
+		foreach (AIAgent spare : free)
+		{
+			if (!spare || !spare.GetControlledEntity())
+				continue;
+
+			KK_InteriorTarget slot = TakeOuterSlot(taken, spare);
+			if (!slot)
+				return;
+
+			taken.Insert(slot);
+			AssignOuterStack(spare, slot, currentTime);
+		}
+	}
+
+	protected bool EnsureOuterSlots(int count)
+	{
+		if (!EnsureOuterBasis())
+			return false;
+
+		while (m_aOuterSlots.Count() < count)
+		{
+			int index = m_aOuterSlots.Count();
+			vector position = m_vOuterCenter + OuterSlotShift(index);
+
+			vector snapped;
+			if (!SnapOutside(position, snapped))
+				snapped = position;
+
+			vector local = m_Building.CoordToLocal(snapped);
+			KK_InteriorTarget slot = new KK_InteriorTarget(snapped, local, EntryFloor());
+			slot.m_eState = KK_EInteriorTargetState.VISITED;
+			slot.m_iCluster = -1;
+			vector inward;
+			inward[0] = -m_vOuterOutward[0];
+			inward[1] = 0;
+			inward[2] = -m_vOuterOutward[2];
+			slot.m_vFacing = inward;
+			m_aOuterSlots.Insert(slot);
+		}
+
+		return !m_aOuterSlots.IsEmpty();
+	}
+
+	// The squad's first position picks the wall. Later movement must
+	// not swing the line around to another face.
+	protected bool EnsureOuterBasis()
+	{
+		if (m_bOuterBasisReady)
+			return true;
+
+		if (!m_Building)
+			return false;
+
+		if (!m_bOuterApproachSet)
+		{
+			m_vOuterApproach = SquadAnchor();
+			m_bOuterApproachSet = true;
+		}
+
+		vector mins;
+		vector maxs;
+		m_Building.GetBounds(mins, maxs);
+
+		vector centerLocal;
+		centerLocal[0] = (mins[0] + maxs[0]) * 0.5;
+		centerLocal[1] = mins[1];
+		centerLocal[2] = (mins[2] + maxs[2]) * 0.5;
+
+		vector approachLocal = m_Building.CoordToLocal(m_vOuterApproach);
+		vector dir;
+		dir[0] = approachLocal[0] - centerLocal[0];
+		dir[1] = 0;
+		dir[2] = approachLocal[2] - centerLocal[2];
+
+		if (dir.Length() < 0.05)
+			dir = Vector(0, 0, 1);
+
+		float tx = float.MAX;
+		float tz = float.MAX;
+
+		if (Math.AbsFloat(dir[0]) > 0.001)
+		{
+			float plane = maxs[0];
+			if (dir[0] < 0)
+				plane = mins[0];
+
+			tx = (plane - centerLocal[0]) / dir[0];
+		}
+
+		if (Math.AbsFloat(dir[2]) > 0.001)
+		{
+			float plane = maxs[2];
+			if (dir[2] < 0)
+				plane = mins[2];
+
+			tz = (plane - centerLocal[2]) / dir[2];
+		}
+
+		float scale = tx;
+		if (tz < scale)
+			scale = tz;
+
+		if (scale <= 0)
+			scale = 1;
+
+		vector hit = centerLocal + dir * scale;
+		dir.Normalize();
+
+		const float WALL_GAP = 1.75;
+		vector outsideLocal = hit + dir * WALL_GAP;
+		outsideLocal[1] = centerLocal[1];
+
+		vector outwardWorld =
+			m_Building.CoordToParent(centerLocal + dir) -
+			m_Building.CoordToParent(centerLocal);
+		outwardWorld[1] = 0;
+
+		if (outwardWorld.Length() < 0.01)
+			return false;
+
+		outwardWorld.Normalize();
+
+		vector alongWorld = Vector(-outwardWorld[2], 0, outwardWorld[0]);
+		vector outsideWorld = m_Building.CoordToParent(outsideLocal);
+		outsideWorld[1] = OuterGround(m_vOuterApproach[1]);
+		m_vOuterOutward = outwardWorld;
+
+		vector snapped;
+		if (!SnapOutside(outsideWorld, snapped))
+			snapped = outsideWorld;
+
+		m_vOuterCenter = snapped;
+		m_vOuterAlong = alongWorld;
+		m_bOuterBasisReady = true;
+		return true;
+	}
+
+	protected float OuterGround(float fallback)
+	{
+		int floor = EntryFloor();
+		array<ref KK_InteriorTarget> targets = m_Plan.GetTargets();
+
+		foreach (KK_InteriorTarget target : targets)
+		{
+			if (!target || target.m_iFloor != floor)
+				continue;
+
+			return target.m_vPosition[1];
+		}
+
+		return fallback;
+	}
+
+	protected vector OuterSlotShift(int index)
+	{
+		if (index <= 0)
+			return vector.Zero;
+
+		const float SPACING = 1.25;
+		int step = (index + 1) / 2;
+		float sign = 1;
+		if (index % 2 == 0)
+			sign = -1;
+
+		return m_vOuterAlong * (sign * step * SPACING);
+	}
+
+	protected bool SnapOutside(vector position, out vector snapped)
+	{
+		snapped = position;
+
+		if (!m_Pathfinding)
+			return false;
+
+		NavmeshWorldComponent navmesh = m_Pathfinding.GetNavmeshComponent();
+		if (!navmesh)
+			return false;
+
+		for (int step = 0; step < 5; step++)
+		{
+			vector query = position + m_vOuterOutward * (step * 0.8);
+			vector reachable;
+
+			if (!navmesh.GetReachablePoint(query, 2.0, reachable))
+				continue;
+
+			if (PointInsideFootprint(reachable))
+				continue;
+
+			snapped = reachable;
+			return true;
+		}
+
+		return false;
+	}
+
+	protected bool PointInsideFootprint(vector worldPosition)
+	{
+		if (!m_Building)
+			return false;
+
+		vector mins;
+		vector maxs;
+		m_Building.GetBounds(mins, maxs);
+		vector local = m_Building.CoordToLocal(worldPosition);
+
+		return local[0] > mins[0] + 0.2 &&
+			local[0] < maxs[0] - 0.2 &&
+			local[2] > mins[2] + 0.2 &&
+			local[2] < maxs[2] - 0.2;
+	}
+
+	protected KK_InteriorTarget TakeOuterSlot(
+		notnull array<KK_InteriorTarget> taken,
+		notnull AIAgent agent)
+	{
+		KK_InteriorTarget best;
+		float bestDistance = float.MAX;
+		vector origin = agent.GetControlledEntity().GetOrigin();
+
+		foreach (KK_InteriorTarget slot : m_aOuterSlots)
+		{
+			if (!slot || taken.Find(slot) >= 0)
+				continue;
+
+			float distance = vector.Distance(origin, slot.m_vPosition);
+			if (distance >= bestDistance)
+				continue;
+
+			bestDistance = distance;
+			best = slot;
+		}
+
+		return best;
+	}
+
+	protected void AssignOuterStack(
+		notnull AIAgent agent,
+		notnull KK_InteriorTarget target,
+		float currentTime)
+	{
+		vector origin = agent.GetControlledEntity().GetOrigin();
+		KK_InteriorAgentAssignment assignment =
+			new KK_InteriorAgentAssignment(
+				agent,
+				target,
+				currentTime,
+				origin
+			);
+
+		assignment.m_bClearsPoint = false;
+		assignment.m_bOuterStack = true;
+		assignment.m_aRouteGoals.Clear();
+		assignment.m_iRouteIndex = 0;
+
+		m_aAssignments.Insert(assignment);
+		m_mSparePost.Set(agent, target);
+		KK_GarrisonHold.NoteOrderSoldier(agent);
+		KK_PerceptionBoost.Apply(agent, m_mPerceptionFactors);
+		IssueMoveOrder(agent, target.m_vPosition);
+
+		if (SCR_BaseGameMode.KK_LogEnabled())
+			PrintFormat(
+				"KK: Unit %1 outer stack %2",
+				agent,
+				target.m_vPosition
+			);
+	}
+
+	protected void MoveToOuter(
+		notnull KK_InteriorAgentAssignment assignment,
+		notnull KK_InteriorTarget target,
+		float currentTime)
+	{
+		vector origin = assignment.m_Agent.GetControlledEntity().GetOrigin();
+
+		assignment.m_bFacingApplied = false;
+		assignment.m_bOuterStack = true;
+		assignment.m_bClearsPoint = false;
+		assignment.m_Target = target;
+		assignment.m_fStartedAt = currentTime;
+		assignment.m_fStillSince = currentTime;
+		assignment.m_fLastTimerUpdate = currentTime;
+		assignment.m_fLastOrderAt = currentTime;
+		assignment.m_vStillPosition = origin;
+		assignment.m_fBestDistance = vector.Distance(origin, target.m_vPosition);
+		assignment.m_DoorEntity = null;
+		assignment.m_aRouteGoals.Clear();
+		assignment.m_iRouteIndex = 0;
+		m_mSparePost.Set(assignment.m_Agent, target);
+		IssueMoveOrder(assignment.m_Agent, target.m_vPosition);
+	}
+
+	protected void SetOuterStack(notnull AIAgent agent, bool outer)
+	{
+		foreach (KK_InteriorAgentAssignment assignment : m_aAssignments)
+		{
+			if (!assignment || assignment.m_Agent != agent)
+				continue;
+
+			assignment.m_bOuterStack = outer;
+			return;
+		}
+	}
+
+	protected bool AgentHoldsOuterStack(AIAgent agent)
+	{
+		if (!agent)
+			return false;
+
+		foreach (KK_InteriorAgentAssignment assignment : m_aAssignments)
+		{
+			if (!assignment || assignment.m_Agent != agent)
+				continue;
+
+			return assignment.m_bOuterStack;
+		}
+
+		return false;
 	}
 
 	protected void CollectPassageSoldiers(
@@ -3654,6 +4135,11 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				agent.GetControlledEntity();
 
 			if (!controlledEntity)
+				continue;
+
+			// A man stacked on the outer side is waiting. Standing
+			// there, or looking in, does not clear the node.
+			if (AgentHoldsOuterStack(agent))
 				continue;
 
 			float distance = vector.Distance(

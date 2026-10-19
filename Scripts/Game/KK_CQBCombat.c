@@ -10111,6 +10111,12 @@ modded class SCR_AISetWeaponRaised
 		if (owner)
 			body = owner.GetControlledEntity();
 
+		// A raise or a lower during a climb restarts the pose and he
+		// drops back on the side he left. A high wall stays up long
+		// enough for this node to fire again.
+		if (owner && KK_AgentMove.CrossingObstacle(owner))
+			return ENodeResult.SUCCESS;
+
 		if (
 			(KK_GarrisonHold.IsDown(body) || KK_GarrisonHold.IsDown(owner)) &&
 			(KK_GarrisonHold.OnCqbOrder(body) || KK_GarrisonHold.OnCqbOrder(owner))

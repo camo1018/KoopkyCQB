@@ -608,7 +608,13 @@ class KK_AttackActivity : SCR_AIActivityBase
 		}
 
 		vector center = PairCenter(pair);
-		if (FlatDistance(center, pair.m_vStillPosition) > 0.45)
+		// A climb is slow, and a high wall holds him on top. That is not a stall.
+		if (PairCrossing(pair))
+		{
+			pair.m_vStillPosition = center;
+			pair.m_fStillSince = now;
+		}
+		else if (FlatDistance(center, pair.m_vStillPosition) > 0.45)
 		{
 			pair.m_vStillPosition = center;
 			pair.m_fStillSince = now;
@@ -665,7 +671,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (Math.Mod(pair.m_iNudges, 2) == 0)
 			side = -4;
 
-		pair.m_vGoal = pair.m_vGoal + (right * side);
+		pair.m_vGoal = KeepForward(pair, pair.m_vGoal + (right * side), axis);
 		IssuePair(pair, speed, now);
 	}
 
@@ -699,7 +705,56 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 		goal[1] = center[1];
 		goal = PreferCover(goal, axis, right, finalStep);
-		return goal;
+		return KeepForward(pair, goal, axis);
+	}
+
+	// A goal on the near lip is inside the wall, so the climb drops him
+	// back. How far along the climb he is comes from the command state.
+	// A push back through the wall is dropped, so the far side does not
+	// send him home.
+	protected vector KeepForward(
+		notnull KK_AttackPair pair,
+		vector goal,
+		vector axis)
+	{
+		vector adjusted = KK_AgentMove.PastObstacle(
+			m_Group,
+			PairBody(pair),
+			goal
+		);
+
+		float goalAlong = vector.Dot(goal - m_vOrigin, axis);
+		float adjustedAlong = vector.Dot(adjusted - m_vOrigin, axis);
+		if (adjustedAlong + 0.75 < goalAlong)
+			return goal;
+
+		return adjusted;
+	}
+
+	protected IEntity PairBody(notnull KK_AttackPair pair)
+	{
+		foreach (AIAgent agent : pair.m_aAgents)
+		{
+			if (!agent)
+				continue;
+
+			IEntity body = agent.GetControlledEntity();
+			if (body)
+				return body;
+		}
+
+		return null;
+	}
+
+	protected bool PairCrossing(notnull KK_AttackPair pair)
+	{
+		foreach (AIAgent agent : pair.m_aAgents)
+		{
+			if (agent && KK_AgentMove.CrossingObstacle(agent))
+				return true;
+		}
+
+		return false;
 	}
 
 	protected vector LaneOffset(int pairIndex, vector right)
@@ -864,6 +919,11 @@ class KK_AttackActivity : SCR_AIActivityBase
 			if (m_mSettledAt.Contains(agent) || IsReleased(agent) || AtPointCover(agent))
 				continue;
 
+			// A new order, a stance change, or a look snap drops him off
+			// the wall onto the side he climbed from.
+			if (KK_AgentMove.CrossingObstacle(agent))
+				continue;
+
 			vector goal = pair.m_vGoal + (right * side);
 			// Clear the enemy move before the sprint speed, or this step
 			// runs along the facing instead of the lane.
@@ -986,6 +1046,10 @@ class KK_AttackActivity : SCR_AIActivityBase
 	protected void SetCrouch(AIAgent agent, bool crouch)
 	{
 		if (!agent)
+			return;
+
+		// A stance change cancels a climb. He drops back on the near side.
+		if (KK_AgentMove.CrossingObstacle(agent))
 			return;
 
 		bool wasCrouched = m_Crouched.Contains(agent);
@@ -1165,6 +1229,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 			if (!KK_GarrisonHold.IsBoundSprint(agent))
 				continue;
 
+			if (KK_AgentMove.CrossingObstacle(agent))
+				continue;
+
 			float side = -1.5;
 			if (slot == 1)
 				side = 1.5;
@@ -1321,6 +1388,11 @@ class KK_AttackActivity : SCR_AIActivityBase
 			if (!agent || !agent.GetControlledEntity())
 				continue;
 
+			// Still on the obstacle. The flat distance already says he
+			// is at the slot, and stopping here ends the climb.
+			if (KK_AgentMove.CrossingObstacle(agent))
+				return false;
+
 			float distance = FlatDistance(
 				agent.GetControlledEntity().GetOrigin(),
 				pair.m_vGoal
@@ -1442,6 +1514,11 @@ class KK_AttackActivity : SCR_AIActivityBase
 				side = 1.5;
 
 			slot++;
+			// On the wall, and already inside the slot radius. Cancelling
+			// here drops him back on the side he climbed from.
+			if (KK_AgentMove.CrossingObstacle(agent))
+				continue;
+
 			vector origin = agent.GetControlledEntity().GetOrigin();
 			vector goal = pair.m_vGoal + (right * side);
 			bool nearSlot = FlatDistance(origin, goal) <= STEP_REACH;
@@ -1529,6 +1606,11 @@ class KK_AttackActivity : SCR_AIActivityBase
 				continue;
 
 			fighters++;
+			// On the wall he is close to the slot and almost stopped.
+			// That is not the cover handoff.
+			if (KK_AgentMove.CrossingObstacle(agent))
+				continue;
+
 			float distance = FlatDistance(
 				agent.GetControlledEntity().GetOrigin(),
 				pair.m_vGoal
@@ -1566,6 +1648,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 				continue;
 
 			any = true;
+			if (KK_AgentMove.CrossingObstacle(agent))
+				return false;
+
 			float distance = FlatDistance(
 				agent.GetControlledEntity().GetOrigin(),
 				pair.m_vGoal
@@ -2834,6 +2919,10 @@ class KK_AttackActivity : SCR_AIActivityBase
 	protected void SetWeapon(AIAgent agent, bool raised)
 	{
 		if (!agent)
+			return;
+
+		// Raising or lowering again restarts the pose and cuts off a climb.
+		if (KK_AgentMove.CrossingObstacle(agent))
 			return;
 
 		IEntity body = agent.GetControlledEntity();

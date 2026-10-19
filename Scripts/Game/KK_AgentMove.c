@@ -21,9 +21,12 @@ class KK_AgentMove
 	static const float REISSUE_INTERVAL_MS = 2000.0;
 
 	protected static const float OBSTACLE_TRACE = 0.5;
+	// First height that can still be a hop. Taller probes are climbs.
+	protected static const float HOP_CLEAR = 1.15;
 	// Above a climb, and still into a building wall.
-	protected static const float OBSTACLE_OVER = 3.0;
-	protected static const float OBSTACLE_THICK = 1.4;
+	protected static const float CLIMB_CLEAR = 3.05;
+	protected static const float OBSTACLE_THICK = 1.8;
+	// Past the far face, so the goal is not inside the obstacle.
 	protected static const float OBSTACLE_LANDING = 1.35;
 
 	protected static ref TraceParam s_ObstacleTrace;
@@ -95,7 +98,7 @@ class KK_AgentMove
 		if (CrossingObstacle(agent))
 			return;
 
-		position = CommitPastObstacle(group, agent, position);
+		position = PastObstacle(group, agent.GetControlledEntity(), position);
 
 		SCR_AIMessage_Move message = SCR_AIMessage_Move.Create(
 			null,
@@ -138,27 +141,43 @@ class KK_AgentMove
 	// to that point fails immediately and the soldier never steps off.
 	protected static vector OnNavmesh(SCR_AIGroup group, vector position)
 	{
-		if (!group)
+		return OnNavmeshExtents(group, position, Vector(1.25, 0.9, 1.25));
+	}
+
+	protected static vector OnNavmeshExtents(
+		SCR_AIGroup group,
+		vector position,
+		vector extents)
+	{
+		vector corrected;
+		if (!FindNavmesh(group, position, extents, corrected))
 			return position;
+
+		return corrected;
+	}
+
+	protected static bool FindNavmesh(
+		SCR_AIGroup group,
+		vector position,
+		vector extents,
+		out vector corrected)
+	{
+		corrected = position;
+		if (!group)
+			return false;
 
 		AIPathfindingComponent pathfinding = AIPathfindingComponent.Cast(
 			group.FindComponent(AIPathfindingComponent)
 		);
 
 		if (!pathfinding)
-			return position;
+			return false;
 
-		vector corrected;
-		if (!pathfinding.GetClosestPositionOnNavmesh(
+		return pathfinding.GetClosestPositionOnNavmesh(
 			position,
-			Vector(1.25, 0.9, 1.25),
+			extents,
 			corrected
-		))
-		{
-			return position;
-		}
-
-		return corrected;
+		);
 	}
 
 	static void SetWantedSpeed(
@@ -222,13 +241,13 @@ class KK_AgentMove
 
 	// A goal on the far lip of a vault or a climb lands inside the obstacle,
 	// and he drops back on the near side. The landing is a body-length past
-	// the far face. A building wall is taller than a climb, so it is left.
-	protected static vector CommitPastObstacle(
+	// the far face. Whether he is still on the wall is the climb command,
+	// not this distance. A building wall is taller than a climb, so it is left.
+	static vector PastObstacle(
 		SCR_AIGroup group,
-		notnull AIAgent agent,
+		IEntity body,
 		vector position)
 	{
-		IEntity body = agent.GetControlledEntity();
 		BaseWorld world = GetGame().GetWorld();
 		if (!body || !world || !group)
 			return OnNavmesh(group, position);
@@ -237,7 +256,7 @@ class KK_AgentMove
 		vector toGoal = position - origin;
 		toGoal[1] = 0;
 		float distance = toGoal.Length();
-		if (distance < 2.0 || distance > 45)
+		if (distance < 0.8 || distance > 45)
 			return OnNavmesh(group, position);
 
 		toGoal.Normalize();
@@ -247,18 +266,32 @@ class KK_AgentMove
 
 		float past = distance - far;
 		if (past >= OBSTACLE_LANDING + 0.25)
+		{
+			vector kept;
+			// A high wall's link is a long hole. The short search picks
+			// the near side and he never leaves.
+			if (FindNavmesh(group, position, Vector(4, 4, 4), kept))
+			{
+				float keptPast = vector.Dot(kept - origin, toGoal) - far;
+				if (keptPast >= 0.9)
+					return kept;
+			}
+		}
+
+		vector desired = origin + (toGoal * (far + OBSTACLE_LANDING));
+		desired[1] = position[1];
+		vector landed;
+		if (!FindNavmesh(group, desired, Vector(4, 4, 4), landed))
 			return OnNavmesh(group, position);
 
-		float landing = far + OBSTACLE_LANDING;
-		vector desired = origin + (toGoal * landing);
-		desired[1] = position[1];
-		vector landed = OnNavmesh(group, desired);
 		float landedPast = vector.Dot(landed - origin, toGoal) - far;
 		if (landedPast < 0.9)
 		{
-			desired = origin + (toGoal * (far + OBSTACLE_LANDING + 0.6));
+			desired = origin + (toGoal * (far + OBSTACLE_LANDING + 2.0));
 			desired[1] = position[1];
-			landed = OnNavmesh(group, desired);
+			if (!FindNavmesh(group, desired, Vector(4, 4, 4), landed))
+				return OnNavmesh(group, position);
+
 			landedPast = vector.Dot(landed - origin, toGoal) - far;
 		}
 
@@ -269,6 +302,9 @@ class KK_AgentMove
 	}
 
 	// Thin, and clear above it. Fences, rails, and walls he can climb.
+	// The clear height is the first probe that misses the top. One probe
+	// at the climb limit calls a high wall a building when a cap or a
+	// post sticks up past the face he can grab.
 	protected static bool ObstacleFarFace(
 		notnull BaseWorld world,
 		notnull IEntity body,
@@ -292,11 +328,7 @@ class KK_AgentMove
 			return false;
 
 		float near = low * distance;
-		vector overStart = origin + Vector(0, OBSTACLE_OVER, 0);
-		s_ObstacleTrace.Start = overStart;
-		s_ObstacleTrace.End = overStart + (direction * distance);
-		float over = world.TraceMove(s_ObstacleTrace, FilterObstacle);
-		if (over * distance < near + 0.8)
+		if (ClearHeight(world, origin, direction, distance, near) < 0)
 			return false;
 
 		float cursor = near + 0.15;
@@ -316,6 +348,40 @@ class KK_AgentMove
 		}
 
 		return false;
+	}
+
+	// Height of the first ray that clears the near face. Negative when
+	// nothing under the climb limit does, which is a building wall.
+	protected static float ClearHeight(
+		notnull BaseWorld world,
+		vector origin,
+		vector direction,
+		float distance,
+		float near)
+	{
+		float height = HOP_CLEAR;
+		while (height <= CLIMB_CLEAR)
+		{
+			float probe = height;
+			if (probe > CLIMB_CLEAR)
+				probe = CLIMB_CLEAR;
+
+			vector start = origin + Vector(0, probe, 0);
+			s_ObstacleTrace.Start = start;
+			s_ObstacleTrace.End = start + (direction * distance);
+			float hit = world.TraceMove(s_ObstacleTrace, FilterObstacle);
+			if (hit * distance > near + 0.8)
+				return probe;
+
+			if (probe >= CLIMB_CLEAR)
+				break;
+
+			height += 0.55;
+			if (height > CLIMB_CLEAR)
+				height = CLIMB_CLEAR;
+		}
+
+		return -1;
 	}
 
 	protected static bool FilterObstacle(
