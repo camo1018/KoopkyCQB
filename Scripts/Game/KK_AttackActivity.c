@@ -24,6 +24,28 @@ class KK_AttackPair
 	}
 }
 
+// Advance steps one soldier. His partner can be across the squad.
+// A shared pair goal made him stand until that partner arrived.
+class KK_AttackMover
+{
+	vector m_vGoal;
+	bool m_bHasGoal;
+	bool m_bPaused;
+	bool m_bArrived;
+	float m_fPauseSince;
+	int m_iSide;
+	float m_fLastOrderAt;
+	float m_fStillSince;
+	vector m_vStillPosition;
+	int m_iNudges;
+	float m_fProgressBoost;
+
+	void KK_AttackMover()
+	{
+		m_iSide = 1;
+	}
+}
+
 class KK_AttackActivity : SCR_AIActivityBase
 {
 	protected KK_AttackWaypoint m_AttackWaypoint;
@@ -32,6 +54,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 	protected ref array<ref KK_AttackPair> m_aPairs = {};
 	protected ref map<AIAgent, int> m_mPairOf = new map<AIAgent, int>();
+	protected ref map<AIAgent, ref KK_AttackMover> m_mMovers =
+		new map<AIAgent, ref KK_AttackMover>();
 	protected ref map<AIAgent, ref KK_FormationSplit> m_mSoloHandlers =
 		new map<AIAgent, ref KK_FormationSplit>();
 	protected ref map<AIAgent, IEntity> m_mDoors =
@@ -276,10 +300,12 @@ class KK_AttackActivity : SCR_AIActivityBase
 	}
 
 	// Jog keeps the rifle up. A lone pair on Bound uses this path too.
+	// Each soldier steps from where he is. The pair lane is only the
+	// spacing. A partner still far behind does not hold him or drop the rifle.
 	protected void UpdateAdvance(float now)
 	{
 		// Leapfrog may have pinned a soldier who arrived ahead of his partner.
-		// This path moves every pair, so that pin has to come off.
+		// This path moves every soldier, so that pin has to come off.
 		ReleaseSettled();
 
 		EMovementType speed = EMovementType.RUN;
@@ -289,62 +315,357 @@ class KK_AttackActivity : SCR_AIActivityBase
 			if (!pair || !PairAlive(pair))
 				continue;
 
-			if (pair.m_bArrived)
+			foreach (AIAgent agent : pair.m_aAgents)
 			{
-				LookDownLane(pair);
-				continue;
-			}
-
-			if (!pair.m_bHasGoal)
-			{
-				StartStep(pair, speed, now);
-				continue;
-			}
-
-			if (Reached(pair))
-			{
-				if (GoalIsFinal(pair.m_vGoal))
-				{
-					pair.m_bArrived = true;
-					StopPair(pair);
-					LookDownLane(pair);
+				if (!agent || !agent.GetControlledEntity() || IsReleased(agent))
 					continue;
-				}
 
-				if (PauseMs() <= 0)
-				{
-					pair.m_iSide = -pair.m_iSide;
-					if (pair.m_iSide == 0)
-						pair.m_iSide = 1;
-					StartStep(pair, speed, now);
-					continue;
-				}
-
-				if (!pair.m_bPaused)
-				{
-					pair.m_bPaused = true;
-					pair.m_fPauseSince = now;
-					pair.m_iSide = -pair.m_iSide;
-					if (pair.m_iSide == 0)
-						pair.m_iSide = 1;
-					StopPair(pair);
-				}
-
-				Scan(pair, now);
-
-				if (now - pair.m_fPauseSince >= PauseMs())
-				{
-					pair.m_bPaused = false;
-					pair.m_bHasGoal = false;
-					StartStep(pair, speed, now);
-				}
-
-				continue;
+				UpdateAdvanceAgent(agent, pair, MoverFor(agent), speed, now);
 			}
-
-			MaintainMove(pair, speed, now);
-			LookAtContact(pair);
 		}
+	}
+
+	protected void UpdateAdvanceAgent(
+		notnull AIAgent agent,
+		notnull KK_AttackPair pair,
+		notnull KK_AttackMover mover,
+		EMovementType speed,
+		float now)
+	{
+			if (mover.m_bArrived)
+		{
+			LookAgentAlong(agent, AdvanceAxis(), SCAN_AHEAD);
+			return;
+		}
+
+		if (!mover.m_bHasGoal)
+		{
+			StartAgentStep(agent, pair, mover, speed, now);
+			return;
+		}
+
+		if (AgentReached(agent, mover))
+		{
+			if (GoalIsFinal(mover.m_vGoal))
+			{
+				mover.m_bArrived = true;
+				StopAdvanceAgent(agent);
+				LookAgentAlong(agent, AdvanceAxis(), SCAN_AHEAD);
+				return;
+			}
+
+			if (PauseMs() <= 0)
+			{
+				mover.m_iSide = -mover.m_iSide;
+				if (mover.m_iSide == 0)
+					mover.m_iSide = 1;
+				StartAgentStep(agent, pair, mover, speed, now);
+				return;
+			}
+
+			if (!mover.m_bPaused)
+			{
+				mover.m_bPaused = true;
+				mover.m_fPauseSince = now;
+				mover.m_iSide = -mover.m_iSide;
+				if (mover.m_iSide == 0)
+					mover.m_iSide = 1;
+				StopAdvanceAgent(agent);
+			}
+
+			ScanAgent(agent, mover, now);
+
+			if (now - mover.m_fPauseSince >= PauseMs())
+			{
+				mover.m_bPaused = false;
+				mover.m_bHasGoal = false;
+				StartAgentStep(agent, pair, mover, speed, now);
+			}
+
+			return;
+		}
+
+		MaintainAgent(agent, pair, mover, speed, now);
+		if (!LookAtHostile(agent))
+			KK_GarrisonHold.SnapAimPose(agent.GetControlledEntity(), vector.Zero);
+	}
+
+	protected KK_AttackMover MoverFor(notnull AIAgent agent)
+	{
+		if (m_mMovers.Contains(agent))
+			return m_mMovers.Get(agent);
+
+		KK_AttackMover mover = new KK_AttackMover();
+		m_mMovers.Set(agent, mover);
+		return mover;
+	}
+
+	protected void StartAgentStep(
+		notnull AIAgent agent,
+		notnull KK_AttackPair pair,
+		notnull KK_AttackMover mover,
+		EMovementType speed,
+		float now)
+	{
+		IEntity body = agent.GetControlledEntity();
+		if (!body)
+			return;
+
+		KK_GarrisonHold.SetPinned(body, false);
+		KK_GarrisonHold.SetReturnFire(agent, false);
+		mover.m_bPaused = false;
+		mover.m_bArrived = false;
+
+		vector from = body.GetOrigin();
+		mover.m_vGoal = PlanGoal(from, mover.m_fProgressBoost, pair.m_iIndex, body);
+		if (FlatDistance(from, mover.m_vGoal) <= STEP_REACH)
+		{
+			mover.m_fProgressBoost = mover.m_fProgressBoost + StepLength();
+			mover.m_vGoal = PlanGoal(from, mover.m_fProgressBoost, pair.m_iIndex, body);
+		}
+
+		mover.m_bHasGoal = true;
+		mover.m_fStillSince = now;
+		mover.m_vStillPosition = from;
+		mover.m_iNudges = 0;
+		SetCrouch(agent, false);
+		IssueAgent(agent, pair, mover, speed, now);
+	}
+
+	protected void MaintainAgent(
+		notnull AIAgent agent,
+		notnull KK_AttackPair pair,
+		notnull KK_AttackMover mover,
+		EMovementType speed,
+		float now)
+	{
+		IEntity body = agent.GetControlledEntity();
+		if (!body)
+			return;
+
+		if (AgentDoor(agent, mover.m_vGoal))
+		{
+			mover.m_fStillSince = now;
+			return;
+		}
+
+		vector origin = body.GetOrigin();
+		// A climb is slow, and a high wall holds him on top. That is not a stall.
+		if (KK_AgentMove.CrossingObstacle(agent))
+		{
+			mover.m_vStillPosition = origin;
+			mover.m_fStillSince = now;
+		}
+		else if (FlatDistance(origin, mover.m_vStillPosition) > 0.45)
+		{
+			mover.m_vStillPosition = origin;
+			mover.m_fStillSince = now;
+		}
+		else if (
+			mover.m_fStillSince > 0 &&
+			now - mover.m_fStillSince >= STUCK_MS
+		)
+		{
+			NudgeAgent(agent, pair, mover, speed, now);
+			return;
+		}
+
+		if (now - mover.m_fLastOrderAt >= KK_AgentMove.REISSUE_INTERVAL_MS)
+			IssueAgent(agent, pair, mover, speed, now);
+		else
+		{
+			KK_AgentMove.SetWantedSpeed(agent, speed);
+			ApplyWeaponForSpeed(agent, speed);
+			if (speed == EMovementType.SPRINT && KK_GarrisonHold.IsBoundSprint(agent))
+			{
+				vector axis;
+				vector right;
+				BuildAxis(axis, right);
+				if (!KK_AgentMove.CrossingObstacle(agent))
+				{
+					SnapSprintLook(
+						agent,
+						mover.m_vGoal + (right * MemberSide(pair, agent))
+					);
+				}
+			}
+		}
+	}
+
+	protected void NudgeAgent(
+		notnull AIAgent agent,
+		notnull KK_AttackPair pair,
+		notnull KK_AttackMover mover,
+		EMovementType speed,
+		float now)
+	{
+		mover.m_iNudges++;
+		mover.m_fStillSince = now;
+
+		if (mover.m_iNudges >= 3)
+		{
+			mover.m_fProgressBoost = mover.m_fProgressBoost + StepLength();
+			mover.m_bHasGoal = false;
+			mover.m_iNudges = 0;
+
+			if (SCR_BaseGameMode.KK_LogEnabled())
+				Print("KK: Attack soldier skipped a stuck step");
+
+			return;
+		}
+
+		vector axis;
+		vector right;
+		if (!BuildAxis(axis, right))
+			return;
+
+		float side = 4;
+		if (Math.Mod(mover.m_iNudges, 2) == 0)
+			side = -4;
+
+		mover.m_vGoal = KeepForward(
+			agent.GetControlledEntity(),
+			mover.m_vGoal + (right * side),
+			axis
+		);
+		IssueAgent(agent, pair, mover, speed, now);
+	}
+
+	protected void IssueAgent(
+		notnull AIAgent agent,
+		notnull KK_AttackPair pair,
+		notnull KK_AttackMover mover,
+		EMovementType speed,
+		float now)
+	{
+		if (!agent.GetControlledEntity() || IsReleased(agent) || AtPointCover(agent))
+			return;
+
+		if (KK_AgentMove.CrossingObstacle(agent))
+			return;
+
+		vector axis;
+		vector right;
+		BuildAxis(axis, right);
+
+		float priority = KK_AgentMove.PRIORITY_LEVEL;
+		if (IsTakeCover() && speed == EMovementType.SPRINT)
+			priority = KK_AgentMove.SprintPriorityLevel();
+		else if (IsTakeCover())
+			priority = KK_AgentMove.AbsolutePriorityLevel();
+
+		vector goal = mover.m_vGoal + (right * MemberSide(pair, agent));
+		// Clear the enemy move before the sprint speed, or this step
+		// runs along the facing instead of the lane.
+		if (speed == EMovementType.SPRINT)
+			KK_GarrisonHold.ReleaseCombatAim(agent);
+
+		KK_AgentMove.Issue(
+			this,
+			m_Group,
+			agent,
+			goal,
+			m_mSoloHandlers,
+			priority,
+			speed
+		);
+		SetCrouch(agent, false);
+		ApplyWeaponForSpeed(agent, speed);
+		if (speed == EMovementType.SPRINT)
+			SnapSprintLook(agent, goal);
+		mover.m_fLastOrderAt = now;
+	}
+
+	// Crouch first. The stance change puts the rifle down, so the raise
+	// goes out after it. A partner who has not arrived does not take part.
+	protected void StopAdvanceAgent(notnull AIAgent agent)
+	{
+		if (IsReleased(agent) || AtPointCover(agent))
+			return;
+
+		CancelAgent(agent);
+		KK_AgentMove.SetWantedSpeed(agent, EMovementType.IDLE);
+		SetCrouch(agent, true);
+		ApplyWeaponForSpeed(agent, EMovementType.IDLE);
+		KK_GarrisonHold.RaiseAfterSprint(agent);
+	}
+
+	protected bool AgentReached(notnull AIAgent agent, notnull KK_AttackMover mover)
+	{
+		IEntity body = agent.GetControlledEntity();
+		if (!body)
+			return false;
+
+		// Still on the obstacle. The flat distance already says he
+		// is at the slot, and stopping here ends the climb.
+		if (KK_AgentMove.CrossingObstacle(agent))
+			return false;
+
+		return FlatDistance(body.GetOrigin(), mover.m_vGoal) <= STEP_REACH;
+	}
+
+	protected bool AgentDoor(notnull AIAgent agent, vector goal)
+	{
+		if (!agent.GetControlledEntity() || IsReleased(agent) || AtPointCover(agent))
+			return false;
+
+		IEntity door;
+		if (m_mDoors.Contains(agent))
+			door = m_mDoors.Get(agent);
+
+		bool waiting = KK_DoorAssist.Handle(agent, goal, door);
+		m_mDoors.Set(agent, door);
+		if (!waiting)
+			return false;
+
+		KK_AgentMove.SetWantedSpeed(agent, EMovementType.WALK);
+		ApplyWeaponForSpeed(agent, EMovementType.WALK);
+		return true;
+	}
+
+	protected void ScanAgent(
+		notnull AIAgent agent,
+		notnull KK_AttackMover mover,
+		float now)
+	{
+		vector axis;
+		vector right;
+		if (!BuildAxis(axis, right))
+			return;
+
+		vector direction = axis;
+		if (now - mover.m_fPauseSince >= 1000)
+		{
+			direction = (axis * 0.75) + (right * (0.65 * mover.m_iSide));
+			if (direction.Length() > 0.01)
+				direction.Normalize();
+		}
+
+		LookAgentAlong(agent, direction, SCAN_ASIDE);
+	}
+
+	protected vector AdvanceAxis()
+	{
+		vector axis;
+		vector right;
+		BuildAxis(axis, right);
+		return axis;
+	}
+
+	protected float MemberSide(notnull KK_AttackPair pair, AIAgent agent)
+	{
+		for (int slot = 0; slot < pair.m_aAgents.Count(); slot++)
+		{
+			if (pair.m_aAgents[slot] != agent)
+				continue;
+
+			if (slot == 1)
+				return 1.5;
+
+			return -1.5;
+		}
+
+		return -1.5;
 	}
 
 	protected void UpdateBound(float now)
@@ -406,11 +727,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (!runner.m_bHasGoal || runner.m_bHolding || runner.m_bArrived)
 			StartStep(runner, EMovementType.SPRINT, now);
 
-		bool stepDone = Reached(runner) && PairStopped(runner);
-		if (IsTakeCover())
-			stepDone = CoverReady(runner, now);
-
-		if (stepDone)
+		// One man stopped, and the handoff time, is enough. His partner
+		// still on the way does not keep the waiting pair planted.
+		if (CoverReady(runner, now))
 		{
 			ForgetPairSettled(runner);
 			if (IsTakeCover())
@@ -439,7 +758,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 		}
 
 		SettleArrivedMembers(runner, now);
-		MaintainMove(runner, EMovementType.SPRINT, now);
+		RunLooseMembers(runner, EMovementType.SPRINT, now);
 	}
 
 	// One pair has nobody to leapfrog with. He sprints one bound, then holds
@@ -486,10 +805,12 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (!pair.m_bHasGoal || pair.m_bHolding)
 			StartStep(pair, EMovementType.SPRINT, now);
 
-		if (Reached(pair) && PairStopped(pair))
+		// Same handoff as several pairs. One man at his own step does not
+		// wait until his partner is standing next to him.
+		if (CoverReady(pair, now))
 		{
 			ForgetPairSettled(pair);
-			if (GoalIsFinal(pair.m_vGoal))
+			if (MembersFinished(pair))
 			{
 				pair.m_bArrived = true;
 				CoverHold(pair, now);
@@ -509,7 +830,33 @@ class KK_AttackActivity : SCR_AIActivityBase
 		}
 
 		SettleArrivedMembers(pair, now);
-		MaintainMove(pair, EMovementType.SPRINT, now);
+		RunLooseMembers(pair, EMovementType.SPRINT, now);
+	}
+
+	// Whoever has not planted yet keeps his own sprint. A man already
+	// holding his step is left on that hold, rifle up.
+	protected void RunLooseMembers(
+		notnull KK_AttackPair pair,
+		EMovementType speed,
+		float now)
+	{
+		foreach (AIAgent agent : pair.m_aAgents)
+		{
+			if (!agent || !agent.GetControlledEntity() || IsReleased(agent) || AtPointCover(agent))
+				continue;
+
+			if (m_mSettledAt.Contains(agent))
+				continue;
+
+			KK_AttackMover mover = MoverFor(agent);
+			if (!mover.m_bHasGoal)
+			{
+				StartAgentStep(agent, pair, mover, speed, now);
+				continue;
+			}
+
+			MaintainAgent(agent, pair, mover, speed, now);
+		}
 	}
 
 	protected void StartStep(
@@ -522,13 +869,6 @@ class KK_AttackActivity : SCR_AIActivityBase
 		pair.m_bPaused = false;
 		pair.m_bArrived = false;
 		SetPairPinned(pair, false);
-		pair.m_vGoal = NextGoal(pair);
-		if (FlatDistance(PairCenter(pair), pair.m_vGoal) <= STEP_REACH)
-		{
-			pair.m_fProgressBoost = pair.m_fProgressBoost + StepLength();
-			pair.m_vGoal = NextGoal(pair);
-		}
-
 		pair.m_bHasGoal = true;
 		pair.m_fStillSince = now;
 		pair.m_vStillPosition = PairCenter(pair);
@@ -540,14 +880,23 @@ class KK_AttackActivity : SCR_AIActivityBase
 		// shot from the hold has to drop here, or the aim stays on him.
 		ClearHoldFight(pair);
 
-		IssuePair(pair, speed, now);
+		// Each man steps from where he is. The pair center was parking the
+		// man already ahead until his partner walked up to him.
+		foreach (AIAgent agent : pair.m_aAgents)
+		{
+			if (!agent || !agent.GetControlledEntity() || IsReleased(agent) || AtPointCover(agent))
+				continue;
+
+			StartAgentStep(agent, pair, MoverFor(agent), speed, now);
+		}
+
+		pair.m_fLastOrderAt = now;
 
 		if (SCR_BaseGameMode.KK_LogEnabled())
 		{
 			PrintFormat(
-				"KK: Attack pair %1 stepping to %2",
-				pair.m_iIndex,
-				pair.m_vGoal
+				"KK: Attack pair %1 stepping",
+				pair.m_iIndex
 			);
 		}
 	}
@@ -671,20 +1020,39 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (Math.Mod(pair.m_iNudges, 2) == 0)
 			side = -4;
 
-		pair.m_vGoal = KeepForward(pair, pair.m_vGoal + (right * side), axis);
+		pair.m_vGoal = KeepForward(
+			PairBody(pair),
+			pair.m_vGoal + (right * side),
+			axis
+		);
 		IssuePair(pair, speed, now);
 	}
 
 	protected vector NextGoal(notnull KK_AttackPair pair)
+	{
+		return PlanGoal(
+			PairCenter(pair),
+			pair.m_fProgressBoost,
+			pair.m_iIndex,
+			PairBody(pair)
+		);
+	}
+
+	// from is this soldier, or the pair center when the pair still moves
+	// as one. The lane stays with the pair. Progress does not.
+	protected vector PlanGoal(
+		vector from,
+		float progressBoost,
+		int laneIndex,
+		IEntity body)
 	{
 		vector axis;
 		vector right;
 		if (!BuildAxis(axis, right))
 			return m_vTarget;
 
-		vector center = PairCenter(pair);
-		float progress = vector.Dot(center - m_vOrigin, axis);
-		progress = progress + pair.m_fProgressBoost;
+		float progress = vector.Dot(from - m_vOrigin, axis);
+		progress = progress + progressBoost;
 		float total = vector.Dot(m_vTarget - m_vOrigin, axis);
 		float next = progress + StepLength();
 
@@ -693,19 +1061,19 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (finalStep)
 		{
 			float stagger = 2;
-			if (Math.Mod(pair.m_iIndex, 2) == 0)
+			if (Math.Mod(laneIndex, 2) == 0)
 				stagger = -2;
 
 			goal = m_vTarget + (right * stagger);
 		}
 		else
 		{
-			goal = m_vOrigin + (axis * next) + LaneOffset(pair.m_iIndex, right);
+			goal = m_vOrigin + (axis * next) + LaneOffset(laneIndex, right);
 		}
 
-		goal[1] = center[1];
+		goal[1] = from[1];
 		goal = PreferCover(goal, axis, right, finalStep);
-		return KeepForward(pair, goal, axis);
+		return KeepForward(body, goal, axis);
 	}
 
 	// A goal on the near lip is inside the wall, so the climb drops him
@@ -713,13 +1081,13 @@ class KK_AttackActivity : SCR_AIActivityBase
 	// A push back through the wall is dropped, so the far side does not
 	// send him home.
 	protected vector KeepForward(
-		notnull KK_AttackPair pair,
+		IEntity body,
 		vector goal,
 		vector axis)
 	{
 		vector adjusted = KK_AgentMove.PastObstacle(
 			m_Group,
-			PairBody(pair),
+			body,
 			goal
 		);
 
@@ -1118,18 +1486,29 @@ class KK_AttackActivity : SCR_AIActivityBase
 		direction.Normalize();
 
 		foreach (AIAgent agent : pair.m_aAgents)
-		{
-			if (!agent || !agent.GetControlledEntity() || IsReleased(agent))
-				continue;
+			LookAgentAlong(agent, direction, distance);
+	}
 
-			if (LookAtHostile(agent))
-				continue;
+	protected void LookAgentAlong(
+		notnull AIAgent agent,
+		vector direction,
+		float distance)
+	{
+		if (!agent.GetControlledEntity() || IsReleased(agent))
+			return;
 
-			KK_GarrisonHold.SnapAimPose(agent.GetControlledEntity(), vector.Zero);
-			vector eye = agent.GetControlledEntity().GetOrigin();
-			eye = eye + Vector(0, 1.6, 0);
-			LookAt(agent, eye + (direction * distance), LANE_LOOK);
-		}
+		if (direction.Length() < 0.01)
+			return;
+
+		direction.Normalize();
+
+		if (LookAtHostile(agent))
+			return;
+
+		KK_GarrisonHold.SnapAimPose(agent.GetControlledEntity(), vector.Zero);
+		vector eye = agent.GetControlledEntity().GetOrigin();
+		eye = eye + Vector(0, 1.6, 0);
+		LookAt(agent, eye + (direction * distance), LANE_LOOK);
 	}
 
 	protected void LookAtContact(notnull KK_AttackPair pair)
@@ -1487,42 +1866,38 @@ class KK_AttackActivity : SCR_AIActivityBase
 			pace == KK_EAttackPace.TAKE_COVER;
 	}
 
-	// One soldier of the sprinting pair reaches his slot and the move ends.
-	// Until his partner arrives the sprint would leave him standing with the
-	// rifle down. He holds that slot the same way the pair that is waiting
-	// does, so the normal attack can shoot from there.
+	// One soldier of the sprinting pair reaches his own step and the move
+	// ends for him. Until his partner arrives the sprint would leave him
+	// standing with the rifle down. He holds that step, so he can shoot
+	// from there. His partner keeps his own sprint.
 	protected void SettleArrivedMembers(notnull KK_AttackPair pair, float now)
 	{
-		// The sprint order from this frame has not started yet. A speed of
-		// zero here is him standing at the start, not him waiting at the slot.
-		if (now - pair.m_fLastOrderAt < 400)
-			return;
-
 		vector axis;
 		vector right;
 		if (!BuildAxis(axis, right))
 			return;
 
-		int slot = 0;
 		foreach (AIAgent agent : pair.m_aAgents)
 		{
 			if (!agent || !agent.GetControlledEntity() || IsReleased(agent) || AtPointCover(agent))
 				continue;
 
-			float side = -1.5;
-			if (slot == 1)
-				side = 1.5;
+			// The sprint order from this frame has not started yet. A speed of
+			// zero here is him standing at the start, not him waiting at the slot.
+			KK_AttackMover mover = MoverFor(agent);
+			if (now - mover.m_fLastOrderAt < 400)
+				continue;
 
-			slot++;
 			// On the wall, and already inside the slot radius. Cancelling
 			// here drops him back on the side he climbed from.
 			if (KK_AgentMove.CrossingObstacle(agent))
 				continue;
 
 			vector origin = agent.GetControlledEntity().GetOrigin();
-			vector goal = pair.m_vGoal + (right * side);
-			bool nearSlot = FlatDistance(origin, goal) <= STEP_REACH;
-			bool nearGoal = FlatDistance(origin, pair.m_vGoal) <= STEP_REACH;
+			vector goal = AgentStepGoal(agent, pair);
+			vector slot = goal + (right * MemberSide(pair, agent));
+			bool nearSlot = FlatDistance(origin, slot) <= STEP_REACH;
+			bool nearGoal = FlatDistance(origin, goal) <= STEP_REACH;
 			bool stopped = FlatSpeed(agent) <= MEMBER_STOP;
 
 			if ((!nearSlot && !nearGoal) || !stopped)
@@ -1536,7 +1911,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 				SetCrouch(agent, false);
 				// The hold cancelled his move. The next maintain gives
 				// the sprint back on this pass.
-				pair.m_fLastOrderAt = 0;
+				mover.m_fLastOrderAt = 0;
 				continue;
 			}
 
@@ -1613,7 +1988,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 			float distance = FlatDistance(
 				agent.GetControlledEntity().GetOrigin(),
-				pair.m_vGoal
+				AgentStepGoal(agent, pair)
 			);
 			if (distance <= STEP_REACH)
 				arrived++;
@@ -1653,9 +2028,41 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 			float distance = FlatDistance(
 				agent.GetControlledEntity().GetOrigin(),
-				pair.m_vGoal
+				AgentStepGoal(agent, pair)
 			);
 			if (distance > STEP_REACH)
+				return false;
+		}
+
+		return any;
+	}
+
+	// His own step. The pair goal is only a fallback for a man who has
+	// not been given one yet.
+	protected vector AgentStepGoal(AIAgent agent, notnull KK_AttackPair pair)
+	{
+		if (agent && m_mMovers.Contains(agent))
+		{
+			KK_AttackMover mover = m_mMovers.Get(agent);
+			if (mover && mover.m_bHasGoal)
+				return mover.m_vGoal;
+		}
+
+		return pair.m_vGoal;
+	}
+
+	// Every fighter's own step is the last one, on the order point.
+	protected bool MembersFinished(notnull KK_AttackPair pair)
+	{
+		bool any = false;
+
+		foreach (AIAgent agent : pair.m_aAgents)
+		{
+			if (!CanFight(agent))
+				continue;
+
+			any = true;
+			if (!GoalIsFinal(AgentStepGoal(agent, pair)))
 				return false;
 		}
 
@@ -2616,6 +3023,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 			}
 
 			m_mPairOf.Remove(agent);
+			if (m_mMovers.Contains(agent))
+				m_mMovers.Remove(agent);
 			if (m_mDoors.Contains(agent))
 				m_mDoors.Remove(agent);
 			if (m_mSettledAt.Contains(agent))
@@ -2794,6 +3203,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 		m_eApplied = pace;
 		m_iRunner = 0;
 		m_bAtPoint = false;
+		m_mMovers.Clear();
 		m_Released.Clear();
 		m_mReturnAt.Clear();
 		m_mCoverAt.Clear();
