@@ -918,6 +918,9 @@ class KK_GarrisonHold
 	// Below this, the heading and the weapon angle are already what we
 	// would write. Setting them again dirties the character for no change.
 	protected static const float SNAP_AIM_WRITE_DEG = 0.25;
+	// The burst may shoot once he is this close to the man. Waiting for
+	// the heading to match exactly kept the trigger off through the turn.
+	protected static const float RETURN_FIRE_AIM_DEG = 30;
 	static const float PATH_LOOK_PRIORITY = 1000;
 	// An enemy already selected when the bound started. The sprint does not
 	// aim at him, and perception then drops him, so the stop had to spot
@@ -1607,6 +1610,12 @@ class KK_GarrisonHold
 		RememberLean(body, command);
 		if (canShoot && lookAt)
 			NoteNoDamage(body, lookAt);
+
+		// The plant keeps his feet. It also refuses the combat-move turn,
+		// so the burst has to put the body on the man itself. The trigger
+		// waits until that heading is actually his.
+		if (canShoot && s_InstantAim.Contains(body))
+			FaceReturnShot(body, lookAt);
 
 		bool fire = AimReady(body, lookAt, canShoot);
 		bool raise = canShoot || FeelsThreatened(utility);
@@ -6530,8 +6539,10 @@ class KK_GarrisonHold
 		if (!canShoot || !enemy)
 			return false;
 
+		// The plant will not turn him. The trigger stays off until the
+		// heading written for this burst is the one he is standing on.
 		if (s_InstantAim.Contains(body))
-			return true;
+			return FacingReturnShot(body, enemy);
 
 		float now = 0;
 		BaseWorld world = GetGame().GetWorld();
@@ -6931,6 +6942,53 @@ class KK_GarrisonHold
 	static bool SnapTurnHeld(SCR_AICombatMoveState state)
 	{
 		return state && s_SnapTurn.Contains(state);
+	}
+
+	// The attack burst cannot use the combat-move aim. That aim is the
+	// step the plant is holding off. Write the heading onto him instead.
+	protected static void FaceReturnShot(IEntity body, IEntity enemy)
+	{
+		if (!body || !enemy || !s_InstantAim.Contains(body))
+			return;
+
+		vector point = ShotAimPoint(body, enemy);
+		if (point == vector.Zero)
+			return;
+
+		CharacterControllerComponent controller = Controller(body);
+		if (!LifeStanding(controller))
+			return;
+
+		vector flat = point - body.GetOrigin();
+		flat[1] = 0;
+		if (flat.Length() < 0.05)
+			return;
+
+		flat.Normalize();
+		SnapFacing(body, controller, flat.ToYaw());
+
+		float bodyYaw = body.GetYawPitchRoll()[0];
+		vector muzzle = MuzzlePosition(body, 0);
+		WriteAimAt(controller.GetAimingComponent(), muzzle, point, bodyYaw);
+	}
+
+	protected static bool FacingReturnShot(IEntity body, IEntity enemy)
+	{
+		if (!body || !enemy)
+			return false;
+
+		vector point = ShotAimPoint(body, enemy);
+		if (point == vector.Zero)
+			return false;
+
+		vector flat = point - body.GetOrigin();
+		flat[1] = 0;
+		if (flat.Length() < 0.05)
+			return true;
+
+		flat.Normalize();
+		float gap = YawDelta(body.GetYawPitchRoll()[0], flat.ToYaw());
+		return Math.AbsFloat(gap) < RETURN_FIRE_AIM_DEG;
 	}
 
 	protected static void SnapFacing(
