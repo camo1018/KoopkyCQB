@@ -1701,10 +1701,7 @@ class KK_GarrisonBuildingActivity : SCR_AIActivityBase
 
 		bool finishing =
 			!KK_GarrisonHold.CannotShoot(controlledEntity) &&
-			KK_GarrisonHold.VisibleContact(
-				controlledEntity,
-				KK_GarrisonHold.OrderContactRange()
-			);
+			KK_GarrisonHold.OrderContactSeen(controlledEntity);
 
 		if (boundRunning && outside && !waitingOnDoor && !passageBusy && !finishing)
 		{

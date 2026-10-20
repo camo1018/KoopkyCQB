@@ -3663,7 +3663,7 @@ class KK_ClearBuildingActivity : SCR_AIActivityBase
 				seeing = false;
 		}
 
-		if (!seeing && KK_GarrisonHold.VisibleContact(body, KK_GarrisonHold.OrderContactRange()))
+		if (!seeing && KK_GarrisonHold.OrderContactSeen(body))
 			seeing = true;
 
 		// A reload sprint lowers the rifle and clears the shot. He can still

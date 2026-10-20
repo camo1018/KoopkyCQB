@@ -98,16 +98,16 @@ modded class SCR_AICombatComponent
 
 		// Vanilla threatened recognition is slower than safe, so a squad
 		// that is already being shot at is the last to pick the enemy up.
-		// With sharp combat on, an attack stays on the alerted rate. The
-		// scenario multiplier still scales it.
+		// An attack does not use that curve. Alerted is still a slow pickup
+		// outdoors, so the attack scale fills a plain-view man on the next
+		// perception tick. The scenario multiplier still scales it.
 		if (
 			perceptionComp &&
 			threatSystem &&
-			KK_GarrisonHold.IsAttackSearch(GetOwner()) &&
-			KK_PerceptionBoost.UseSharpCombat()
+			KK_GarrisonHold.IsAttackSearch(GetOwner())
 		)
 		{
-			float attackFactor = PERCEPTION_FACTOR_ALERTED;
+			float attackFactor = PERCEPTION_FACTOR_ALERTED * KK_GarrisonHold.ATTACK_SPOT_SCALE;
 			attackFactor *= m_fEquipmentPerceptionFactor;
 			attackFactor *= m_fPerceptionFactor;
 			perceptionComp.SetPerceptionFactor(attackFactor);
@@ -790,6 +790,19 @@ class KK_SnapShotAim
 	vector m_Direction;
 }
 
+// Characters near one building for this shot interval. Men on the house
+// share the first sphere. Men still on the road share the second.
+class KK_NearBubble
+{
+	float m_At = -1;
+	vector m_Center;
+	float m_Radius;
+	ref array<IEntity> m_Bodies = new array<IEntity>();
+	vector m_RoadCenter;
+	float m_RoadRadius;
+	ref array<IEntity> m_RoadBodies = new array<IEntity>();
+}
+
 class KK_GarrisonHold
 {
 	protected static ref set<IEntity> s_Pinned = new set<IEntity>();
@@ -828,11 +841,21 @@ class KK_GarrisonHold
 	protected static ref set<IEntity> s_Clearing = new set<IEntity>();
 	// On an attack order. The rifle stays up. Shooting stays with vanilla attack.
 	protected static ref set<IEntity> s_Advancing = new set<IEntity>();
-	// Recognition stays at the alerted rate for the whole attack, including
-	// the bound sprint. The sprint does not turn the head toward a contact.
+	// Recognition stays fast for the whole attack, including the bound
+	// sprint. The sprint does not turn the head toward a contact.
 	protected static ref set<IEntity> s_AttackSearch = new set<IEntity>();
 	protected static ref array<BaseTarget> s_AttackSeen = new array<BaseTarget>();
 	protected static const float ATTACK_CONTACT_RANGE = 180;
+	// Times the alerted rate. 2.5 alone still leaves a man in the open
+	// unrecognized for seconds. This is the attack order's own rate.
+	static const float ATTACK_SPOT_SCALE = 8;
+	// The outdoor scan is a sphere, not a perception tick. Repeating it
+	// for every caller in the same moment walks the same men again.
+	protected static const float ATTACK_SCAN_MS = 100;
+	protected static ref map<IEntity, float> s_AttackGatherAt =
+		new map<IEntity, float>();
+	protected static ref map<IEntity, ref array<IEntity>> s_AttackGather =
+		new map<IEntity, ref array<IEntity>>();
 	// The pair that is bounding. The rifle stays down so the sprint can run.
 	protected static ref set<IEntity> s_BoundSprint = new set<IEntity>();
 	// Combat move states that must refuse every request for that sprint.
@@ -957,6 +980,17 @@ class KK_GarrisonHold
 		new map<IEntity, ref BaseTarget>();
 	protected static ref array<IEntity> s_NearBodies = new array<IEntity>();
 	protected static IEntity s_NearViewer;
+	protected static ref array<IEntity> s_QueryBodies;
+	protected static ref array<IEntity> s_RoadScratch = new array<IEntity>();
+	protected static ref map<IEntity, ref KK_NearBubble> s_NearBubbles =
+		new map<IEntity, ref KK_NearBubble>();
+	// Past the footprint, he is still on the house. Farther than this, he
+	// is on the road and uses the approach sphere.
+	protected static const float HOUSE_NEAR_MARGIN = 8;
+	// Men walking in together stay inside this spread and share one sphere.
+	// A man farther back searches on his own, so one straggler does not
+	// pull the query across the map.
+	protected static const float ROAD_SHARE_SPREAD = 80;
 	// Milliseconds the next shot check was scheduled with.
 	protected static int s_iShotTickMs;
 	protected static bool s_bShotTicking;
@@ -1000,6 +1034,9 @@ class KK_GarrisonHold
 	// Attack contact shoots on the same frame the enemy is in sight.
 	// The indoor shot keeps its own delay.
 	protected static ref set<IEntity> s_InstantAim = new set<IEntity>();
+	// Heading commanded for the burst. The live yaw stays down the lane
+	// while he is planted, so the shot cannot wait on that pose.
+	protected static ref map<IEntity, float> s_ReturnFacing = new map<IEntity, float>();
 	protected static ref set<IEntity> s_LeanHeld = new set<IEntity>();
 	protected static ref map<IEntity, float> s_WantedLean = new map<IEntity, float>();
 	protected static ref map<IEntity, IEntity> s_LookEntity = new map<IEntity, IEntity>();
@@ -1493,6 +1530,7 @@ class KK_GarrisonHold
 			return;
 
 		s_InstantAim.RemoveItem(body);
+		s_ReturnFacing.Remove(body);
 		s_MoveFire.RemoveItem(body);
 		s_MoveFiring.RemoveItem(body);
 		SetFireWanted(body, false);
@@ -4817,6 +4855,8 @@ class KK_GarrisonHold
 		}
 
 		s_AttackSearch.RemoveItem(body);
+		s_AttackGatherAt.Remove(body);
+		s_AttackGather.Remove(body);
 		ForgetSprintEnemy(body);
 		RefreshSearchPerception(body);
 	}
@@ -5029,11 +5069,23 @@ class KK_GarrisonHold
 
 	// A living enemy this soldier can actually see. Last-seen points and
 	// a hot sector do not count. The plant uses the same sight.
+	// A clear or garrison reads the man the shot tick already chose.
 	static bool EngagingContact(IEntity soldier)
 	{
 		IEntity body = CharacterBody(soldier);
 		if (!body)
 			return false;
+
+		// The area search belongs to attack waypoints. A house order
+		// already chose its man, or it has no custom shot and only
+		// confirms the one the combat component selected.
+		if (OnHouseOrder(body))
+		{
+			if (UseRoomCombat())
+				return OrderContactSeen(body);
+
+			return HasVisibleEnemy(body);
+		}
 
 		if (ShotStillVisible(body) && s_ShotLook.Contains(body))
 		{
@@ -5057,11 +5109,37 @@ class KK_GarrisonHold
 				return true;
 		}
 
-		float range = ATTACK_CONTACT_RANGE;
-		if (UseRoomCombat() && OrderOwnsBehavior(body))
-			range = OrderContactRange();
+		return VisibleContact(body, ATTACK_CONTACT_RANGE) != null;
+	}
 
-		return VisibleContact(body, range) != null;
+	// The shot tick's man, or the selected target, inside CQB range and
+	// still on the sight ray. This does not search the area.
+	static bool OrderContactSeen(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return false;
+
+		if (ShotStillVisible(body) && s_ShotLook.Contains(body))
+		{
+			IEntity shot = s_ShotLook.Get(body);
+			if (shot && !PastOrderContact(body, shot))
+				return true;
+		}
+
+		if (!HasVisibleEnemy(body))
+			return false;
+
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (!utility || !utility.m_CombatComponent)
+			return false;
+
+		BaseTarget current = utility.m_CombatComponent.GetCurrentTarget();
+		if (!current)
+			return false;
+
+		IEntity seen = current.GetTargetEntity();
+		return seen && !PastOrderContact(body, seen);
 	}
 
 	// Points the rifle at that man and reports the aim point. The route
@@ -5093,7 +5171,10 @@ class KK_GarrisonHold
 			}
 		}
 
-		if (!enemy || !IsTargetable(enemy))
+		// Attack looks across its own contact range. A clear or garrison
+		// already has its man from the shot tick, and this search is wider
+		// than CQB range.
+		if ((!enemy || !IsTargetable(enemy)) && !OnHouseOrder(body))
 			enemy = VisibleContact(body);
 
 		if (!enemy || !IsTargetable(enemy) || !IsHostile(body, enemy))
@@ -5440,6 +5521,8 @@ class KK_GarrisonHold
 			ClearPathLook(body);
 			LockClearMove(body, false);
 			s_Buildings.Remove(body);
+			if (s_Buildings.Count() == 0)
+				s_NearBubbles.Clear();
 			s_ShotServedAt.Remove(body);
 			s_ReloadAt.Remove(body);
 			s_ToppingOff.RemoveItem(body);
@@ -6133,16 +6216,22 @@ class KK_GarrisonHold
 
 		float contact = OrderContactRange();
 		bool watch = OnGlassWatch(body);
+		bool attackWatch = IsAttackSearch(body);
 		float radius = 0;
 		if (building)
 			radius = ROOM_SCAN_RADIUS;
 		if (watch && contact > radius)
 			radius = contact;
+		if (attackWatch && ATTACK_CONTACT_RANGE > radius)
+			radius = ATTACK_CONTACT_RANGE;
 
 		if (radius < 1)
 			return;
 
-		GatherBodies(body, radius);
+		if (attackWatch && !watch)
+			GatherAttack(body, radius);
+		else
+			GatherBodies(body, radius);
 		foreach (IEntity enemy : s_NearBodies)
 		{
 			if (!enemy || !IsTargetable(enemy) || !IsHostile(body, enemy))
@@ -6171,7 +6260,11 @@ class KK_GarrisonHold
 				continue;
 			}
 
-			if (!watch || contact < 1 || distance > contact)
+			float limit = contact;
+			if (attackWatch && ATTACK_CONTACT_RANGE > limit)
+				limit = ATTACK_CONTACT_RANGE;
+
+			if ((!watch && !attackWatch) || limit < 1 || distance > limit)
 				continue;
 
 			AddCandidate(enemy, distance, null);
@@ -6183,37 +6276,362 @@ class KK_GarrisonHold
 		return OrderOwnsBehavior(body) || OnHouseOrder(body);
 	}
 
+	// One sphere for the men on the building, and one for the men still
+	// walking in. Sight stays per soldier. A man the shared sphere does
+	// not cover searches around himself.
 	protected static void GatherBodies(IEntity body, float radius)
 	{
 		s_NearBodies.Clear();
+		if (!body || radius < 1)
+			return;
+
+		IEntity building;
+		if (s_Buildings.Contains(body))
+			building = s_Buildings.Get(body);
+
+		if (building && CopySharedBodies(body, building, radius))
+			return;
+
+		QueryBodies(body.GetOrigin(), radius, s_NearBodies, body);
+	}
+
+	protected static bool CopySharedBodies(IEntity body, IEntity building, float radius)
+	{
+		KK_NearBubble bubble = EnsureNearBubble(building);
+		if (!bubble)
+			return false;
+
+		// The bubble was built for the room scan and the CQB range.
+		// A wider search has to look for itself.
+		if (radius > SharedSearchRadius() + 0.5)
+			return false;
+
+		if (SphereCovers(bubble.m_Center, bubble.m_Radius, body.GetOrigin(), radius))
+		{
+			CopyInRange(bubble.m_Bodies, body, radius);
+			return true;
+		}
+
+		if (
+			bubble.m_RoadRadius > 0 &&
+			SphereCovers(bubble.m_RoadCenter, bubble.m_RoadRadius, body.GetOrigin(), radius)
+		)
+		{
+			CopyInRange(bubble.m_RoadBodies, body, radius);
+			return true;
+		}
+
+		return false;
+	}
+
+	protected static float SharedSearchRadius()
+	{
+		float search = OrderContactRange();
+		if (ROOM_SCAN_RADIUS > search)
+			search = ROOM_SCAN_RADIUS;
+
+		return search;
+	}
+
+	protected static bool SphereCovers(vector center, float reach, vector point, float radius)
+	{
+		if (reach < 1)
+			return false;
+
+		return vector.Distance(center, point) + radius <= reach + 0.5;
+	}
+
+	protected static void CopyInRange(array<IEntity> source, IEntity body, float radius)
+	{
+		if (!source || !body)
+			return;
+
+		float radiusSq = radius * radius;
+		vector origin = body.GetOrigin();
+		foreach (IEntity character : source)
+		{
+			if (!character || character == body)
+				continue;
+
+			vector gap = origin - character.GetOrigin();
+			if (gap.LengthSq() > radiusSq)
+				continue;
+
+			s_NearBodies.Insert(character);
+		}
+	}
+
+	protected static KK_NearBubble EnsureNearBubble(IEntity building)
+	{
+		if (!building)
+			return null;
+
+		DropUnusedBubbles();
+
+		KK_NearBubble bubble = s_NearBubbles.Get(building);
+		if (!bubble)
+		{
+			bubble = new KK_NearBubble();
+			bubble.m_At = -1;
+			if (!bubble.m_Bodies)
+				bubble.m_Bodies = new array<IEntity>();
+			if (!bubble.m_RoadBodies)
+				bubble.m_RoadBodies = new array<IEntity>();
+			s_NearBubbles.Set(building, bubble);
+		}
+
+		float now = WorldTime();
+		int interval = ShotIntervalMs();
+		if (interval < 1)
+			interval = 1;
+
+		if (bubble.m_At >= 0 && now >= bubble.m_At && now - bubble.m_At < interval)
+			return bubble;
+
+		bubble.m_At = now;
+
+		vector center;
+		float boundRadius;
+		BuildingSpan(building, center, boundRadius);
+		float search = SharedSearchRadius();
+		float houseReach = boundRadius + HOUSE_NEAR_MARGIN + search;
+		bubble.m_Center = center;
+		bubble.m_Radius = houseReach;
+
+		bool anyoneHome = false;
+		s_RoadScratch.Clear();
+		for (int i = 0; i < s_Buildings.Count(); i++)
+		{
+			if (s_Buildings.GetElement(i) != building)
+				continue;
+
+			IEntity other = s_Buildings.GetKey(i);
+			if (!other)
+				continue;
+
+			if (SphereCovers(center, houseReach, other.GetOrigin(), search))
+			{
+				anyoneHome = true;
+				continue;
+			}
+
+			s_RoadScratch.Insert(other);
+		}
+
+		if (anyoneHome)
+			QueryBodies(center, houseReach, bubble.m_Bodies, null);
+		else
+		{
+			bubble.m_Radius = 0;
+			bubble.m_Bodies.Clear();
+		}
+
+		TrimRoadCluster(search, search + ROAD_SHARE_SPREAD);
+		if (s_RoadScratch.Count() == 0)
+		{
+			bubble.m_RoadRadius = 0;
+			bubble.m_RoadBodies.Clear();
+			return bubble;
+		}
+
+		vector centroid = RoadCentroid();
+		float need = search;
+		foreach (IEntity other : s_RoadScratch)
+		{
+			float reach = vector.Distance(centroid, other.GetOrigin()) + search;
+			if (reach > need)
+				need = reach;
+		}
+
+		bubble.m_RoadCenter = centroid;
+		bubble.m_RoadRadius = need;
+		QueryBodies(centroid, need, bubble.m_RoadBodies, null);
+		return bubble;
+	}
+
+	protected static void TrimRoadCluster(float search, float cap)
+	{
+		while (s_RoadScratch.Count() > 1)
+		{
+			vector centroid = RoadCentroid();
+			int farthest = 0;
+			float farthestDistance = -1;
+			for (int i = 0; i < s_RoadScratch.Count(); i++)
+			{
+				float distance = vector.Distance(
+					centroid,
+					s_RoadScratch[i].GetOrigin()
+				);
+				if (distance <= farthestDistance)
+					continue;
+
+				farthestDistance = distance;
+				farthest = i;
+			}
+
+			if (farthestDistance + search <= cap)
+				return;
+
+			s_RoadScratch.Remove(farthest);
+		}
+	}
+
+	protected static vector RoadCentroid()
+	{
+		vector centroid = vector.Zero;
+		int count = s_RoadScratch.Count();
+		if (count < 1)
+			return centroid;
+
+		for (int i = 0; i < count; i++)
+			centroid = centroid + s_RoadScratch[i].GetOrigin();
+
+		return centroid * (1.0 / count);
+	}
+
+	protected static void BuildingSpan(IEntity building, out vector center, out float boundRadius)
+	{
+		center = vector.Zero;
+		boundRadius = 0;
+		if (!building)
+			return;
+
+		vector mins;
+		vector maxs;
+		building.GetBounds(mins, maxs);
+		center = building.CoordToParent((mins + maxs) * 0.5);
+		float dx = (maxs[0] - mins[0]) * 0.5;
+		float dy = (maxs[1] - mins[1]) * 0.5;
+		float dz = (maxs[2] - mins[2]) * 0.5;
+		boundRadius = Math.Sqrt((dx * dx) + (dy * dy) + (dz * dz));
+	}
+
+	protected static void DropUnusedBubbles()
+	{
+		for (int i = s_NearBubbles.Count() - 1; i >= 0; i--)
+		{
+			IEntity building = s_NearBubbles.GetKey(i);
+			if (BuildingHeld(building))
+				continue;
+
+			s_NearBubbles.Remove(building);
+		}
+	}
+
+	protected static bool BuildingHeld(IEntity building)
+	{
+		if (!building)
+			return false;
+
+		for (int i = 0; i < s_Buildings.Count(); i++)
+		{
+			if (s_Buildings.GetElement(i) == building)
+				return true;
+		}
+
+		return false;
+	}
+
+	// Men around an attack soldier. The same sphere is reused until the
+	// scan interval passes, because contact and the shot both ask.
+	protected static void GatherAttack(IEntity body, float radius)
+	{
+		s_NearBodies.Clear();
+		if (!body || radius < 1)
+			return;
+
+		float now = WorldTime();
+		if (
+			s_AttackGatherAt.Contains(body) &&
+			now - s_AttackGatherAt.Get(body) < ATTACK_SCAN_MS &&
+			s_AttackGather.Contains(body)
+		)
+		{
+			array<IEntity> cached = s_AttackGather.Get(body);
+			if (!cached)
+				return;
+
+			float radiusSq = radius * radius;
+			vector origin = body.GetOrigin();
+			foreach (IEntity character : cached)
+			{
+				if (!character || character == body)
+					continue;
+
+				vector gap = origin - character.GetOrigin();
+				if (gap.LengthSq() > radiusSq)
+					continue;
+
+				s_NearBodies.Insert(character);
+			}
+
+			return;
+		}
+
+		GatherBodies(body, radius);
+		array<IEntity> copy = new array<IEntity>();
+		foreach (IEntity character : s_NearBodies)
+		{
+			if (character)
+				copy.Insert(character);
+		}
+
+		s_AttackGather.Set(body, copy);
+		s_AttackGatherAt.Set(body, now);
+	}
+
+	protected static void QueryBodies(vector origin, float radius, array<IEntity> into, IEntity skip)
+	{
+		if (!into)
+			return;
+
+		into.Clear();
+		if (!s_QueryBodies)
+			s_QueryBodies = new array<IEntity>();
+
+		s_QueryBodies.Clear();
+		if (radius < 1)
+			return;
+
 		BaseWorld world = GetGame().GetWorld();
-		if (!world)
-			world = body.GetWorld();
+		if (!world && skip)
+			world = skip.GetWorld();
 
 		if (!world)
 			return;
 
-		s_NearViewer = body;
+		s_NearViewer = skip;
 		world.QueryEntitiesBySphere(
-			body.GetOrigin(),
+			origin,
 			radius,
 			OnNearBody,
 			null,
 			EQueryEntitiesFlags.DYNAMIC | EQueryEntitiesFlags.WITH_OBJECT
 		);
 		s_NearViewer = null;
+
+		foreach (IEntity character : s_QueryBodies)
+		{
+			if (!character)
+				continue;
+
+			into.Insert(character);
+		}
 	}
 
 	protected static bool OnNearBody(IEntity entity)
 	{
+		if (!s_QueryBodies)
+			return true;
+
 		ChimeraCharacter character = CharacterOf(entity);
 		if (!character || character == s_NearViewer)
 			return true;
 
-		if (s_NearBodies.Contains(character))
+		if (s_QueryBodies.Contains(character))
 			return true;
 
-		s_NearBodies.Insert(character);
+		s_QueryBodies.Insert(character);
 		return true;
 	}
 
@@ -6394,9 +6812,6 @@ class KK_GarrisonHold
 			return false;
 
 		if (s_ShotLive.Contains(body))
-			return false;
-
-		if (VisibleContact(body, OrderContactRange()))
 			return false;
 
 		SCR_AIUtilityComponent utility = UtilityOf(body);
@@ -6965,11 +7380,12 @@ class KK_GarrisonHold
 			return;
 
 		flat.Normalize();
-		SnapFacing(body, controller, flat.ToYaw());
-
-		float bodyYaw = body.GetYawPitchRoll()[0];
-		vector muzzle = MuzzlePosition(body, 0);
-		WriteAimAt(controller.GetAimingComponent(), muzzle, point, bodyYaw);
+		float heading = flat.ToYaw();
+		SnapFacing(body, controller, heading);
+		// The plant owns the pose, so a plain heading write does not turn
+		// him. The forced heading is what a hold uses to turn in place.
+		controller.SetHeadingAngle(heading * Math.DEG2RAD, true);
+		s_ReturnFacing.Set(body, heading);
 	}
 
 	protected static bool FacingReturnShot(IEntity body, IEntity enemy)
@@ -6987,8 +7403,16 @@ class KK_GarrisonHold
 			return true;
 
 		flat.Normalize();
-		float gap = YawDelta(body.GetYawPitchRoll()[0], flat.ToYaw());
-		return Math.AbsFloat(gap) < RETURN_FIRE_AIM_DEG;
+		float want = flat.ToYaw();
+		float gap = YawDelta(body.GetYawPitchRoll()[0], want);
+		if (Math.AbsFloat(gap) < RETURN_FIRE_AIM_DEG)
+			return true;
+
+		if (!s_ReturnFacing.Contains(body))
+			return false;
+
+		float commanded = YawDelta(s_ReturnFacing.Get(body), want);
+		return Math.AbsFloat(commanded) < RETURN_FIRE_AIM_DEG;
 	}
 
 	protected static void SnapFacing(
@@ -7003,20 +7427,14 @@ class KK_GarrisonHold
 		angles[0] = headingDeg;
 		body.SetYawPitchRoll(angles);
 
+		// ToYaw is already -180..180, the same range as the heading he is
+		// standing on. Folding a westward aim into 0..360 makes the first
+		// snap turn the long way, and the heading whips until the next write.
+		float radians = headingDeg * Math.DEG2RAD;
+		controller.SetHeadingAngle(radians, true);
 		CharacterInputContext input = controller.GetInputContext();
 		if (input)
-			input.SetHeadingAngle(HeadingRadians(headingDeg));
-	}
-
-	protected static float HeadingRadians(float headingDeg)
-	{
-		float radians = headingDeg * Math.DEG2RAD;
-		while (radians < 0)
-			radians = radians + Math.PI2;
-		while (radians >= Math.PI2)
-			radians = radians - Math.PI2;
-
-		return radians;
+			input.SetHeadingAngle(radians);
 	}
 
 	// Shortest signed gap, in degrees. Positive is toDeg to the right of fromDeg.
@@ -8163,8 +8581,9 @@ class KK_GarrisonHold
 
 	// Nearest living enemy perception has already started on, and this
 	// order can trace. Identified, detected, and unknown all count.
-	// Far contacts stay on the lane look. A house order also takes a man
-	// perception missed. The same sight ray steps through a window.
+	// Far contacts stay on the lane look. Attack waypoints use this.
+	// A clear or garrison reads the shot tick instead. The sight ray
+	// steps through a window.
 	static IEntity VisibleContact(IEntity soldier, float maxRange = ATTACK_CONTACT_RANGE)
 	{
 		IEntity body = CharacterBody(soldier);
@@ -8198,10 +8617,14 @@ class KK_GarrisonHold
 	// never lists him when its own ray stops on a pane.
 	protected static IEntity NearestNearby(IEntity body, float maxRange)
 	{
-		if (!body || maxRange < 1 || !OnGlassWatch(body))
+		bool attackWatch = IsAttackSearch(body);
+		if (!body || maxRange < 1 || (!OnGlassWatch(body) && !attackWatch))
 			return null;
 
-		GatherBodies(body, maxRange);
+		if (attackWatch && !OnGlassWatch(body))
+			GatherAttack(body, maxRange);
+		else
+			GatherBodies(body, maxRange);
 		for (int i = s_NearBodies.Count() - 1; i >= 0; i--)
 		{
 			IEntity enemy = s_NearBodies[i];
@@ -8274,14 +8697,14 @@ class KK_GarrisonHold
 				if (requireHostile && !IsHostile(body, enemy))
 					continue;
 
-				if (!CanSeeEntity(body, enemy))
-					continue;
-
 				float distance = vector.Distance(
 					body.GetOrigin(),
 					enemy.GetOrigin()
 				);
 				if (distance > best)
+					continue;
+
+				if (!CanSeeEntity(body, enemy))
 					continue;
 
 				best = distance;
@@ -9575,12 +9998,17 @@ modded class SCR_AIAttackBehavior
 				KK_GarrisonHold.DistantBaseFight(utility.m_OwnerEntity) ||
 				KK_GarrisonHold.DistantBaseFight(utility.GetOwner())
 			);
+		// The attack shot does not take the vanilla aim wait. Sharp combat
+		// does the same for a house order.
 		if (
 			!distantFight &&
-			KK_PerceptionBoost.UseSharpCombat() &&
 			(
 				attackSearch ||
-				(utility && KK_PerceptionBoost.IsActiveSoldier(utility.m_OwnerEntity))
+				(
+					KK_PerceptionBoost.UseSharpCombat() &&
+					utility &&
+					KK_PerceptionBoost.IsActiveSoldier(utility.m_OwnerEntity)
+				)
 			)
 		)
 		{

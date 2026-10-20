@@ -2961,6 +2961,12 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (!soldier.m_UtilityComponent.m_CombatComponent)
 			return false;
 
+		IEntity body = agent.GetControlledEntity();
+		// The push stops on a man the sight ray can reach. Waiting for the
+		// combat component's target left him walking past someone in the open.
+		if (body && KK_GarrisonHold.VisibleContact(body))
+			return true;
+
 		BaseTarget target =
 			soldier.m_UtilityComponent.m_CombatComponent.GetCurrentTarget();
 		if (!KK_GarrisonHold.IsLivingTarget(target))
