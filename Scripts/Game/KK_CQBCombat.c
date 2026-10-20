@@ -8333,8 +8333,9 @@ class KK_GarrisonHold
 			return true;
 
 		float light = IlluminationOf(enemy);
-		if (ViewerNightVision(viewer))
-			light = Math.Max(light, 0.8);
+		bool nightVision = ViewerNightVision(viewer);
+		if (nightVision)
+			light = 1;
 
 		bool lit = TargetFlashlight(enemy);
 		if (!lit && ViewerFlashlight(viewer) && FlashlightCone(viewer, enemy, distance))
@@ -8343,8 +8344,14 @@ class KK_GarrisonHold
 		if (lit)
 			light = Math.Max(light, 0.75);
 
-		// 12 m in full dark, about 110 m in daylight. Night vision and a
-		// light use the floors above, so they land near the day reach.
+		// Night vision still shows a man who is low or in cover. The
+		// remaining concealment is bushes and a still, prone body.
+		if (nightVision)
+			conceal = conceal * 0.35;
+
+		// 12 m in full dark, about 110 m in daylight. Night vision uses
+		// the day reach, then keeps most of it through concealment. A
+		// light lands near the day reach only while the beam is on him.
 		float reach = 12 + (light * 100);
 		reach = reach * (1 - conceal);
 		return distance <= reach;
