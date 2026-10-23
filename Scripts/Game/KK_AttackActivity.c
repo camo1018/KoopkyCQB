@@ -203,8 +203,13 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (!m_bOriginSet)
 			CaptureOrigin();
 
+		// On the point with another order behind this one, the push ends
+		// and that order starts. With nothing queued, every pace holds
+		// the way take cover does, and the attack stays in charge.
 		bool startedOnPoint = FlatDistance(m_vOrigin, m_vTarget) <= Arrival();
-		if (!IsTakeCover() && startedOnPoint)
+		bool squadAtPoint = m_bAtPoint || startedOnPoint || AllNearTarget();
+		bool waypointFollows = HasFollowingWaypoint();
+		if (squadAtPoint && waypointFollows)
 		{
 			CompleteAttack();
 			return 0;
@@ -212,21 +217,18 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 		NotePaceChange();
 
-		if (IsTakeCover())
+		// Take cover plants as each man arrives. Advance and bound keep
+		// their push until the squad is there, then use that same plant.
+		bool holdAtPoint = !waypointFollows && (IsTakeCover() || squadAtPoint);
+		if (holdAtPoint)
 			UpdateArrivals(now);
 
 		// Finish distance ends the push. After that, only the return distance
 		// pulls them back. Leaving the finish radius must not restart the push.
-		if (IsTakeCover() && (m_bAtPoint || startedOnPoint || AllNearTarget()))
+		if (holdAtPoint && squadAtPoint)
 		{
 			m_bAtPoint = true;
 			return GetPriority();
-		}
-
-		if (AllNearTarget())
-		{
-			CompleteAttack();
-			return 0;
 		}
 
 		if (IsLeapfrog())
@@ -2332,7 +2334,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 	// is on the way back, the mod waits until one of them is in again.
 	bool ReleasedToFight()
 	{
-		if (!IsTakeCover())
+		if (!IsTakeCover() && !m_bAtPoint)
 			return false;
 
 		bool any = false;
@@ -3222,6 +3224,29 @@ class KK_AttackActivity : SCR_AIActivityBase
 		EAIActionState state = GetActionState();
 		return state != EAIActionState.FAILED &&
 			state != EAIActionState.COMPLETED;
+	}
+
+	// Another order sits behind this one. The hold at the point is for
+	// the last attack in the queue. A later waypoint has to be reached.
+	protected bool HasFollowingWaypoint()
+	{
+		if (!m_Group || !m_AttackWaypoint)
+			return false;
+
+		array<AIWaypoint> waypoints = {};
+		m_Group.GetWaypoints(waypoints);
+
+		int index = waypoints.Find(m_AttackWaypoint);
+		if (index < 0)
+			return false;
+
+		for (int i = index + 1; i < waypoints.Count(); i++)
+		{
+			if (waypoints[i])
+				return true;
+		}
+
+		return false;
 	}
 
 	protected bool WaypointStillAssigned()
