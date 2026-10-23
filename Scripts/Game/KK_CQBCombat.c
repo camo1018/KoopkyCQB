@@ -845,6 +845,30 @@ class KK_GarrisonHold
 	// sprint. The sprint does not turn the head toward a contact.
 	protected static ref set<IEntity> s_AttackSearch = new set<IEntity>();
 	protected static ref array<BaseTarget> s_AttackSeen = new array<BaseTarget>();
+	// The trigger this engage is holding. Cleared when he should be moving
+	// again, or when the contact is no longer current.
+	protected static ref set<IEntity> s_PerceivedFire = new set<IEntity>();
+	// A perceived hostile this attack has not dropped yet.
+	protected static ref set<IEntity> s_EngageEpisode = new set<IEntity>();
+	// When that contact dropped. A new one inside the recent gap is not
+	// another first sighting.
+	protected static ref map<IEntity, float> s_EngageEpisodeEnded =
+		new map<IEntity, float>();
+	// World time the forced stop lasts until, and when the next one may start.
+	protected static ref map<IEntity, float> s_EngageHoldUntil =
+		new map<IEntity, float>();
+	protected static ref map<IEntity, float> s_EngageNextStop =
+		new map<IEntity, float>();
+	// Men who have already taken the engage shot. A later man stops him
+	// only the first time he becomes that shot and is visible.
+	protected static ref map<IEntity, ref set<IEntity>> s_EngageKnown =
+		new map<IEntity, ref set<IEntity>>();
+	// Who the engage shot was on last pass. A new man has to beat him.
+	protected static ref map<IEntity, IEntity> s_EngageAim =
+		new map<IEntity, IEntity>();
+	protected static ref array<BaseTarget> s_EngageScan = new array<BaseTarget>();
+	// Feet locked for a forced engage stop. A cover pin is a different set.
+	protected static ref set<IEntity> s_EngageStop = new set<IEntity>();
 	protected static const float ATTACK_CONTACT_RANGE = 180;
 	// Times the alerted rate. 2.5 alone still leaves a man in the open
 	// unrecognized for seconds. This is the attack order's own rate.
@@ -4289,7 +4313,7 @@ class KK_GarrisonHold
 			return;
 
 		s_HealFootLock.RemoveItem(body);
-		if (IsPinned(body))
+		if (IsPinned(body) || IsEngageStopped(body))
 			return;
 
 		CharacterControllerComponent controller = Controller(body);
@@ -4857,8 +4881,472 @@ class KK_GarrisonHold
 		s_AttackSearch.RemoveItem(body);
 		s_AttackGatherAt.Remove(body);
 		s_AttackGather.Remove(body);
+		EndEngageEpisode(body, false);
+		ReleasePerceivedEnemy(body);
 		ForgetSprintEnemy(body);
 		RefreshSearchPerception(body);
+	}
+
+	// Perception has noticed him, identified or not. Aim and fire while he
+	// is already stopped. A first sighting, and a later interval, stop him
+	// for a short burst and then let the move go. A dry gun is his again,
+	// so the reload is not held down by this trigger.
+	static void PressPerceivedEnemy(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !AttackEngageEnabled() || !IsAttackSearch(body))
+		{
+			EndEngageEpisode(body, false);
+			ReleasePerceivedEnemy(body);
+			return;
+		}
+
+		if (IsBoundSprint(body))
+		{
+			SetEngageStop(body, false);
+			ReleasePerceivedEnemy(body);
+			return;
+		}
+
+		if (CannotShoot(body))
+		{
+			SetEngageStop(body, false);
+			ReleasePerceivedEnemy(body);
+			return;
+		}
+
+		IEntity enemy = PerceivedEnemy(body);
+		if (!enemy)
+		{
+			EndEngageEpisode(body, true);
+			ReleasePerceivedEnemy(body);
+			return;
+		}
+
+		float now = WorldTime();
+		NoteEngageContact(body, now);
+		NotePriorityTarget(body, enemy, now);
+
+		if (EngageHoldActive(body, now))
+		{
+			SetEngageStop(body, true);
+			HoldEngageShot(body, enemy);
+			return;
+		}
+
+		SetEngageStop(body, false);
+
+		if (!AttackTraveling(body))
+		{
+			HoldEngageShot(body, enemy);
+			return;
+		}
+
+		if (EngagePeriodicDue(body, now))
+		{
+			BeginEngageHold(body, now, EngageRepeatMs());
+			SetEngageStop(body, true);
+			HoldEngageShot(body, enemy);
+			return;
+		}
+
+		ReleasePerceivedEnemy(body);
+	}
+
+	protected static void HoldEngageShot(IEntity body, IEntity enemy)
+	{
+		s_PerceivedFire.Insert(body);
+		CommandWeapon(body, true, true);
+		AimPerceived(body, enemy);
+	}
+
+	// A new contact after the recent gap stops him for the initial duration.
+	// One that comes back inside that gap waits for the interval.
+	protected static void NoteEngageContact(IEntity body, float now)
+	{
+		if (s_EngageEpisode.Contains(body))
+			return;
+
+		s_EngageEpisode.Insert(body);
+
+		bool fresh = true;
+		if (s_EngageEpisodeEnded.Contains(body))
+			fresh = now - s_EngageEpisodeEnded.Get(body) >= EngageRecentMs();
+
+		if (fresh && EngageInitialMs() > 0)
+		{
+			BeginEngageHold(body, now, EngageInitialMs());
+			return;
+		}
+
+		if (!s_EngageNextStop.Contains(body) || s_EngageNextStop.Get(body) <= now)
+			s_EngageNextStop.Set(body, now + EngageIntervalMs());
+	}
+
+	// A man who has not yet been the one he fights. When that man takes the
+	// shot and is visible, he stops for the initial duration. The first man
+	// is the episode stop, so he is recorded without a second one.
+	protected static void NotePriorityTarget(IEntity body, IEntity enemy, float now)
+	{
+		if (!enemy)
+			return;
+
+		set<IEntity> known = EngageKnown(body);
+		if (known.Contains(enemy))
+		{
+			s_EngageAim.Set(body, enemy);
+			return;
+		}
+
+		bool first = !s_EngageAim.Contains(body);
+		s_EngageAim.Set(body, enemy);
+		if (first)
+		{
+			known.Insert(enemy);
+			return;
+		}
+
+		if (EngageInitialMs() <= 0 || !TargetVisible(body, enemy))
+			return;
+
+		known.Insert(enemy);
+		BeginEngageHold(body, now, EngageInitialMs());
+	}
+
+	protected static set<IEntity> EngageKnown(IEntity body)
+	{
+		if (s_EngageKnown.Contains(body))
+			return s_EngageKnown.Get(body);
+
+		set<IEntity> known = new set<IEntity>();
+		s_EngageKnown.Set(body, known);
+		return known;
+	}
+
+	// The native seen check. Exposure and the detection clock are not enough
+	// for a new man to stop the move.
+	protected static bool TargetVisible(IEntity body, IEntity enemy)
+	{
+		PerceptionComponent perception = PerceptionComponent.Cast(
+			body.FindComponent(PerceptionComponent)
+		);
+		SCR_AICombatComponent combat = SCR_AICombatComponent.Cast(
+			body.FindComponent(SCR_AICombatComponent)
+		);
+		if (!perception || !combat || !enemy)
+			return false;
+
+		s_EngageScan.Clear();
+		perception.GetTargetsList(s_EngageScan, ETargetCategory.ENEMY);
+		if (ScanVisible(combat, enemy))
+			return true;
+
+		s_EngageScan.Clear();
+		perception.GetTargetsList(s_EngageScan, ETargetCategory.DETECTED);
+		return ScanVisible(combat, enemy);
+	}
+
+	protected static bool ScanVisible(SCR_AICombatComponent combat, IEntity enemy)
+	{
+		foreach (BaseTarget candidate : s_EngageScan)
+		{
+			if (!candidate || candidate.GetTargetEntity() != enemy)
+				continue;
+
+			return combat.IsTargetVisible(candidate);
+		}
+
+		return false;
+	}
+
+	protected static void BeginEngageHold(IEntity body, float now, float durationMs)
+	{
+		s_EngageHoldUntil.Set(body, now + durationMs);
+		float interval = EngageIntervalMs();
+		if (interval > 0)
+			s_EngageNextStop.Set(body, now + durationMs + interval);
+		else
+			s_EngageNextStop.Remove(body);
+	}
+
+	protected static bool EngageHoldActive(IEntity body, float now)
+	{
+		return s_EngageHoldUntil.Contains(body) && now < s_EngageHoldUntil.Get(body);
+	}
+
+	protected static bool EngagePeriodicDue(IEntity body, float now)
+	{
+		if (EngageIntervalMs() <= 0 || EngageRepeatMs() <= 0)
+			return false;
+
+		if (!s_EngageNextStop.Contains(body))
+			return false;
+
+		return now >= s_EngageNextStop.Get(body);
+	}
+
+	protected static void EndEngageEpisode(IEntity body, bool remember)
+	{
+		if (!body)
+			return;
+
+		SetEngageStop(body, false);
+		bool had = s_EngageEpisode.Contains(body);
+		s_EngageEpisode.RemoveItem(body);
+		if (remember && had)
+			s_EngageEpisodeEnded.Set(body, WorldTime());
+
+		if (remember)
+			return;
+
+		s_EngageEpisodeEnded.Remove(body);
+		s_EngageHoldUntil.Remove(body);
+		s_EngageNextStop.Remove(body);
+		s_EngageKnown.Remove(body);
+		s_EngageAim.Remove(body);
+	}
+
+	protected static float EngageInitialMs()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return 2000;
+
+		return mode.KK_GetAttackEngageInitial() * 1000;
+	}
+
+	protected static float EngageIntervalMs()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return 6000;
+
+		return mode.KK_GetAttackEngageInterval() * 1000;
+	}
+
+	protected static float EngageRepeatMs()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return 2000;
+
+		return mode.KK_GetAttackEngageRepeat() * 1000;
+	}
+
+	// Long enough that a flicker of the same man is not a new first sighting.
+	protected static float EngageRecentMs()
+	{
+		float interval = EngageIntervalMs();
+		if (interval > 0)
+			return interval;
+
+		float initial = EngageInitialMs();
+		if (initial > 0)
+			return initial;
+
+		return 2000;
+	}
+
+	static bool IsEngageStopped(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		return body && s_EngageStop.Contains(body);
+	}
+
+	// Max speed only. The attack step stays queued, and a cover pin is left
+	// as it was. Speed comes back when this stop ends.
+	protected static void SetEngageStop(IEntity body, bool stop)
+	{
+		if (!body)
+			return;
+
+		if (stop)
+			s_EngageStop.Insert(body);
+		else
+			s_EngageStop.RemoveItem(body);
+
+		CharacterControllerComponent controller = Controller(body);
+		if (!controller)
+			return;
+
+		if (stop || IsPinned(body))
+			controller.OverrideMaxSpeed(0);
+		else
+			controller.OverrideMaxSpeed(1);
+	}
+
+	protected static bool AttackEngageEnabled()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return true;
+
+		return mode.KK_GetAttackEngage();
+	}
+
+	protected static void ReleasePerceivedEnemy(IEntity body)
+	{
+		if (!body || !s_PerceivedFire.Contains(body))
+			return;
+
+		s_PerceivedFire.RemoveItem(body);
+		s_MoveFiring.RemoveItem(body);
+		SetFireWanted(body, false);
+
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (utility && utility.m_LookAction)
+			utility.m_LookAction.Cancel();
+	}
+
+	static bool PerceivedFireActive(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		return body && s_PerceivedFire.Contains(body);
+	}
+
+	// The man the normal attack is already on, then the closest identified
+	// enemy, then a detected man. A detected contact must not pull the
+	// rifle off the enemy vanilla is going to fight.
+	protected static IEntity PerceivedEnemy(IEntity body)
+	{
+		PerceptionComponent perception = PerceptionComponent.Cast(
+			body.FindComponent(PerceptionComponent)
+		);
+		SCR_AICombatComponent combat = SCR_AICombatComponent.Cast(
+			body.FindComponent(SCR_AICombatComponent)
+		);
+		if (!perception || !combat)
+			return null;
+
+		float window = Math.Max(0.5, perception.GetUpdateInterval()) + 0.02;
+		BaseTarget selected = combat.GetCurrentTarget();
+		if (selected && ContactCurrent(combat, selected, window))
+		{
+			IEntity chosen = selected.GetTargetEntity();
+			if (chosen && chosen != body && IsTargetable(chosen) && IsHostile(body, chosen))
+				return chosen;
+		}
+
+		IEntity identified = ClosestContact(
+			body,
+			perception,
+			combat,
+			ETargetCategory.ENEMY,
+			window
+		);
+		if (identified)
+			return identified;
+
+		return ClosestContact(
+			body,
+			perception,
+			combat,
+			ETargetCategory.DETECTED,
+			window
+		);
+	}
+
+	// Puts the look on that man. The lane look is a lower priority and must
+	// not run while this hold is up, or the rifle leaves him. The body
+	// heading is only written once he has stopped. Writing it on a step
+	// overrides the move and leaves him planted.
+	protected static void AimPerceived(IEntity body, IEntity enemy)
+	{
+		vector point = ShotAimPoint(enemy);
+		if (point == vector.Zero)
+			point = enemy.GetOrigin() + Vector(0, 1.4, 0);
+
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (utility && utility.m_LookAction)
+		{
+			s_bPathLookWrite = true;
+			utility.m_LookAction.KK_Snap(point, PATH_LOOK_PRIORITY, SHOT_LOOK_DURATION);
+			s_bPathLookWrite = false;
+		}
+
+		if (AttackTraveling(body))
+			return;
+
+		CharacterControllerComponent controller = Controller(body);
+		if (!LifeStanding(controller))
+			return;
+
+		vector flat = point - body.GetOrigin();
+		flat[1] = 0;
+		if (flat.Length() < 0.05)
+			return;
+
+		flat.Normalize();
+		SnapFacing(body, controller, flat.ToYaw());
+	}
+
+	// Above this he is still on a step. The look and the trigger stay on.
+	// The body is not turned onto the target until he drops under it.
+	protected static bool AttackTraveling(IEntity body)
+	{
+		Physics physics = body.GetPhysics();
+		if (!physics)
+			return false;
+
+		vector velocity = physics.GetVelocity();
+		velocity[1] = 0;
+		return velocity.Length() > 1.25;
+	}
+
+	protected static IEntity ClosestContact(
+		IEntity body,
+		PerceptionComponent perception,
+		SCR_AICombatComponent combat,
+		ETargetCategory category,
+		float window)
+	{
+		s_AttackSeen.Clear();
+		perception.GetTargetsList(s_AttackSeen, category);
+
+		IEntity best = null;
+		float bestDist = 0;
+		vector origin = body.GetOrigin();
+
+		foreach (BaseTarget candidate : s_AttackSeen)
+		{
+			if (!candidate || !ContactCurrent(combat, candidate, window))
+				continue;
+
+			IEntity enemy = candidate.GetTargetEntity();
+			if (!enemy || enemy == body)
+				continue;
+
+			if (!IsTargetable(enemy) || !IsHostile(body, enemy))
+				continue;
+
+			float distance = vector.Distance(origin, enemy.GetOrigin());
+			if (best && distance >= bestDist)
+				continue;
+
+			best = enemy;
+			bestDist = distance;
+		}
+
+		return best;
+	}
+
+	// Same window IsTargetVisible uses. A detected man can be current
+	// on the detection clock before that seen-time check would pass.
+	protected static bool ContactCurrent(
+		SCR_AICombatComponent combat,
+		BaseTarget candidate,
+		float window)
+	{
+		if (!candidate)
+			return false;
+
+		if (combat.IsTargetVisible(candidate))
+			return true;
+
+		if (candidate.GetExposure() > 0)
+			return true;
+
+		return candidate.GetTimeSinceDetected() < window;
 	}
 
 	static bool IsAttackSearch(IEntity soldier)
@@ -5450,10 +5938,11 @@ class KK_GarrisonHold
 		if (liveRaised == raised)
 			return false;
 
-		// Already asked for it up. Wait until that pose has been seen,
-		// then one more raise if a later node put the rifle down.
+		// Already asked for it up. Send it again once the wait above has
+		// passed: a later node put the rifle down, or the first raise never
+		// settled. Waiting for the settled pose left it down for good.
 		if (raised)
-			return s_RaiseSettled.Contains(body);
+			return true;
 
 		// Already asked for it down. Another lower restarts the pose.
 		// A raise that went out after that ask is the reason to send one more.
@@ -9948,6 +10437,9 @@ modded class SCR_AIAttackBehavior
 		bool pinned =
 			KK_GarrisonHold.IsPinned(character) ||
 			KK_GarrisonHold.IsPinned(agentEntity);
+		bool engageStop =
+			KK_GarrisonHold.IsEngageStopped(character) ||
+			KK_GarrisonHold.IsEngageStopped(agentEntity);
 		bool doorFiring =
 			KK_GarrisonHold.IsDoorFiring(character) ||
 			KK_GarrisonHold.IsDoorFiring(agentEntity);
@@ -9957,7 +10449,7 @@ modded class SCR_AIAttackBehavior
 			KK_GarrisonHold.GetApproachGoal(character, approachGoal) ||
 			KK_GarrisonHold.GetApproachGoal(agentEntity, approachGoal);
 
-		if (clearingInside || pinned || doorFiring || distantFight)
+		if (clearingInside || pinned || engageStop || doorFiring || distantFight)
 		{
 			m_bUseCombatMove = false;
 			if (KK_GarrisonHold.IsPinned(character))
@@ -10080,7 +10572,7 @@ modded class SCR_AICombatMoveLogicBase
 			return ENodeResult.RUNNING;
 		}
 
-		if (KK_GarrisonHold.IsPinned(body))
+		if (KK_GarrisonHold.IsPinned(body) || KK_GarrisonHold.IsEngageStopped(body))
 		{
 			if (m_State && m_State.IsExecutingRequest())
 				m_State.CancelRequest();

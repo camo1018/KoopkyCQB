@@ -39,9 +39,9 @@ A soldier who leaves his post is pulled back on an interval. He rotates to anoth
 
 Outdoor push orders under the Attack page of the commanding menu, or from the Game Master Koopky bar.
 
-- **Advance.** Pairs step toward the point, pause, and scan. On contact they shoot for **Contact duration** before the normal attack takes the fight.
-- **Bound.** The same push, with pairs bounding by lane.
-- **Take cover.** Pairs bound into cover on the way. After one fighter in the moving pair has stopped, **Cover handoff** lets the holding pair bound if the others have not arrived. While planted, contact shots run for the whole hold when **Contact duration** is above zero. At the point, **Take cover uses attack** is on by default: normal attack runs the fight and walks a soldier back if he leaves the return distance. Off keeps them on the cover spot.
+- **Advance.** Pairs step toward the point, pause, and scan. With **Attack engage** on, he aims and fires at a current hostile while he is already stopped. The first sighting stops him for **Attack engage initial duration**. While that hostile stays perceived, **Attack engage interval** and **Attack engage repeat duration** stop him again. Between those stops the move is left alone.
+- **Bound.** The same push, with pairs bounding by lane. A bound sprint does not use that shot.
+- **Take cover.** Pairs bound into cover on the way. After one fighter in the moving pair has stopped, **Cover handoff** lets the holding pair bound if the others have not arrived. At the point, a target hands the move to the normal attack, which walks a soldier back if he leaves the return distance. With no target he stays on the cover spot. **Attack engage** keeps running in both cases until the order is cancelled or replaced.
 
 **Attack lane spacing**, **Attack step length**, **Attack pause**, and **Attack finish distance** set how far apart the lanes sit, how far each step goes, how long a pair holds, and how close they must be to finish. Defaults are 12 m, 20 m, 2 s, and 8 m.
 

@@ -88,12 +88,6 @@ class KK_AttackActivity : SCR_AIActivityBase
 	protected vector m_vTarget;
 	protected bool m_bOriginSet;
 	protected bool m_bNoted;
-	protected bool m_bYielding;
-	// Contact shoots from here before the normal attack, Reaper, or CRX
-	// is allowed to take the fight and run for cover.
-	protected float m_fReturnFireSince;
-	protected bool m_bReturnFired;
-	protected ref set<AIAgent> m_ReturnFireHeld = new set<AIAgent>();
 	protected bool m_bFinished;
 	protected bool m_bCancelled;
 	protected bool m_bRetain;
@@ -227,60 +221,6 @@ class KK_AttackActivity : SCR_AIActivityBase
 		{
 			m_bAtPoint = true;
 			return GetPriority();
-		}
-		if (AnyContact() && !IsTakeCover())
-		{
-			if (!m_bReturnFired)
-			{
-				float burst = ReturnFireMs();
-				if (burst > 0)
-				{
-					if (m_fReturnFireSince <= 0)
-					{
-						m_fReturnFireSince = now;
-
-						if (SCR_BaseGameMode.KK_LogEnabled())
-							Print("KK: Attack return fire");
-					}
-
-					if (now - m_fReturnFireSince < burst)
-					{
-						UpdateReturnFire();
-						return GetPriority();
-					}
-
-					EndReturnFire();
-
-					if (SCR_BaseGameMode.KK_LogEnabled())
-						Print("KK: Attack handed the fight on");
-				}
-
-				m_bReturnFired = true;
-			}
-
-			if (!m_bYielding)
-			{
-				m_bYielding = true;
-				CancelLooks();
-			}
-
-			// The fight needs the rifle. The bound sprint lowers it.
-			ReleaseBoundSprint();
-			return GetPriority();
-		}
-
-		if (m_bYielding || m_bReturnFired || m_fReturnFireSince > 0)
-		{
-			EndReturnFire();
-			m_bYielding = false;
-			m_bReturnFired = false;
-			m_fReturnFireSince = 0;
-
-			foreach (KK_AttackPair pair : m_aPairs)
-			{
-				if (pair)
-					pair.m_fLastOrderAt = 0;
-			}
 		}
 
 		if (AllNearTarget())
@@ -1622,6 +1562,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 	protected void LookAt(notnull AIAgent agent, vector point, float priority = 4)
 	{
+		if (KK_GarrisonHold.PerceivedFireActive(agent))
+			return;
+
 		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
 		if (!soldier || !soldier.m_UtilityComponent)
 			return;
@@ -1630,119 +1573,6 @@ class KK_AttackActivity : SCR_AIActivityBase
 			return;
 
 		soldier.m_UtilityComponent.m_LookAction.KK_Track(point, priority, 1.5);
-	}
-
-	protected void CancelLooks()
-	{
-		foreach (KK_AttackPair pair : m_aPairs)
-		{
-			if (!pair)
-				continue;
-
-			foreach (AIAgent agent : pair.m_aAgents)
-				CancelLook(agent);
-		}
-	}
-
-	// Stop the step and shoot anyone this order can already see. Feet stay
-	// put so the cover move cannot start until the burst is over.
-	protected void UpdateReturnFire()
-	{
-		foreach (KK_AttackPair pair : m_aPairs)
-		{
-			if (!pair)
-				continue;
-
-			foreach (AIAgent agent : pair.m_aAgents)
-			{
-				if (!agent || !agent.GetControlledEntity() || IsReleased(agent))
-					continue;
-
-				if (!m_ReturnFireHeld.Contains(agent))
-				{
-					CancelAgent(agent);
-					m_ReturnFireHeld.Insert(agent);
-				}
-
-				ApplyWeaponForSpeed(agent, EMovementType.IDLE);
-				KK_GarrisonHold.SetPinned(agent.GetControlledEntity(), true);
-
-				bool shooting = CanReturnFire(agent);
-				if (shooting && KK_GarrisonHold.BarrelWantsMove(agent))
-					shooting = false;
-
-				KK_GarrisonHold.SetReturnFire(agent, shooting);
-				if (!shooting)
-					continue;
-
-				SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
-				if (soldier && soldier.m_UtilityComponent)
-					KK_GarrisonHold.ApplyMoveFire(soldier.m_UtilityComponent);
-			}
-		}
-	}
-
-	protected bool CanReturnFire(AIAgent agent)
-	{
-		if (!agent)
-			return false;
-
-		IEntity body = agent.GetControlledEntity();
-		if (!body)
-			return false;
-
-		if (KK_GarrisonHold.VisibleContact(body))
-			return true;
-
-		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
-		if (
-			!soldier ||
-			!soldier.m_UtilityComponent ||
-			!soldier.m_UtilityComponent.m_CombatComponent
-		)
-		{
-			return false;
-		}
-
-		return KK_GarrisonHold.SeesTarget(
-			body,
-			soldier.m_UtilityComponent.m_CombatComponent.GetCurrentTarget()
-		);
-	}
-
-	protected void EndReturnFire()
-	{
-		foreach (KK_AttackPair pair : m_aPairs)
-		{
-			if (!pair)
-				continue;
-
-			foreach (AIAgent agent : pair.m_aAgents)
-			{
-				if (!agent)
-					continue;
-
-				KK_GarrisonHold.SetReturnFire(agent, false);
-
-				IEntity body = agent.GetControlledEntity();
-				if (body)
-					KK_GarrisonHold.SetPinned(body, false);
-			}
-		}
-
-		m_ReturnFireHeld.Clear();
-	}
-
-	protected void ReleaseBoundSprint()
-	{
-		foreach (KK_AttackPair pair : m_aPairs)
-		{
-			if (!pair)
-				continue;
-
-			foreach (AIAgent agent : pair.m_aAgents)
-				ApplyWeaponForSpeed(agent, EMovementType.IDLE);
-		}
 	}
 
 	protected void CancelLook(AIAgent agent)
@@ -1943,8 +1773,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 			}
 
 			KK_GarrisonHold.SetPinned(agent.GetControlledEntity(), true);
-			if (!HoldContactAgent(agent))
-				LookAgentDownLane(agent, axis);
+			LookAgentDownLane(agent, axis);
 		}
 	}
 
@@ -2240,8 +2069,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 		}
 	}
 
-	// The contact shot from Advance. A man in sight is fired on without the
-	// attack's aim delay. With nobody there, the head stays down the lane.
+	// With nobody there, the head stays down the lane. A man in the fight
+	// keeps the rifle on him.
 	protected void HoldContact(notnull KK_AttackPair pair)
 	{
 		vector axis;
@@ -2253,42 +2082,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 			if (!agent || IsReleased(agent))
 				continue;
 
-			if (HoldContactAgent(agent))
-				continue;
-
 			if (haveAxis && !HasLivingTarget(agent))
 				LookAgentDownLane(agent, axis);
 		}
-	}
-
-	// True while the contact shot owns him. The lane look stays off then,
-	// or it turns the rifle off the man.
-	protected bool HoldContactAgent(AIAgent agent)
-	{
-		if (!agent || !agent.GetControlledEntity() || IsReleased(agent))
-			return false;
-
-		// Same switch as Advance. Contact duration 0 leaves the hold on the
-		// normal attack. Above 0, the shot stays for the whole hold.
-		if (ReturnFireMs() <= 0 || KK_GarrisonHold.IsBoundSprint(agent))
-		{
-			KK_GarrisonHold.SetReturnFire(agent, false);
-			return false;
-		}
-
-		bool shooting = CanReturnFire(agent);
-		if (shooting && KK_GarrisonHold.BarrelWantsMove(agent))
-			shooting = false;
-
-		KK_GarrisonHold.SetReturnFire(agent, shooting);
-		if (!shooting)
-			return false;
-
-		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
-		if (soldier && soldier.m_UtilityComponent)
-			KK_GarrisonHold.ApplyMoveFire(soldier.m_UtilityComponent);
-
-		return true;
 	}
 
 	protected void ClearHoldFight(notnull KK_AttackPair pair)
@@ -2313,6 +2109,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 	// He is inside the finish distance and the attack has a target.
 	// The push lets him go, and the attack takes the fight from here.
+	// The engage look is left in place. This handoff only gives up the move.
 	protected void YieldSoldier(AIAgent agent)
 	{
 		if (!agent)
@@ -2337,7 +2134,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 		ApplyWeaponForSpeed(agent, EMovementType.IDLE);
 		SetCrouch(agent, false);
-		CancelLook(agent);
+		if (!KK_GarrisonHold.PerceivedFireActive(agent))
+			CancelLook(agent);
 	}
 
 	protected void WalkSoldierBack(
@@ -2377,7 +2175,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 	// A man who has reached the point leaves the push on his own. The men
 	// still short of it keep bounding. Once the attack has a target he is
-	// handed over. Until then he walks to cover beside the point.
+	// handed over. Until then he walks to cover beside the point. Attack
+	// engage keeps running in both of those, until the order ends.
 	protected void UpdateArrivals(float now)
 	{
 		bool fight = CoverFightHolds(now);
@@ -2677,8 +2476,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 			m_mCoverAt.Set(agent, now);
 		}
 
-		if (!HoldContactAgent(agent))
-			LookAgentDownLane(agent, axis);
+		LookAgentDownLane(agent, axis);
 	}
 
 	// Each man who reaches the point takes the next cover around it.
@@ -2717,7 +2515,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (!m_mCoverHold.Contains(agent))
 			return false;
 
-		if (CanReturnFire(agent))
+		if (HasLivingTarget(agent) || KK_GarrisonHold.PerceivedFireActive(agent))
 			return false;
 
 		int index = 0;
@@ -2935,23 +2733,6 @@ class KK_AttackActivity : SCR_AIActivityBase
 		return count;
 	}
 
-	protected bool AnyContact()
-	{
-		foreach (KK_AttackPair pair : m_aPairs)
-		{
-			if (!pair)
-				continue;
-
-			foreach (AIAgent agent : pair.m_aAgents)
-			{
-				if (HasLivingTarget(agent))
-					return true;
-			}
-		}
-
-		return false;
-	}
-
 	protected bool HasLivingTarget(AIAgent agent)
 	{
 		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
@@ -2994,6 +2775,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 			KK_GarrisonHold.SetAdvancing(agent, true);
 			KK_GarrisonHold.SetAttackSearch(agent, true);
 			KK_PerceptionBoost.ApplyRecognition(agent, m_mPerceptionFactors);
+			KK_GarrisonHold.PressPerceivedEnemy(agent);
 
 			if (m_mPairOf.Contains(agent))
 				continue;
@@ -3201,10 +2983,6 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (m_bPaceSet && pace == m_eApplied)
 			return;
 
-		EndReturnFire();
-		m_bYielding = false;
-		m_bReturnFired = false;
-		m_fReturnFireSince = 0;
 		m_bPaceSet = true;
 		m_eApplied = pace;
 		m_iRunner = 0;
@@ -3258,14 +3036,6 @@ class KK_AttackActivity : SCR_AIActivityBase
 		return m_AttackWaypoint.GetPause() * 1000;
 	}
 
-	protected float ReturnFireMs()
-	{
-		if (!m_AttackWaypoint)
-			return 2000;
-
-		return m_AttackWaypoint.GetReturnFire() * 1000;
-	}
-
 	protected float LaneSpacing()
 	{
 		if (!m_AttackWaypoint)
@@ -3303,11 +3073,6 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 	protected void ReleaseSoldiers()
 	{
-		EndReturnFire();
-		m_bYielding = false;
-		m_bReturnFired = false;
-		m_fReturnFireSince = 0;
-
 		for (int i = 0; i < m_mPairOf.Count(); i++)
 		{
 			AIAgent agent = m_mPairOf.GetKey(i);

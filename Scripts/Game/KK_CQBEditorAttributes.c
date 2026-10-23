@@ -81,11 +81,13 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 35: return mode.KK_GetAttackStepLength();
 			case 38: return mode.KK_GetAttackPause();
 			case 40: return mode.KK_GetCoverHandoff();
-			case 39: return mode.KK_GetAttackContactDuration();
 			case 36: return mode.KK_GetAttackArrivalRadius();
 			case 37: return mode.KK_GetTakeCoverReturn();
 			case 47: return mode.KK_GetCoverRotate();
 			case 48: return mode.KK_GetCoverRadius();
+			case 50: return mode.KK_GetAttackEngageInitial();
+			case 51: return mode.KK_GetAttackEngageInterval();
+			case 52: return mode.KK_GetAttackEngageRepeat();
 			case 41: return mode.KK_GetRoomCombatRange();
 			case 43: return mode.KK_GetBarrelStuck();
 			case 44: return mode.KK_GetBarrelCool();
@@ -136,11 +138,13 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 35: mode.KK_SetAttackStepLength(value); break;
 			case 38: mode.KK_SetAttackPause(value); break;
 			case 40: mode.KK_SetCoverHandoff(value); break;
-			case 39: mode.KK_SetAttackContactDuration(value); break;
 			case 36: mode.KK_SetAttackArrivalRadius(value); break;
 			case 37: mode.KK_SetTakeCoverReturn(value); break;
 			case 47: mode.KK_SetCoverRotate(value); break;
 			case 48: mode.KK_SetCoverRadius(value); break;
+			case 50: mode.KK_SetAttackEngageInitial(value); break;
+			case 51: mode.KK_SetAttackEngageInterval(value); break;
+			case 52: mode.KK_SetAttackEngageRepeat(value); break;
 			case 41: mode.KK_SetRoomCombatRange(value); break;
 			case 43: mode.KK_SetBarrelStuck(value); break;
 			case 44: mode.KK_SetBarrelCool(value); break;
@@ -212,6 +216,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 24: return mode.KK_GetShotDelaySkill();
 			case 25: return mode.KK_GetSightConditions();
 			case 45: return mode.KK_GetPerformanceLog();
+			case 49: return mode.KK_GetAttackEngage();
 		}
 
 		return mode.KK_GetGarrisonAfterClear();
@@ -244,6 +249,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 24: mode.KK_SetShotDelaySkill(value); break;
 			case 25: mode.KK_SetSightConditions(value); break;
 			case 45: mode.KK_SetPerformanceLog(value); break;
+			case 49: mode.KK_SetAttackEngage(value); break;
 			default: mode.KK_SetGarrisonAfterClear(value); break;
 		}
 	}
@@ -526,7 +532,13 @@ class KK_CQBAttrCoverRotate : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrCoverRadius : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
-class KK_CQBAttrAttackContactDuration : KK_CQBFloatEditorAttribute {}
+class KK_CQBAttrAttackEngage : KK_CQBBoolEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrAttackEngageInitial : KK_CQBFloatEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrAttackEngageInterval : KK_CQBFloatEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrAttackEngageRepeat : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrAttackArrivalRadius : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]

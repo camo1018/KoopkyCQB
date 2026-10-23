@@ -137,8 +137,17 @@ modded class SCR_BaseGameMode
 	[Attribute("2", UIWidgets.EditBox, "Take cover: seconds after one fighter in the moving pair has stopped before the holding pair bounds, if the others have not arrived. Men who are down are not counted. 0 waits until every fighter who can still fight has arrived.", category: "Koopky CQB/Attack")]
 	protected float m_fKK_CoverHandoff;
 
-	[Attribute("2", UIWidgets.EditBox, "Seconds an advance or bound shoots on contact before the normal attack takes the fight. Above 0, a take cover hold uses that shot the whole time the pair is planted. Those seconds time advance and bound only. 0 leaves the fight to the normal attack.", category: "Koopky CQB/Attack")]
-	protected float m_fKK_AttackContactDuration;
+	[Attribute("1", UIWidgets.CheckBox, "Allow AI on attack waypoints to engage more quickly than what vanilla AI allows by skipping enemy confirmation stage when a target is first spotted.", category: "Koopky CQB/Attack")]
+	protected bool m_bKK_AttackEngage;
+
+	[Attribute("2", UIWidgets.EditBox, "Upon first contact with an enemy, engaging unit will stop to engage the target for this many seconds before handing off the movement to base AI.", category: "Koopky CQB/Attack")]
+	protected float m_fKK_AttackEngageInitial;
+
+	[Attribute("6", UIWidgets.EditBox, "Number of seconds that must pass before repeat engagement kicks in.", category: "Koopky CQB/Attack")]
+	protected float m_fKK_AttackEngageInterval;
+
+	[Attribute("2", UIWidgets.EditBox, "Seconds the engaging unit will stop to engage the target before handing off the movement to base AI.", category: "Koopky CQB/Attack")]
+	protected float m_fKK_AttackEngageRepeat;
 
 	[Attribute("8", UIWidgets.EditBox, "Distance to the point that finishes an attack (m)", category: "Koopky CQB/Attack")]
 	protected float m_fKK_AttackArrivalRadius;
@@ -391,7 +400,10 @@ modded class SCR_BaseGameMode
 			KK_ReadFloat(context, "StepLength", m_fKK_AttackStepLength);
 			KK_ReadFloat(context, "Pause", m_fKK_AttackPause);
 			KK_ReadFloat(context, "CoverHandoff", m_fKK_CoverHandoff);
-			KK_ReadFloat(context, "ContactDuration", m_fKK_AttackContactDuration);
+			KK_ReadBool(context, "AttackEngage", m_bKK_AttackEngage);
+			KK_ReadFloat(context, "AttackEngageInitial", m_fKK_AttackEngageInitial);
+			KK_ReadFloat(context, "AttackEngageInterval", m_fKK_AttackEngageInterval);
+			KK_ReadFloat(context, "AttackEngageRepeat", m_fKK_AttackEngageRepeat);
 			KK_ReadFloat(context, "ArrivalRadius", m_fKK_AttackArrivalRadius);
 			KK_ReadFloat(context, "TakeCoverReturn", m_fKK_TakeCoverReturn);
 			KK_ReadFloat(context, "CoverRotate", m_fKK_CoverRotate);
@@ -596,7 +608,10 @@ modded class SCR_BaseGameMode
 		context.WriteValue("StepLength", m_fKK_AttackStepLength);
 		context.WriteValue("Pause", m_fKK_AttackPause);
 		context.WriteValue("CoverHandoff", m_fKK_CoverHandoff);
-		context.WriteValue("ContactDuration", m_fKK_AttackContactDuration);
+		context.WriteValue("AttackEngage", m_bKK_AttackEngage);
+		context.WriteValue("AttackEngageInitial", m_fKK_AttackEngageInitial);
+		context.WriteValue("AttackEngageInterval", m_fKK_AttackEngageInterval);
+		context.WriteValue("AttackEngageRepeat", m_fKK_AttackEngageRepeat);
 		context.WriteValue("ArrivalRadius", m_fKK_AttackArrivalRadius);
 		context.WriteValue("TakeCoverReturn", m_fKK_TakeCoverReturn);
 		context.WriteValue("CoverRotate", m_fKK_CoverRotate);
@@ -766,9 +781,24 @@ modded class SCR_BaseGameMode
 		return Math.Max(m_fKK_CoverHandoff, 0);
 	}
 
-	float KK_GetAttackContactDuration()
+	bool KK_GetAttackEngage()
 	{
-		return Math.Max(m_fKK_AttackContactDuration, 0);
+		return m_bKK_AttackEngage;
+	}
+
+	float KK_GetAttackEngageInitial()
+	{
+		return Math.Max(m_fKK_AttackEngageInitial, 0);
+	}
+
+	float KK_GetAttackEngageInterval()
+	{
+		return Math.Max(m_fKK_AttackEngageInterval, 0);
+	}
+
+	float KK_GetAttackEngageRepeat()
+	{
+		return Math.Max(m_fKK_AttackEngageRepeat, 0);
 	}
 
 	float KK_GetAttackArrivalRadius()
@@ -1077,7 +1107,10 @@ modded class SCR_BaseGameMode
 	void KK_SetAttackStepLength(float value) { m_fKK_AttackStepLength = value; }
 	void KK_SetAttackPause(float value) { m_fKK_AttackPause = value; }
 	void KK_SetCoverHandoff(float value) { m_fKK_CoverHandoff = value; }
-	void KK_SetAttackContactDuration(float value) { m_fKK_AttackContactDuration = value; }
+	void KK_SetAttackEngage(bool value) { m_bKK_AttackEngage = value; }
+	void KK_SetAttackEngageInitial(float value) { m_fKK_AttackEngageInitial = value; }
+	void KK_SetAttackEngageInterval(float value) { m_fKK_AttackEngageInterval = value; }
+	void KK_SetAttackEngageRepeat(float value) { m_fKK_AttackEngageRepeat = value; }
 	void KK_SetAttackArrivalRadius(float value) { m_fKK_AttackArrivalRadius = value; }
 	void KK_SetTakeCoverReturn(float value) { m_fKK_TakeCoverReturn = value; }
 	void KK_SetCoverRotate(float value) { m_fKK_CoverRotate = value; }
