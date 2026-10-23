@@ -101,6 +101,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 	// Close enough to the cover spot to plant. Looser than this and he
 	// stops short of the wall and stands in the open.
 	protected static const float COVER_REACH = 1.25;
+	// Men at the point stand this far apart. Closer than this and the
+	// squad stacks on one corner.
+	protected static const float COVER_SPACING = 6;
 	// After the last target drops, keep the attack in charge this long
 	// so a flicker does not plant him back in the cover.
 	protected static const float FIGHT_CLEAR_MS = 4000;
@@ -2560,9 +2563,10 @@ class KK_AttackActivity : SCR_AIActivityBase
 		m_mCoverHold.Remove(agent);
 	}
 
-	// Spots in order around the point. One direction keeps the sample
-	// closest to something solid, and a second sample of that same
-	// cover is dropped.
+	// Spots in order around the point, far enough apart that the squad
+	// does not stack. One direction keeps the sample closest to something
+	// solid. A second sample of that same cover is dropped, then the
+	// wall is walked so one corner can hold a line of men.
 	protected void EnsurePointCovers()
 	{
 		if (m_bPointCovers)
@@ -2599,15 +2603,76 @@ class KK_AttackActivity : SCR_AIActivityBase
 			m_aPointCovers.Insert(place);
 		}
 
-		if (m_aPointCovers.Count() > 0)
+		ExtendPointCovers();
+		FillOpenCovers(axis, right);
+
+		if (m_aPointCovers.Count() == 0)
+			m_aPointCovers.Insert(OnNavmesh(m_vTarget));
+	}
+
+	// One wall can hold more than one man. Step along it at the same
+	// spacing, and stop when the next step leaves the cover or the radius.
+	protected void ExtendPointCovers()
+	{
+		array<vector> seeds = {};
+		foreach (vector kept : m_aPointCovers)
+			seeds.Insert(kept);
+
+		float limit = CoverRadius();
+
+		foreach (vector seed : seeds)
+		{
+			vector toward;
+			float hit;
+			if (!CoverDirection(seed, toward, hit))
+				continue;
+
+			vector along = Vector(-toward[2], 0, toward[0]);
+
+			for (int side = -1; side <= 1; side += 2)
+			{
+				for (int step = 1; step <= 4; step++)
+				{
+					vector shifted = seed + (along * (COVER_SPACING * step * side));
+					shifted[1] = seed[1];
+					if (FlatDistance(shifted, m_vTarget) > limit)
+						break;
+
+					vector place = OnNavmesh(shifted);
+					if (FlatDistance(place, m_vTarget) > limit)
+						break;
+
+					if (NearPointCover(place))
+						break;
+
+					if (CoverDistanceAny(place) < 0)
+						break;
+
+					m_aPointCovers.Insert(place);
+				}
+			}
+		}
+	}
+
+	// Cover ran out before the squad did. The rest stand on the ring,
+	// still at the same spacing, instead of on a man already in cover.
+	protected void FillOpenCovers(vector axis, vector right)
+	{
+		int wanted = FightingCount();
+		if (m_aPointCovers.Count() >= wanted)
 			return;
+
+		float radius = CoverRadius();
 
 		for (int step = 0; step < 8; step++)
 		{
+			if (m_aPointCovers.Count() >= wanted)
+				return;
+
 			float angle = (Math.PI2 * step) / 8;
 			vector dir = (right * Math.Sin(angle)) + (axis * Math.Cos(angle));
-			vector place = OnNavmesh(m_vTarget + (dir * CoverRadius()));
-			if (FlatDistance(place, m_vTarget) > limit)
+			vector place = OnNavmesh(m_vTarget + (dir * radius));
+			if (FlatDistance(place, m_vTarget) > radius)
 				continue;
 
 			if (NearPointCover(place))
@@ -2615,9 +2680,28 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 			m_aPointCovers.Insert(place);
 		}
+	}
 
-		if (m_aPointCovers.Count() == 0)
-			m_aPointCovers.Insert(OnNavmesh(m_vTarget));
+	protected int FightingCount()
+	{
+		int count = 0;
+
+		foreach (KK_AttackPair pair : m_aPairs)
+		{
+			if (!pair)
+				continue;
+
+			foreach (AIAgent agent : pair.m_aAgents)
+			{
+				if (agent && agent.GetControlledEntity())
+					count++;
+			}
+		}
+
+		if (count < 1)
+			return 1;
+
+		return count;
 	}
 
 	protected bool ReadCover(
@@ -2640,28 +2724,44 @@ class KK_AttackActivity : SCR_AIActivityBase
 	// that do not sit left or right of the push.
 	protected float CoverDistanceAny(vector feet)
 	{
-		float best = -1;
+		vector toward;
+		float hit;
+		if (!CoverDirection(feet, toward, hit))
+			return -1;
+
+		return hit;
+	}
+
+	// Nearest solid thing between an arm's length and a short step.
+	// toward points at that thing.
+	protected bool CoverDirection(vector feet, out vector toward, out float hit)
+	{
+		hit = -1;
+		toward = vector.Zero;
 
 		for (int step = 0; step < 8; step++)
 		{
 			float angle = (Math.PI2 * step) / 8;
 			vector dir = Vector(Math.Sin(angle), 0, Math.Cos(angle));
-			float hit = RayCover(feet, dir);
-			if (hit <= 0.6 || hit >= 3.5)
+			float distance = RayCover(feet, dir);
+			if (distance <= 0.6 || distance >= 3.5)
 				continue;
 
-			if (best < 0 || hit < best)
-				best = hit;
+			if (hit >= 0 && distance >= hit)
+				continue;
+
+			hit = distance;
+			toward = dir;
 		}
 
-		return best;
+		return hit >= 0;
 	}
 
 	protected bool NearPointCover(vector place)
 	{
 		foreach (vector kept : m_aPointCovers)
 		{
-			if (FlatDistance(kept, place) < 2.2)
+			if (FlatDistance(kept, place) < COVER_SPACING)
 				return true;
 		}
 
@@ -2669,7 +2769,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 	}
 
 	// More men than covers. The next man stands along that same cover
-	// instead of on the first man. Stay inside the cover radius.
+	// instead of on the first man. A step the navmesh pulls back onto
+	// the first man is tried the other way, then out on the ring.
 	protected vector SpreadCover(vector spot, int lap)
 	{
 		if (lap <= 0)
@@ -2678,19 +2779,61 @@ class KK_AttackActivity : SCR_AIActivityBase
 		vector flat = spot - m_vTarget;
 		flat[1] = 0;
 		if (flat.Length() < 0.2)
-			return spot;
+			flat = "0 0 1";
+		else
+			flat.Normalize();
 
-		flat.Normalize();
 		vector side = Vector(-flat[2], 0, flat[0]);
 		float limit = CoverRadius();
-		vector shifted = spot + (side * (3 * lap));
-		if (FlatDistance(shifted, m_vTarget) > limit)
-			shifted = spot - (side * (3 * lap));
+		float step = COVER_SPACING * lap;
+
+		vector placed = PlaceSpread(spot, side, step, limit);
+		if (FlatDistance(placed, spot) >= COVER_SPACING * 0.75)
+			return placed;
+
+		placed = PlaceSpread(spot, side * -1, step, limit);
+		if (FlatDistance(placed, spot) >= COVER_SPACING * 0.75)
+			return placed;
+
+		float angle = (Math.PI2 * lap) / 8;
+		vector dir = (side * Math.Sin(angle)) + (flat * Math.Cos(angle));
+		float reach = step + COVER_SPACING;
+		if (reach > limit)
+			reach = limit;
+
+		placed = OnNavmesh(m_vTarget + (dir * reach));
+		placed[1] = spot[1];
+		if (
+			FlatDistance(placed, m_vTarget) <= limit &&
+			FlatDistance(placed, spot) >= COVER_SPACING * 0.75
+		)
+			return placed;
+
+		return spot;
+	}
+
+	protected vector PlaceSpread(vector spot, vector side, float step, float limit)
+	{
+		vector shifted = spot + (side * step);
+		shifted[1] = spot[1];
 
 		if (FlatDistance(shifted, m_vTarget) > limit)
+		{
+			vector fromPoint = shifted - m_vTarget;
+			fromPoint[1] = 0;
+			if (fromPoint.Length() < 0.2)
+				return spot;
+
+			fromPoint.Normalize();
+			shifted = m_vTarget + (fromPoint * limit);
+			shifted[1] = spot[1];
+		}
+
+		vector placed = OnNavmesh(shifted);
+		if (FlatDistance(placed, m_vTarget) > limit)
 			return spot;
 
-		return OnNavmesh(shifted);
+		return placed;
 	}
 
 	protected bool RunnerIsLive()
