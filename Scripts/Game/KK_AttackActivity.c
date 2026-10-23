@@ -121,7 +121,6 @@ class KK_AttackActivity : SCR_AIActivityBase
 	// Below an unidentified-target look (50) and an enemy look (80). Above
 	// a danger glance (20) and the lane scan, so a seen man wins the head
 	// without restarting the look the attack behavior already owns.
-	protected static const float CONTACT_LOOK = 45;
 	protected static const float LANE_LOOK = 4;
 
 	void KK_AttackActivity(
@@ -331,8 +330,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 		}
 
 		MaintainAgent(agent, pair, mover, speed, now);
-		if (!LookAtHostile(agent))
-			KK_GarrisonHold.SnapAimPose(agent.GetControlledEntity(), vector.Zero);
+		KK_GarrisonHold.SnapAimPose(agent.GetControlledEntity(), vector.Zero);
 	}
 
 	protected KK_AttackMover MoverFor(notnull AIAgent agent)
@@ -1447,9 +1445,6 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 		direction.Normalize();
 
-		if (LookAtHostile(agent))
-			return;
-
 		KK_GarrisonHold.SnapAimPose(agent.GetControlledEntity(), vector.Zero);
 		vector eye = agent.GetControlledEntity().GetOrigin();
 		eye = eye + Vector(0, 1.6, 0);
@@ -1463,45 +1458,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 			if (!agent || IsReleased(agent))
 				continue;
 
-			if (!LookAtHostile(agent))
-				KK_GarrisonHold.SnapAimPose(agent.GetControlledEntity(), vector.Zero);
+			KK_GarrisonHold.SnapAimPose(agent.GetControlledEntity(), vector.Zero);
 		}
-	}
-
-	// A man the perception list has already started on, in the front half
-	// of the push. Behind the squad, the danger look still owns the head.
-	// A bound sprint does not turn. Once the gun has a target, the attack
-	// behavior owns the aim.
-	protected bool LookAtHostile(AIAgent agent)
-	{
-		if (!agent || !agent.GetControlledEntity())
-			return false;
-
-		if (KK_GarrisonHold.IsBoundSprint(agent) || HasLivingTarget(agent))
-			return false;
-
-		IEntity enemy = KK_GarrisonHold.VisibleContact(agent);
-		if (!enemy)
-			return false;
-
-		vector axis;
-		vector right;
-		if (BuildAxis(axis, right))
-		{
-			vector flat = enemy.GetOrigin() - agent.GetControlledEntity().GetOrigin();
-			flat[1] = 0;
-			if (flat.Length() > 0.5)
-			{
-				flat.Normalize();
-				if (vector.Dot(flat, axis) < 0)
-					return false;
-			}
-		}
-
-		vector aimPoint = KK_GarrisonHold.ShotAimPoint(agent.GetControlledEntity(), enemy);
-		LookAt(agent, aimPoint, CONTACT_LOOK);
-		KK_GarrisonHold.SnapAimPose(agent.GetControlledEntity(), aimPoint);
-		return true;
 	}
 
 	// The hold leaves his head on the enemy. That look outranks the lane,
@@ -1974,9 +1932,6 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (axis.Length() < 0.01)
 			return;
 
-		if (LookAtHostile(agent))
-			return;
-
 		vector eye = agent.GetControlledEntity().GetOrigin() + Vector(0, 1.6, 0);
 		LookAt(agent, eye + (axis * SCAN_AHEAD), LANE_LOOK);
 	}
@@ -2301,7 +2256,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 				if (HasCombatTarget(agent))
 					return true;
 
-				if (KK_GarrisonHold.VisibleContact(agent.GetControlledEntity()))
+				if (KK_GarrisonHold.PerceivedFireActive(agent))
 					return true;
 			}
 		}
@@ -2887,12 +2842,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (!soldier.m_UtilityComponent.m_CombatComponent)
 			return false;
 
-		IEntity body = agent.GetControlledEntity();
-		// The push stops on a man the sight ray can reach. Waiting for the
-		// combat component's target left him walking past someone in the open.
-		if (body && KK_GarrisonHold.VisibleContact(body))
-			return true;
-
+		// Attack engage owns the shot. A combat-component target the light
+		// check rejected is not a reason to hold the lane look.
 		BaseTarget target =
 			soldier.m_UtilityComponent.m_CombatComponent.GetCurrentTarget();
 		if (!KK_GarrisonHold.IsLivingTarget(target))

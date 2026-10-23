@@ -4946,8 +4946,9 @@ class KK_GarrisonHold
 			return;
 		}
 
-		IEntity enemy = PerceivedEnemy(body);
-		if (!enemy)
+		IEntity enemy;
+		vector aim;
+		if (!PerceivedEnemy(body, enemy, aim))
 		{
 			EndEngageEpisode(body, true);
 			ReleasePerceivedEnemy(body);
@@ -4961,7 +4962,7 @@ class KK_GarrisonHold
 		if (EngageHoldActive(body, now))
 		{
 			SetEngageStop(body, true);
-			HoldEngageShot(body, enemy);
+			HoldEngageShot(body, enemy, aim);
 			return;
 		}
 
@@ -4969,7 +4970,7 @@ class KK_GarrisonHold
 
 		if (!AttackTraveling(body))
 		{
-			HoldEngageShot(body, enemy);
+			HoldEngageShot(body, enemy, aim);
 			return;
 		}
 
@@ -4977,18 +4978,18 @@ class KK_GarrisonHold
 		{
 			BeginEngageHold(body, now, EngageRepeatMs());
 			SetEngageStop(body, true);
-			HoldEngageShot(body, enemy);
+			HoldEngageShot(body, enemy, aim);
 			return;
 		}
 
 		ReleasePerceivedEnemy(body);
 	}
 
-	protected static void HoldEngageShot(IEntity body, IEntity enemy)
+	protected static void HoldEngageShot(IEntity body, IEntity enemy, vector aim)
 	{
 		s_PerceivedFire.Insert(body);
 		CommandWeapon(body, true, true);
-		AimPerceived(body, enemy);
+		AimPerceived(body, enemy, aim);
 	}
 
 	// A new contact after the recent gap stops him for the initial duration.
@@ -5355,11 +5356,16 @@ class KK_GarrisonHold
 		return body && s_PerceivedFire.Contains(body);
 	}
 
-	// The man the normal attack is already on, then the closest identified
-	// enemy, then a detected man. A detected contact must not pull the
-	// rifle off the enemy vanilla is going to fight.
-	protected static IEntity PerceivedEnemy(IEntity body)
+	// The man the normal attack is already on, then a sure contact, then
+	// a suspected one. Sure means seen, exposed, or just detected. A man
+	// in a bush is often none of those and still on the list. That place
+	// is enough to aim and fire. A suspected man does not pull the rifle
+	// off someone already in the open.
+	protected static bool PerceivedEnemy(IEntity body, out IEntity enemy, out vector aim)
 	{
+		enemy = null;
+		aim = vector.Zero;
+
 		PerceptionComponent perception = PerceptionComponent.Cast(
 			body.FindComponent(PerceptionComponent)
 		);
@@ -5367,45 +5373,88 @@ class KK_GarrisonHold
 			body.FindComponent(SCR_AICombatComponent)
 		);
 		if (!perception || !combat)
-			return null;
+			return false;
 
 		float window = Math.Max(0.5, perception.GetUpdateInterval()) + 0.02;
 		BaseTarget selected = combat.GetCurrentTarget();
-		if (selected && ContactCurrent(combat, selected, window))
-		{
-			IEntity chosen = selected.GetTargetEntity();
-			if (chosen && chosen != body && IsTargetable(chosen) && IsHostile(body, chosen))
-				return chosen;
-		}
+		if (TakeContact(body, selected, combat, window, false, false, enemy, aim))
+			return true;
 
-		IEntity identified = ClosestContact(
-			body,
-			perception,
-			combat,
-			ETargetCategory.ENEMY,
-			window
-		);
-		if (identified)
-			return identified;
+		if (ClosestContact(body, perception, combat, ETargetCategory.ENEMY, window, true, true, enemy, aim))
+			return true;
+
+		if (ClosestContact(body, perception, combat, ETargetCategory.DETECTED, window, true, true, enemy, aim))
+			return true;
+
+		if (ClosestContact(body, perception, combat, ETargetCategory.ENEMY, window, false, false, enemy, aim))
+			return true;
+
+		if (ClosestContact(body, perception, combat, ETargetCategory.DETECTED, window, false, false, enemy, aim))
+			return true;
 
 		return ClosestContact(
 			body,
 			perception,
 			combat,
-			ETargetCategory.DETECTED,
-			window
+			ETargetCategory.UNKNOWN,
+			window,
+			false,
+			false,
+			enemy,
+			aim
 		);
 	}
 
-	// Puts the look on that man. The lane look is a lower priority and must
-	// not run while this hold is up, or the rifle leaves him. The body
-	// heading is only written once he has stopped. Writing it on a step
-	// overrides the move and leaves him planted.
-	protected static void AimPerceived(IEntity body, IEntity enemy)
+	protected static bool TakeContact(
+		IEntity body,
+		BaseTarget candidate,
+		SCR_AICombatComponent combat,
+		float window,
+		bool sureOnly,
+		bool knownFactionOnly,
+		out IEntity enemy,
+		out vector aim)
 	{
-		vector point = ShotAimPoint(enemy);
+		enemy = null;
+		aim = vector.Zero;
+		if (!candidate || !ContactCurrent(combat, candidate, window, sureOnly))
+			return false;
+
+		if (!EngageFactionOk(body, candidate, knownFactionOnly))
+			return false;
+
+		// A sure man keeps the old reach. A suspected one stays inside
+		// the attack's own contact distance.
+		if (!sureOnly && !ContactCurrent(combat, candidate, window, true))
+		{
+			float distance = ContactDistance(body, candidate);
+			if (distance < 0 || distance > ATTACK_CONTACT_RANGE)
+				return false;
+		}
+
+		aim = EngageAim(candidate);
+		if (aim == vector.Zero)
+			return false;
+
+		enemy = candidate.GetTargetEntity();
+		if (enemy == body || (enemy && !IsTargetable(enemy)))
+			enemy = null;
+
+		return true;
+	}
+
+	// Puts the look on that man, or on the last place a suspected contact
+	// was put. The lane look is a lower priority and must not run while
+	// this hold is up, or the rifle leaves him. The body heading is only
+	// written once he has stopped. Writing it on a step overrides the move
+	// and leaves him planted.
+	protected static void AimPerceived(IEntity body, IEntity enemy, vector point)
+	{
+		if (point == vector.Zero && enemy)
+			point = ShotAimPoint(enemy);
+
 		if (point == vector.Zero)
-			point = enemy.GetOrigin() + Vector(0, 1.4, 0);
+			return;
 
 		// Skill scatter is always on for this shot. Snap aim error is a
 		// separate switch and does not turn this off.
@@ -5448,60 +5497,157 @@ class KK_GarrisonHold
 		return velocity.Length() > 1.25;
 	}
 
-	protected static IEntity ClosestContact(
+	protected static bool ClosestContact(
 		IEntity body,
 		PerceptionComponent perception,
 		SCR_AICombatComponent combat,
 		ETargetCategory category,
-		float window)
+		float window,
+		bool sureOnly,
+		bool knownFactionOnly,
+		out IEntity enemy,
+		out vector aim)
 	{
+		enemy = null;
+		aim = vector.Zero;
 		s_AttackSeen.Clear();
 		perception.GetTargetsList(s_AttackSeen, category);
 
-		IEntity best = null;
+		BaseTarget best = null;
 		float bestDist = 0;
-		vector origin = body.GetOrigin();
 
 		foreach (BaseTarget candidate : s_AttackSeen)
 		{
-			if (!candidate || !ContactCurrent(combat, candidate, window))
+			IEntity ignored;
+			vector ignoredAim;
+			if (!TakeContact(body, candidate, combat, window, sureOnly, knownFactionOnly, ignored, ignoredAim))
 				continue;
 
-			IEntity enemy = candidate.GetTargetEntity();
-			if (!enemy || enemy == body)
-				continue;
-
-			if (!IsTargetable(enemy) || !IsHostile(body, enemy))
-				continue;
-
-			float distance = vector.Distance(origin, enemy.GetOrigin());
+			float distance = ContactDistance(body, candidate);
 			if (best && distance >= bestDist)
 				continue;
 
-			best = enemy;
+			best = candidate;
 			bestDist = distance;
 		}
 
-		return best;
+		if (!best)
+			return false;
+
+		return TakeContact(body, best, combat, window, sureOnly, knownFactionOnly, enemy, aim);
 	}
 
-	// Same window IsTargetVisible uses. A detected man can be current
-	// on the detection clock before that seen-time check would pass.
+	// Seen, an exposed aim point, or a detection that just landed. With
+	// sureOnly off, a contact perception has not dropped still counts.
+	// A bush does that: nothing is exposed, and the seen timer has failed.
 	protected static bool ContactCurrent(
 		SCR_AICombatComponent combat,
 		BaseTarget candidate,
-		float window)
+		float window,
+		bool sureOnly)
 	{
 		if (!candidate)
 			return false;
 
-		if (combat.IsTargetVisible(candidate))
+		bool sure =
+			combat.IsTargetVisible(candidate) ||
+			candidate.GetExposure() > 0 ||
+			candidate.GetTimeSinceDetected() < window;
+		if (sureOnly)
+			return sure;
+
+		if (sure)
 			return true;
 
-		if (candidate.GetExposure() > 0)
+		if (IsTargetable(candidate.GetTargetEntity()))
 			return true;
 
-		return candidate.GetTimeSinceDetected() < window;
+		return ContactPlace(candidate) != vector.Zero;
+	}
+
+	// A known enemy, or a contact whose side is not resolved yet. A
+	// resolved friendly is not a suspected shot.
+	protected static bool EngageFactionOk(
+		IEntity self,
+		BaseTarget candidate,
+		bool knownFactionOnly)
+	{
+		if (!candidate)
+			return false;
+
+		IEntity other = candidate.GetTargetEntity();
+		if (other)
+		{
+			if (other == self || SharesGroup(self, other) || !IsTargetable(other))
+				return false;
+
+			if (IsHostile(self, other))
+				return true;
+
+			if (knownFactionOnly || SCR_Faction.Cast(FactionOf(other)))
+				return false;
+
+			return true;
+		}
+
+		if (knownFactionOnly)
+			return false;
+
+		Faction perceived = candidate.GetPerceivedFaction();
+		SCR_Faction mine = SCR_Faction.Cast(FactionOf(self));
+		if (!perceived || !mine)
+			return ContactPlace(candidate) != vector.Zero;
+
+		SCR_Faction theirs = SCR_Faction.Cast(perceived);
+		return theirs && mine.IsFactionEnemy(theirs);
+	}
+
+	protected static float ContactDistance(IEntity body, BaseTarget candidate)
+	{
+		if (!body || !candidate)
+			return -1;
+
+		vector place = vector.Zero;
+		IEntity enemy = candidate.GetTargetEntity();
+		if (enemy)
+			place = enemy.GetOrigin();
+		else
+			place = ContactPlace(candidate);
+
+		if (place == vector.Zero)
+			return -1;
+
+		return vector.Distance(body.GetOrigin(), place);
+	}
+
+	// The body when perception still has one, including a man in a bush.
+	// Otherwise the last place it put him.
+	protected static vector EngageAim(BaseTarget candidate)
+	{
+		if (!candidate)
+			return vector.Zero;
+
+		IEntity enemy = candidate.GetTargetEntity();
+		if (enemy && IsTargetable(enemy))
+			return ShotAimPoint(enemy);
+
+		vector place = ContactPlace(candidate);
+		if (place == vector.Zero)
+			return vector.Zero;
+
+		return ShotAimPoint(place);
+	}
+
+	protected static vector ContactPlace(BaseTarget candidate)
+	{
+		if (!candidate)
+			return vector.Zero;
+
+		vector place = candidate.GetLastDetectedPosition();
+		if (place == vector.Zero)
+			place = candidate.GetLastSeenPosition();
+
+		return place;
 	}
 
 	static bool IsAttackSearch(IEntity soldier)
@@ -5713,6 +5859,7 @@ class KK_GarrisonHold
 	// A living enemy this soldier can actually see. Last-seen points and
 	// a hot sector do not count. The plant uses the same sight.
 	// A clear or garrison reads the man the shot tick already chose.
+	// An attack waypoint does not search from here. Attack engage aims.
 	static bool EngagingContact(IEntity soldier)
 	{
 		IEntity body = CharacterBody(soldier);
@@ -5752,7 +5899,7 @@ class KK_GarrisonHold
 				return true;
 		}
 
-		return VisibleContact(body, ATTACK_CONTACT_RANGE) != null;
+		return false;
 	}
 
 	// The shot tick's man, or the selected target, inside CQB range and
@@ -5813,12 +5960,6 @@ class KK_GarrisonHold
 					enemy = selected.GetTargetEntity();
 			}
 		}
-
-		// Attack looks across its own contact range. A clear or garrison
-		// already has its man from the shot tick, and this search is wider
-		// than CQB range.
-		if ((!enemy || !IsTargetable(enemy)) && !OnHouseOrder(body))
-			enemy = VisibleContact(body);
 
 		if (!enemy || !IsTargetable(enemy) || !IsHostile(body, enemy))
 			return false;
@@ -9227,142 +9368,6 @@ class KK_GarrisonHold
 	static bool SeesTarget(IEntity soldier, BaseTarget target)
 	{
 		return CanSeeTarget(CharacterBody(soldier), target);
-	}
-
-	// Nearest living enemy perception has already started on, and this
-	// order can trace. Identified, detected, and unknown all count.
-	// Far contacts stay on the lane look. Attack waypoints use this.
-	// A clear or garrison reads the shot tick instead. The sight ray
-	// steps through a window.
-	static IEntity VisibleContact(IEntity soldier, float maxRange = ATTACK_CONTACT_RANGE)
-	{
-		IEntity body = CharacterBody(soldier);
-		if (!body)
-			return null;
-
-		IEntity nearest = null;
-		float best = maxRange;
-
-		PerceptionComponent perception = PerceptionComponent.Cast(
-			body.FindComponent(PerceptionComponent)
-		);
-		if (perception)
-			nearest = NearestPerceived(body, perception, maxRange, best);
-
-		float search = maxRange;
-		if (nearest)
-			search = best;
-
-		IEntity nearby = NearestNearby(body, search);
-		if (!nearby)
-			return nearest;
-
-		if (!nearest || vector.Distance(body.GetOrigin(), nearby.GetOrigin()) < best)
-			return nearby;
-
-		return nearest;
-	}
-
-	// Closest hostile in range that the sight ray can reach. Perception
-	// never lists him when its own ray stops on a pane.
-	protected static IEntity NearestNearby(IEntity body, float maxRange)
-	{
-		bool attackWatch = IsAttackSearch(body);
-		if (!body || maxRange < 1 || (!OnGlassWatch(body) && !attackWatch))
-			return null;
-
-		if (attackWatch && !OnGlassWatch(body))
-			GatherAttack(body, maxRange);
-		else
-			GatherBodies(body, maxRange);
-		for (int i = s_NearBodies.Count() - 1; i >= 0; i--)
-		{
-			IEntity enemy = s_NearBodies[i];
-			if (!enemy || !IsTargetable(enemy) || !IsHostile(body, enemy))
-				s_NearBodies.Remove(i);
-		}
-
-		for (int n = 0; n < SHOT_CANDIDATES && s_NearBodies.Count() > 0; n++)
-		{
-			int bestIndex = -1;
-			float bestDist = maxRange;
-			for (int i = 0; i < s_NearBodies.Count(); i++)
-			{
-				float distance = vector.Distance(body.GetOrigin(), s_NearBodies[i].GetOrigin());
-				if (distance > bestDist)
-					continue;
-
-				bestDist = distance;
-				bestIndex = i;
-			}
-
-			if (bestIndex < 0)
-				return null;
-
-			IEntity pick = s_NearBodies[bestIndex];
-			s_NearBodies.Remove(bestIndex);
-			if (CanSeeEntity(body, pick))
-				return pick;
-		}
-
-		return null;
-	}
-
-	protected static IEntity NearestPerceived(
-		IEntity body,
-		PerceptionComponent perception,
-		float maxRange,
-		out float best)
-	{
-		IEntity nearest = null;
-		best = maxRange;
-
-		for (int category = 0; category < 3; category++)
-		{
-			ETargetCategory kind = ETargetCategory.ENEMY;
-			bool requireHostile = true;
-			if (category == 1)
-			{
-				kind = ETargetCategory.DETECTED;
-				requireHostile = true;
-			}
-			else if (category == 2)
-			{
-				kind = ETargetCategory.UNKNOWN;
-				requireHostile = true;
-			}
-
-			s_AttackSeen.Clear();
-			perception.GetTargetsList(s_AttackSeen, kind);
-
-			foreach (BaseTarget candidate : s_AttackSeen)
-			{
-				if (!candidate)
-					continue;
-
-				IEntity enemy = candidate.GetTargetEntity();
-				if (!enemy || enemy == body || !IsTargetable(enemy))
-					continue;
-
-				if (requireHostile && !IsHostile(body, enemy))
-					continue;
-
-				float distance = vector.Distance(
-					body.GetOrigin(),
-					enemy.GetOrigin()
-				);
-				if (distance > best)
-					continue;
-
-				if (!CanSeeEntity(body, enemy))
-					continue;
-
-				best = distance;
-				nearest = enemy;
-			}
-		}
-
-		return nearest;
 	}
 
 	protected static bool CanSeeTarget(IEntity body, BaseTarget target)
