@@ -5256,6 +5256,10 @@ class KK_GarrisonHold
 		if (point == vector.Zero)
 			point = enemy.GetOrigin() + Vector(0, 1.4, 0);
 
+		// Skill scatter is always on for this shot. Snap aim error is a
+		// separate switch and does not turn this off.
+		point = point + HeldSnapAimError(body, point, enemy);
+
 		SCR_AIUtilityComponent utility = UtilityOf(body);
 		if (utility && utility.m_LookAction)
 		{
@@ -8048,14 +8052,20 @@ class KK_GarrisonHold
 		WriteAimRotation(aiming, yaw, angles[1]);
 	}
 
-	// Held offset around the aim point. A new man, or the hold running
-	// out, rolls again. The axes match the aim-error node. The size is
-	// the skill angle, so a long shot is not a laser.
+	// Snap aim only. The error switch puts that shot on the point itself.
 	protected static vector SnapAimError(IEntity body, vector point, IEntity enemy)
 	{
 		if (!SnapAimErrorEnabled())
 			return vector.Zero;
 
+		return HeldSnapAimError(body, point, enemy);
+	}
+
+	// Held offset around the aim point. A new man, or the hold running
+	// out, rolls again. The axes match the aim-error node. The size is
+	// the skill angle, so a long shot is not a laser.
+	protected static vector HeldSnapAimError(IEntity body, vector point, IEntity enemy)
+	{
 		float now = WorldTime();
 		bool held =
 			s_SnapError.Contains(body) &&
