@@ -447,6 +447,17 @@ modded class SCR_AICombatComponent
 			return;
 		}
 
+		// Attack engage already aimed. A contact or lost-contact snap here
+		// is a second look at the same priority, and the two restart each other.
+		if (KK_GarrisonHold.AttackEngageOwnsLook(GetOwner()))
+		{
+			vector engageAim;
+			if (KK_GarrisonHold.GetEngageAim(GetOwner(), engageAim))
+				m_SelectedTargetDestinationPos = engageAim;
+
+			return;
+		}
+
 		vector contactAim;
 		if (KK_GarrisonHold.TakeContactLook(GetOwner(), contactAim))
 		{
@@ -866,6 +877,12 @@ class KK_GarrisonHold
 	// Who the engage shot was on last pass. A new man has to beat him.
 	protected static ref map<IEntity, IEntity> s_EngageAim =
 		new map<IEntity, IEntity>();
+	// Where that shot is aimed. The contact stamp and the lane scan read
+	// this and leave the head alone, so they do not restart the turn.
+	protected static ref map<IEntity, vector> s_EngageAimPoint =
+		new map<IEntity, vector>();
+	protected static ref map<IEntity, float> s_EngageAimAt =
+		new map<IEntity, float>();
 	protected static ref array<BaseTarget> s_EngageScan = new array<BaseTarget>();
 	// Feet locked for a forced engage stop. A cover pin is a different set.
 	protected static ref set<IEntity> s_EngageStop = new set<IEntity>();
@@ -873,12 +890,14 @@ class KK_GarrisonHold
 	protected static ref set<IEntity> s_EngageUnarmed = new set<IEntity>();
 	// A shot this attack soldier heard. The shooter can still be unknown
 	// to perception when the bush hides every aim point. The note is how
-	// long he keeps firing at that man.
+	// long he keeps firing at that man. The place is the muzzle, used when
+	// the body itself was not on the event.
 	protected static ref map<IEntity, IEntity> s_HeardShooter =
 		new map<IEntity, IEntity>();
+	protected static ref map<IEntity, vector> s_HeardPlace =
+		new map<IEntity, vector>();
 	protected static ref map<IEntity, float> s_HeardWhen =
 		new map<IEntity, float>();
-	protected static const float HEARD_SHOT_MS = 8000;
 	protected static const float THREAT_CONTACT_S = 8;
 	protected static const float ATTACK_CONTACT_RANGE = 180;
 	// Times the alerted rate. 2.5 alone still leaves a man in the open
@@ -932,6 +951,8 @@ class KK_GarrisonHold
 		new map<IEntity, float>();
 	protected static ref map<IEntity, IEntity> s_SnapErrorEnemy =
 		new map<IEntity, IEntity>();
+	protected static ref map<IEntity, bool> s_SnapErrorUnseen =
+		new map<IEntity, bool>();
 	// Random aim picks chest or head once per man. A new roll each frame
 	// would saw the rifle between the two.
 	protected static ref map<IEntity, IEntity> s_AimPickEnemy =
@@ -979,9 +1000,18 @@ class KK_GarrisonHold
 	// The burst may shoot once he is this close to the man. Waiting for
 	// the heading to match exactly kept the trigger off through the turn.
 	protected static const float RETURN_FIRE_AIM_DEG = 30;
-	// The rifle has to be this close to the point engage asked for. A look
-	// still turning, or another aim, keeps the trigger off.
-	protected static const float ENGAGE_AIM_DEG = 20;
+	// How far the rifle may be from the point before the trigger is allowed.
+	// A close man is a wide cone. It tightens out to the far distance, and
+	// around 25 m it is the old 20 degrees.
+	protected static const float ENGAGE_AIM_NEAR_M = 2;
+	protected static const float ENGAGE_AIM_FAR_M = 40;
+	protected static const float ENGAGE_AIM_NEAR_DEG = 35;
+	protected static const float ENGAGE_AIM_FAR_DEG = 8;
+	// Nothing is exposed, so the point is only a guess. Each burst picks
+	// somewhere in this patch around it, then the next burst picks again.
+	protected static const float ENGAGE_AREA_DEG = 12;
+	protected static const float ENGAGE_AREA_MIN_M = 3;
+	protected static const float ENGAGE_AREA_HOLD_MS = 1600;
 	static const float PATH_LOOK_PRIORITY = 1000;
 	// An enemy already selected when the bound started. The sprint does not
 	// aim at him, and perception then drops him, so the stop had to spot
@@ -1086,6 +1116,11 @@ class KK_GarrisonHold
 		new map<IEntity, float>();
 	protected static ref set<IEntity> s_ToppingOff = new set<IEntity>();
 	protected static ref set<IEntity> s_EmptyReload = new set<IEntity>();
+	// Reload was in progress last check. The frame it ends, the rifle is
+	// already up and the aiming component is still on the reload pose.
+	protected static ref set<IEntity> s_ReloadWasActive = new set<IEntity>();
+	protected static ref map<IEntity, float> s_ReloadReadyAt = new map<IEntity, float>();
+	protected static const float RELOAD_AIM_SETTLE_MS = 2000;
 	protected static ref map<IEntity, float> s_SeenEnemyAt =
 		new map<IEntity, float>();
 	protected static ref map<IEntity, IEntity> s_PressureFrom =
@@ -2361,6 +2396,61 @@ class KK_GarrisonHold
 
 		s_EmptyReload.RemoveItem(body);
 		return false;
+	}
+
+	// The magazine change reports as an item change after IsReloading has
+	// already dropped. The rifle is up. The aim direction is still the
+	// pose from the reload, so the cone check stays false and the trigger
+	// pump clears a shot it just asked for.
+	protected static void NoteReloadPose(IEntity body)
+	{
+		if (!body)
+			return;
+
+		CharacterControllerComponent controller = Controller(body);
+		bool active = (controller && controller.IsReloading()) || IsEmptyReload(body);
+		bool was = s_ReloadWasActive.Contains(body);
+		if (active)
+		{
+			s_ReloadWasActive.Insert(body);
+			return;
+		}
+
+		if (!was)
+			return;
+
+		s_ReloadWasActive.RemoveItem(body);
+		if (!GunIsDry(body))
+			s_ReloadReadyAt.Set(body, WorldTime());
+	}
+
+	protected static bool ReloadAimSettling(IEntity body)
+	{
+		if (!body || !s_ReloadReadyAt.Contains(body))
+			return false;
+
+		if (WorldTime() - s_ReloadReadyAt.Get(body) > RELOAD_AIM_SETTLE_MS)
+		{
+			s_ReloadReadyAt.Remove(body);
+			return false;
+		}
+
+		return WeaponIsRaised(body);
+	}
+
+	// Body heading, used when the aiming component has not left the reload
+	// pose yet. A man behind him does not count.
+	protected static bool FacingAimPoint(IEntity body, vector point)
+	{
+		vector flat = point - body.GetOrigin();
+		flat[1] = 0;
+		float distance = flat.Length();
+		if (distance < 0.05)
+			return true;
+
+		flat.Normalize();
+		float gap = YawDelta(body.GetYawPitchRoll()[0], flat.ToYaw());
+		return Math.AbsFloat(gap) <= EngageAimDegrees(distance);
 	}
 
 	// True while an empty reload this mod started is still finishing.
@@ -4940,6 +5030,7 @@ class KK_GarrisonHold
 		}
 
 		s_EngageUnarmed.RemoveItem(body);
+		NoteReloadPose(body);
 
 		if (IsBoundSprint(body))
 		{
@@ -4960,12 +5051,19 @@ class KK_GarrisonHold
 
 		IEntity enemy;
 		vector aim;
-		if (!PerceivedEnemy(body, enemy, aim))
+		bool perceived = PerceivedEnemy(body, enemy, aim);
+		if (!perceived && !RecentEngageAim(body, aim))
 		{
 			EndEngageEpisode(body, true);
 			ReleasePerceivedEnemy(body);
 			return;
 		}
+
+		if (!perceived && s_EngageAim.Contains(body))
+			enemy = s_EngageAim.Get(body);
+
+		if (perceived)
+			RememberEngageAim(body, aim);
 
 		float now = WorldTime();
 		NoteEngageContact(body, now);
@@ -5001,6 +5099,8 @@ class KK_GarrisonHold
 	{
 		s_PerceivedFire.Insert(body);
 		vector point = AimPerceived(body, enemy, aim);
+		if (point != vector.Zero)
+			s_EngageAimPoint.Set(body, point);
 		// Raise while the rifle is still coming around. The trigger waits
 		// until that aim is actually near the point.
 		CommandWeapon(body, true, EngageAimOnPoint(body, point));
@@ -5177,6 +5277,16 @@ class KK_GarrisonHold
 			return 2000;
 
 		return mode.KK_GetAttackEngageRepeat() * 1000;
+	}
+
+	// How long a heard shot stays a contact. The setting is seconds.
+	protected static float HeardShotMs()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return 8000;
+
+		return mode.KK_GetHeardShot() * 1000;
 	}
 
 	// Long enough that a flicker of the same man is not a new first sighting.
@@ -5356,6 +5466,8 @@ class KK_GarrisonHold
 			return;
 
 		s_PerceivedFire.RemoveItem(body);
+		s_EngageAimPoint.Remove(body);
+		s_EngageAimAt.Remove(body);
 		s_MoveFiring.RemoveItem(body);
 		SetFireWanted(body, false);
 		DropSnapTurn(body);
@@ -5369,6 +5481,58 @@ class KK_GarrisonHold
 	{
 		IEntity body = CharacterBody(soldier);
 		return body && s_PerceivedFire.Contains(body);
+	}
+
+	// Armed attack engage. The route contact look is not used, including
+	// between stops, or it takes the head back as soon as the stop lets go.
+	static bool AttackEngageOwnsLook(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !AttackEngageEnabled() || !IsAttackSearch(body))
+			return false;
+
+		if (IsBoundSprint(body) || !HasGunAmmo(body))
+			return false;
+
+		return true;
+	}
+
+	// The point the engage stop is holding. Empty while he is between stops.
+	static bool GetEngageAim(IEntity soldier, out vector aim)
+	{
+		aim = vector.Zero;
+		IEntity body = CharacterBody(soldier);
+		if (!body || !s_PerceivedFire.Contains(body) || !s_EngageAimPoint.Contains(body))
+			return false;
+
+		aim = s_EngageAimPoint.Get(body);
+		return aim != vector.Zero;
+	}
+
+	// One empty perception pass is not a lost man. Cancelling on that pass
+	// and snapping again on the next one is the head thrash.
+	protected static const float ENGAGE_AIM_GRACE_MS = 400;
+
+	protected static void RememberEngageAim(IEntity body, vector point)
+	{
+		if (!body || point == vector.Zero)
+			return;
+
+		s_EngageAimPoint.Set(body, point);
+		s_EngageAimAt.Set(body, WorldTime());
+	}
+
+	protected static bool RecentEngageAim(IEntity body, out vector aim)
+	{
+		aim = vector.Zero;
+		if (!body || !s_EngageAimPoint.Contains(body) || !s_EngageAimAt.Contains(body))
+			return false;
+
+		if (WorldTime() - s_EngageAimAt.Get(body) > ENGAGE_AIM_GRACE_MS)
+			return false;
+
+		aim = s_EngageAimPoint.Get(body);
+		return aim != vector.Zero;
 	}
 
 	// The man the normal attack is already on, then a sure contact, then
@@ -5423,21 +5587,38 @@ class KK_GarrisonHold
 		return ClosestThreatening(body, perception, combat, window, enemy, aim);
 	}
 
-	// The gunshot reaction already decided he is an enemy and in earshot.
-	// Perception may still list him as unknown while the bush hides him.
-	static void NoteAttackGunshot(IEntity listener, IEntity shooter)
+	// Heard a shot. The vanilla reaction drops it when his side has not
+	// been seen yet, which is a man firing from a bush. The real faction
+	// is enough. The muzzle place is kept when the body is not on the event.
+	static void NoteAttackGunshot(IEntity listener, IEntity shooter, vector shotPos)
 	{
 		IEntity body = CharacterBody(listener);
-		if (!body || !IsAttackSearch(body) || !shooter || shooter == body)
+		if (!body || !IsAttackSearch(body))
 			return;
 
-		if (SharesGroup(body, shooter) || !IsTargetable(shooter))
+		shooter = ShotCharacter(shooter);
+		if (shooter == body || (shooter && SharesGroup(body, shooter)))
 			return;
 
-		if (vector.Distance(body.GetOrigin(), shooter.GetOrigin()) > ATTACK_CONTACT_RANGE)
+		if (shooter && KnownFriendly(body, shooter))
 			return;
 
-		s_HeardShooter.Set(body, shooter);
+		vector place = shotPos;
+		if (place == vector.Zero && shooter)
+			place = shooter.GetOrigin();
+
+		if (place == vector.Zero)
+			return;
+
+		if (vector.Distance(body.GetOrigin(), place) > ATTACK_CONTACT_RANGE)
+			return;
+
+		if (shooter)
+			s_HeardShooter.Set(body, shooter);
+		else
+			s_HeardShooter.Remove(body);
+
+		s_HeardPlace.Set(body, place);
 		s_HeardWhen.Set(body, WorldTime());
 	}
 
@@ -5445,13 +5626,14 @@ class KK_GarrisonHold
 	{
 		enemy = null;
 		aim = vector.Zero;
+		HarvestGunshots(body);
+
 		if (!body || !s_HeardWhen.Contains(body))
 			return false;
 
-		if (WorldTime() - s_HeardWhen.Get(body) > HEARD_SHOT_MS)
+		if (WorldTime() - s_HeardWhen.Get(body) > HeardShotMs())
 		{
-			s_HeardShooter.Remove(body);
-			s_HeardWhen.Remove(body);
+			ForgetHeardShot(body);
 			return false;
 		}
 
@@ -5459,18 +5641,103 @@ class KK_GarrisonHold
 		if (s_HeardShooter.Contains(body))
 			shooter = s_HeardShooter.Get(body);
 
-		if (!shooter || !IsTargetable(shooter) || SharesGroup(body, shooter))
+		if (shooter && (!IsTargetable(shooter) || SharesGroup(body, shooter) || KnownFriendly(body, shooter)))
+			shooter = null;
+
+		vector place = vector.Zero;
+		if (s_HeardPlace.Contains(body))
+			place = s_HeardPlace.Get(body);
+
+		if (shooter)
+			place = shooter.GetOrigin();
+
+		if (place == vector.Zero)
 			return false;
 
-		if (vector.Distance(body.GetOrigin(), shooter.GetOrigin()) > ATTACK_CONTACT_RANGE)
+		if (vector.Distance(body.GetOrigin(), place) > ATTACK_CONTACT_RANGE)
 			return false;
 
-		aim = ShotAimPoint(shooter);
+		if (shooter)
+			aim = ShotAimPoint(shooter);
+		else
+			aim = place;
+
 		if (aim == vector.Zero)
 			return false;
 
 		enemy = shooter;
 		return true;
+	}
+
+	// Events still on the agent. The reaction can return before it tells
+	// anyone, and the shot is still sitting here.
+	protected static void HarvestGunshots(IEntity body)
+	{
+		if (!body)
+			return;
+
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (!utility)
+			return;
+
+		AIAgent agent = AIAgent.Cast(utility.GetOwner());
+		if (!agent)
+			return;
+
+		int count = agent.GetDangerEventsCount();
+		for (int i = 0; i < count; i++)
+		{
+			int repeats;
+			AIDangerEvent danger = agent.GetDangerEvent(i, repeats);
+			AIDangerEventWeaponFire shot = AIDangerEventWeaponFire.Cast(danger);
+			if (!shot)
+				continue;
+
+			IEntity shooter = shot.GetInstigatorEntity();
+			if (!shooter)
+				shooter = shot.GetObject();
+
+			NoteAttackGunshot(body, shooter, shot.GetPosition());
+		}
+	}
+
+	protected static void ForgetHeardShot(IEntity body)
+	{
+		if (!body)
+			return;
+
+		s_HeardShooter.Remove(body);
+		s_HeardPlace.Remove(body);
+		s_HeardWhen.Remove(body);
+	}
+
+	// A faction we already know is not an enemy. An unresolved side is
+	// still the man who just fired.
+	protected static bool KnownFriendly(IEntity self, IEntity other)
+	{
+		if (!self || !other)
+			return false;
+
+		if (!SCR_Faction.Cast(FactionOf(other)))
+			return false;
+
+		return !IsHostile(self, other);
+	}
+
+	protected static IEntity ShotCharacter(IEntity shooter)
+	{
+		IEntity current = shooter;
+		int depth;
+		while (current && depth < 6)
+		{
+			if (IsTargetable(current))
+				return current;
+
+			current = current.GetParent();
+			depth++;
+		}
+
+		return null;
 	}
 
 	// Still unknown, but he is shooting or just was. A quiet unknown
@@ -5579,9 +5846,9 @@ class KK_GarrisonHold
 		if (point == vector.Zero)
 			return vector.Zero;
 
-		// Skill scatter is always on for this shot. Snap aim error is a
-		// separate switch and does not turn this off.
-		point = point + HeldSnapAimError(body, point, enemy);
+		// Skill scatter is always on for a man he can see. Nothing exposed
+		// is only a place, so the shot is somewhere in that area.
+		point = point + HeldSnapAimError(body, point, enemy, !EngageSees(body, enemy));
 
 		SCR_AIUtilityComponent utility = UtilityOf(body);
 		StopSnapTurn(utility);
@@ -5598,7 +5865,7 @@ class KK_GarrisonHold
 			// The weapon is parented to the facing he has now. The heading
 			// just requested would aim the barrel off to the side.
 			float bodyYaw = body.GetYawPitchRoll()[0];
-			WriteAimAt(controller.GetAimingComponent(), MuzzlePosition(body, 0), point, bodyYaw);
+			WriteAimAt(controller.GetAimingComponent(), AimLineOrigin(body, point), point, bodyYaw);
 		}
 
 		if (AttackTraveling(body) || !LifeStanding(controller))
@@ -5612,6 +5879,32 @@ class KK_GarrisonHold
 		flat.Normalize();
 		SnapFacing(body, controller, flat.ToYaw());
 		return point;
+	}
+
+	// The muzzle sits ahead of the shoulder. A man inside that length is
+	// behind the muzzle, so a line from the muzzle to him points back into
+	// our own body. The rifle is on him, and that line never matches it.
+	protected static vector AimLineOrigin(IEntity body, vector point)
+	{
+		if (!body)
+			return point;
+
+		vector shoulder = body.GetOrigin() + Vector(0, 1.45, 0);
+
+		vector muzzle = MuzzlePosition(body, 0);
+		vector fromShoulder = point - shoulder;
+		vector fromMuzzle = point - muzzle;
+		fromShoulder[1] = 0;
+		fromMuzzle[1] = 0;
+		if (fromShoulder.Length() < 0.2 || fromMuzzle.Length() < 0.2)
+			return shoulder;
+
+		fromShoulder.Normalize();
+		fromMuzzle.Normalize();
+		if (vector.Dot(fromMuzzle, fromShoulder) < 0.5)
+			return shoulder;
+
+		return muzzle;
 	}
 
 	// True when the rifle's own direction is near the point engage wrote.
@@ -5629,18 +5922,59 @@ class KK_GarrisonHold
 		if (!aiming)
 			return false;
 
+		if (ReloadAimSettling(body) && FacingAimPoint(body, point))
+			return true;
+
 		vector dir = aiming.GetAimingDirectionWorld();
 		if (dir.Length() < 0.01)
 			return false;
 
 		dir.Normalize();
-		vector want = point - MuzzlePosition(body, 0);
-		if (want.Length() < 0.05)
+		vector want = point - AimLineOrigin(body, point);
+		float distance = want.Length();
+		if (distance < 0.05)
 			return true;
 
 		want.Normalize();
-		float limit = Math.Cos(ENGAGE_AIM_DEG * Math.DEG2RAD);
+		float limit = Math.Cos(EngageAimDegrees(distance) * Math.DEG2RAD);
 		return vector.Dot(dir, want) >= limit;
+	}
+
+	// Wide at arm's length, tight at the far end. Past the far distance
+	// the cone stays at the tight value.
+	protected static float EngageAimDegrees(float distance)
+	{
+		float span = ENGAGE_AIM_FAR_M - ENGAGE_AIM_NEAR_M;
+		float along = 1;
+		if (span > 0)
+			along = (distance - ENGAGE_AIM_NEAR_M) / span;
+
+		if (along < 0)
+			along = 0;
+		if (along > 1)
+			along = 1;
+
+		return Math.Lerp(ENGAGE_AIM_NEAR_DEG, ENGAGE_AIM_FAR_DEG, along);
+	}
+
+	// An exposed aim point is a visual. A heard shot, or a man the bush
+	// still hides, is not. No body at all is the place the shot came from.
+	protected static bool EngageSees(IEntity body, IEntity enemy)
+	{
+		if (!body || !enemy)
+			return false;
+
+		PerceptionComponent perception = PerceptionComponent.Cast(
+			body.FindComponent(PerceptionComponent)
+		);
+		if (!perception)
+			return false;
+
+		BaseTarget target = perception.FindTargetPerceptionObject(enemy);
+		if (!target)
+			return false;
+
+		return target.GetExposure() > 0;
 	}
 
 	// Above this he is still on a step. The look and the trigger stay on.
@@ -6321,7 +6655,14 @@ class KK_GarrisonHold
 	static bool AttackWeaponStaysUp(IEntity soldier)
 	{
 		IEntity body = CharacterBody(soldier);
-		if (!body || YieldsWeaponForHeal(body) || !IsAdvancing(body) || IsDown(body))
+		if (!body || YieldsWeaponForHeal(body) || IsDown(body))
+			return false;
+
+		// Engage is already on a man. The advancing flag can be off for
+		// that one soldier, and CRX then lowers him because the fire tree
+		// has not produced a shot yet. The look stays on the man.
+		bool engaging = IsEngageStopped(body) || PerceivedFireActive(body);
+		if (!engaging && !IsAdvancing(body))
 			return false;
 
 		// A bound sprint lowers the rifle so he can run. Walk and jog stay up.
@@ -8509,19 +8850,28 @@ class KK_GarrisonHold
 		if (!SnapAimErrorEnabled())
 			return vector.Zero;
 
-		return HeldSnapAimError(body, point, enemy);
+		return HeldSnapAimError(body, point, enemy, false);
 	}
 
 	// Held offset around the aim point. A new man, or the hold running
 	// out, rolls again. The axes match the aim-error node. The size is
-	// the skill angle, so a long shot is not a laser.
-	protected static vector HeldSnapAimError(IEntity body, vector point, IEntity enemy)
+	// the skill angle, so a long shot is not a laser. An unseen place
+	// stays on one spot in the area long enough to shoot, then moves.
+	protected static vector HeldSnapAimError(IEntity body, vector point, IEntity enemy, bool unseen)
 	{
 		float now = WorldTime();
+		float holdMs = SNAP_AIM_ERROR_MS;
+		if (unseen)
+			holdMs = ENGAGE_AREA_HOLD_MS;
+
+		bool sameUnseen =
+			s_SnapErrorUnseen.Contains(body) &&
+			s_SnapErrorUnseen.Get(body) == unseen;
 		bool held =
+			sameUnseen &&
 			s_SnapError.Contains(body) &&
 			s_SnapErrorAt.Contains(body) &&
-			now - s_SnapErrorAt.Get(body) < SNAP_AIM_ERROR_MS &&
+			now - s_SnapErrorAt.Get(body) < holdMs &&
 			(
 				!enemy ||
 				(s_SnapErrorEnemy.Contains(body) && s_SnapErrorEnemy.Get(body) == enemy)
@@ -8529,9 +8879,10 @@ class KK_GarrisonHold
 		if (held)
 			return s_SnapError.Get(body);
 
-		vector offset = ComputeSnapAimError(body, enemy, point);
+		vector offset = ComputeSnapAimError(body, enemy, point, unseen);
 		s_SnapError.Set(body, offset);
 		s_SnapErrorAt.Set(body, now);
+		s_SnapErrorUnseen.Set(body, unseen);
 		if (enemy)
 			s_SnapErrorEnemy.Set(body, enemy);
 		else
@@ -8540,18 +8891,18 @@ class KK_GarrisonHold
 		return offset;
 	}
 
-	protected static vector ComputeSnapAimError(IEntity body, IEntity enemy, vector point)
+	protected static vector ComputeSnapAimError(IEntity body, IEntity enemy, vector point, bool unseen)
 	{
 		if (!KK_PerfLog.On())
-			return ComputeSnapAimErrorRun(body, enemy, point);
+			return ComputeSnapAimErrorRun(body, enemy, point, unseen);
 
 		int started = System.GetTickCount();
-		vector offset = ComputeSnapAimErrorRun(body, enemy, point);
+		vector offset = ComputeSnapAimErrorRun(body, enemy, point, unseen);
 		KK_PerfLog.End("SnapAim.Error", started);
 		return offset;
 	}
 
-	protected static vector ComputeSnapAimErrorRun(IEntity body, IEntity enemy, vector point)
+	protected static vector ComputeSnapAimErrorRun(IEntity body, IEntity enemy, vector point, bool unseen)
 	{
 		ChimeraCharacter character = ChimeraCharacter.Cast(body);
 		vector eye = body.GetOrigin() + Vector(0, 1.6, 0);
@@ -8573,6 +8924,9 @@ class KK_GarrisonHold
 			return vector.Zero;
 		axisY.Normalize();
 
+		if (unseen)
+			return AreaAimOffset(axisX, axisY, distance);
+
 		float span = AimErrorSpan(enemy, point);
 		EAISkill skill = SnapSkill(body);
 		float sigma = SnapScatterSigma(skill, distance, span);
@@ -8584,6 +8938,28 @@ class KK_GarrisonHold
 			(axisX * Math.RandomGaussFloat(sigma, 0)) +
 			(axisY * Math.RandomGaussFloat(sigma, 0));
 		return offset;
+	}
+
+	// A spot in the patch around the guess. Spread flat across the disk,
+	// so the rounds are not grouped on the hidden man.
+	protected static vector AreaAimOffset(vector axisX, vector axisY, float distance)
+	{
+		float radius = distance * Math.Tan(ENGAGE_AREA_DEG * Math.DEG2RAD);
+		if (radius < ENGAGE_AREA_MIN_M)
+			radius = ENGAGE_AREA_MIN_M;
+
+		// The trigger only closes inside the engage cone. A 3 m patch at
+		// arm's length is a wider angle than that cone, so a raised rifle
+		// that is already on him never counts.
+		float fit = distance * Math.Tan(EngageAimDegrees(distance) * 0.5 * Math.DEG2RAD);
+		if (fit < 0.2)
+			fit = 0.2;
+		if (radius > fit)
+			radius = fit;
+
+		float reach = radius * Math.Sqrt(Math.RandomFloat01());
+		float turn = Math.RandomFloat01() * 360 * Math.DEG2RAD;
+		return (axisX * (reach * Math.Cos(turn))) + (axisY * (reach * Math.Sin(turn)));
 	}
 
 	protected static EAISkill SnapSkill(IEntity body)
@@ -10356,7 +10732,13 @@ class KK_GarrisonHold
 	protected static bool TriggerShouldDrop(IEntity body)
 	{
 		CharacterControllerComponent controller = Controller(body);
-		if (!controller || controller.IsDead() || controller.IsChangingItem() || IsDown(body))
+		if (!controller || controller.IsDead() || IsDown(body))
+			return true;
+
+		// A finished engage reload still reports the magazine as an item
+		// change. The rifle is already up. Dropping the trigger here is
+		// the silent gun after the reload.
+		if (controller.IsChangingItem() && !ReloadAimSettling(body))
 			return true;
 
 		return GunIsDry(body) ||
@@ -11330,25 +11712,25 @@ modded class SCR_AIDangerReaction_WeaponFired
 		AIDangerEvent dangerEvent,
 		int dangerEventCount)
 	{
-		bool handled = super.PerformReaction(
+		// Note before the vanilla reaction. It returns without telling
+		// anyone when the shooter has not been seen, so a bush hides the shot.
+		AIDangerEventWeaponFire shot = AIDangerEventWeaponFire.Cast(dangerEvent);
+		if (shot)
+		{
+			IEntity shooter = shot.GetInstigatorEntity();
+			if (!shooter)
+				shooter = shot.GetObject();
+
+			KK_GarrisonHold.NoteAttackGunshot(utility.m_OwnerEntity, shooter, shot.GetPosition());
+			KK_GarrisonHold.NoteAttackGunshot(utility.GetOwner(), shooter, shot.GetPosition());
+		}
+
+		return super.PerformReaction(
 			utility,
 			threatSystem,
 			dangerEvent,
 			dangerEventCount
 		);
-		if (!handled)
-			return false;
-
-		AIDangerEventWeaponFire shot = AIDangerEventWeaponFire.Cast(dangerEvent);
-		if (!shot)
-			return true;
-
-		IEntity shooter = shot.GetInstigatorEntity();
-		if (!shooter)
-			shooter = shot.GetObject();
-
-		KK_GarrisonHold.NoteAttackGunshot(utility.m_OwnerEntity, shooter);
-		return true;
 	}
 }
 
@@ -11607,7 +11989,7 @@ modded class SCR_AILookAction
 	// and leave a restart that already started this look.
 	void KK_Track(vector pos, float priority, float duration)
 	{
-		if (SnapClaimed() || SprintIgnoring() || SprintingToCover() || PathLookBlocks())
+		if (SnapClaimed() || SprintIgnoring() || SprintingToCover() || PathLookBlocks() || EngageLookBlocks())
 			return;
 
 		if (pos == vector.Zero)
@@ -11657,7 +12039,7 @@ modded class SCR_AILookAction
 
 		if (
 			!KK_GarrisonHold.IsPathLookWrite() &&
-			(SprintIgnoring() || SprintingToCover() || PathLookBlocks())
+			(SprintIgnoring() || SprintingToCover() || PathLookBlocks() || EngageLookBlocks())
 		)
 		{
 			return;
@@ -11689,7 +12071,7 @@ modded class SCR_AILookAction
 		if (SnapClaimed())
 			return;
 
-		if (!KK_GarrisonHold.IsPathLookWrite() && PathLookBlocks())
+		if (!KK_GarrisonHold.IsPathLookWrite() && (PathLookBlocks() || EngageLookBlocks()))
 			return;
 
 		if (SprintIgnoring() || SprintingToCover() || BoundSprinting())
@@ -11700,7 +12082,7 @@ modded class SCR_AILookAction
 
 	override void LookAt(IEntity ent, float priority, float duration = 0.8)
 	{
-		if (SnapClaimed() || PathLookBlocks())
+		if (SnapClaimed() || PathLookBlocks() || EngageLookBlocks())
 			return;
 
 		if (SprintIgnoring() || SprintingToCover() || BoundSprinting())
@@ -11711,7 +12093,7 @@ modded class SCR_AILookAction
 
 	override void Cancel()
 	{
-		if (PathLookBlocks())
+		if (PathLookBlocks() || EngageLookBlocks())
 			return;
 
 		super.Cancel();
@@ -11803,6 +12185,17 @@ modded class SCR_AILookAction
 	// A clear or garrison look is already on this head. Anything else,
 	// including a threat look, is dropped. A distant fight leaves the
 	// head to the normal attack.
+	// Attack engage is on a man. Another look, including the lane scan and
+	// a threat glance, would restart the turn he already started.
+	protected bool EngageLookBlocks()
+	{
+		if (!m_Utility)
+			return false;
+
+		return KK_GarrisonHold.PerceivedFireActive(m_Utility.m_OwnerEntity) ||
+			KK_GarrisonHold.PerceivedFireActive(m_Utility.GetOwner());
+	}
+
 	protected bool PathLookBlocks()
 	{
 		if (!m_Utility)
