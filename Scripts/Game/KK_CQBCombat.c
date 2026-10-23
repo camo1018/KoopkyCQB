@@ -869,6 +869,8 @@ class KK_GarrisonHold
 	protected static ref array<BaseTarget> s_EngageScan = new array<BaseTarget>();
 	// Feet locked for a forced engage stop. A cover pin is a different set.
 	protected static ref set<IEntity> s_EngageStop = new set<IEntity>();
+	// No carried gun can be fed. Engage stays off until one can.
+	protected static ref set<IEntity> s_EngageUnarmed = new set<IEntity>();
 	protected static const float ATTACK_CONTACT_RANGE = 180;
 	// Times the alerted rate. 2.5 alone still leaves a man in the open
 	// unrecognized for seconds. This is the attack order's own rate.
@@ -2347,6 +2349,12 @@ class KK_GarrisonHold
 
 		s_EmptyReload.RemoveItem(body);
 		return false;
+	}
+
+	// True while an empty reload this mod started is still finishing.
+	static bool EngageReloadRunning(IEntity soldier)
+	{
+		return IsEmptyReload(CharacterBody(soldier));
 	}
 
 	protected static bool GunIsDry(IEntity body)
@@ -4896,10 +4904,30 @@ class KK_GarrisonHold
 		IEntity body = CharacterBody(soldier);
 		if (!body || !AttackEngageEnabled() || !IsAttackSearch(body))
 		{
+			if (body)
+				s_EngageUnarmed.RemoveItem(body);
+
 			EndEngageEpisode(body, false);
 			ReleasePerceivedEnemy(body);
 			return;
 		}
+
+		// Nothing he is carrying can shoot. Leave him to the base attack,
+		// which can scavenge. A gun with rounds puts engage back.
+		if (!HasGunAmmo(body))
+		{
+			if (!s_EngageUnarmed.Contains(body))
+			{
+				s_EngageUnarmed.Insert(body);
+				EndEngageEpisode(body, false);
+			}
+
+			SetEngageStop(body, false);
+			ReleasePerceivedEnemy(body);
+			return;
+		}
+
+		s_EngageUnarmed.RemoveItem(body);
 
 		if (IsBoundSprint(body))
 		{
@@ -4912,6 +4940,9 @@ class KK_GarrisonHold
 		{
 			SetEngageStop(body, false);
 			ReleasePerceivedEnemy(body);
+			// The base attack keeps this behavior, so its reload never
+			// gets selected. Start the magazine change from here.
+			StartEngageReload(body);
 			return;
 		}
 
@@ -5182,6 +5213,126 @@ class KK_GarrisonHold
 			return true;
 
 		return mode.KK_GetAttackEngage();
+	}
+
+	// An empty gun on this order. The building reload does not run here,
+	// and the attack behavior does not hand the magazine change off.
+	protected static void StartEngageReload(IEntity body)
+	{
+		if (!body || YieldsWeaponForHeal(body) || HoldingThrowable(body))
+			return;
+
+		CharacterControllerComponent controller = Controller(body);
+		if (
+			!controller ||
+			controller.IsDead() ||
+			controller.IsUnconscious() ||
+			controller.IsChangingItem() ||
+			controller.IsMeleeAttack() ||
+			controller.IsUsingItem()
+		)
+		{
+			return;
+		}
+
+		if (controller.IsReloading())
+		{
+			if (GunIsDry(body))
+				s_EmptyReload.Insert(body);
+
+			return;
+		}
+
+		if (IsEmptyReload(body))
+			return;
+
+		float now = WorldTime();
+		if (
+			s_ReloadAt.Contains(body) &&
+			now - s_ReloadAt.Get(body) < RELOAD_RETRY_MS
+		)
+		{
+			return;
+		}
+
+		IEntity spare = FullerMagazine(body);
+		if (!spare)
+		{
+			BaseWeaponComponent other = EngageSwapWeapon(body);
+			if (other)
+				SwitchToWeapon(body, other);
+			else
+				s_ReloadAt.Set(body, now);
+
+			return;
+		}
+
+		BaseMagazineComponent loaded = LoadedMagazine(body);
+		bool forceDetach = loaded && loaded.GetAmmoCount() > 0;
+		SetFireWanted(body, false);
+		s_MoveFiring.RemoveItem(body);
+		if (!controller.ReloadWeaponWith(spare, forceDetach))
+		{
+			s_ReloadAt.Set(body, now);
+			return;
+		}
+
+		s_ReloadAt.Set(body, now);
+		if (GunIsDry(body))
+			s_EmptyReload.Insert(body);
+	}
+
+	// Current gun cannot be fed. Another gun that still has rounds, primary
+	// first, then the fullest of the rest. A throwable is not a swap.
+	protected static BaseWeaponComponent EngageSwapWeapon(IEntity body)
+	{
+		BaseWeaponComponent current = CurrentWeapon(body);
+		BaseWeaponComponent primary = PrimarySlotWeapon(body);
+		if (!primary)
+			primary = PrimaryWeapon(body);
+
+		if (primary && primary != current && AvailableAmmo(body, primary) > 0)
+			return primary;
+
+		BaseWeaponManagerComponent manager = WeaponManager(body);
+		if (!manager)
+			return null;
+
+		array<WeaponSlotComponent> slots = {};
+		manager.GetWeaponsSlots(slots);
+
+		BaseWeaponComponent best;
+		int bestAmmo = 0;
+		foreach (WeaponSlotComponent slot : slots)
+		{
+			if (!slot)
+				continue;
+
+			BaseWeaponComponent weapon = WeaponInSlot(slot);
+			if (!weapon || weapon == current || IsThrowableType(weapon.GetWeaponType()))
+				continue;
+
+			int ammo = AvailableAmmo(body, weapon);
+			if (ammo <= bestAmmo)
+				continue;
+
+			best = weapon;
+			bestAmmo = ammo;
+		}
+
+		return best;
+	}
+
+	// True while the empty-gun swap is still playing, so the attack does
+	// not pull the trigger and restart it.
+	static bool EngageSwapping(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !CannotShoot(body))
+			return false;
+
+		CharacterControllerComponent controller = Controller(body);
+		return controller && controller.IsChangingItem();
 	}
 
 	protected static void ReleasePerceivedEnemy(IEntity body)
@@ -5883,7 +6034,7 @@ class KK_GarrisonHold
 		if (SprintBeforeReload(body) || IsReloadBashing(body))
 			return false;
 
-		if (CannotShoot(body) || IsQuietReload(body))
+		if (CannotShoot(body) || IsQuietReload(body) || !HasGunAmmo(body))
 			return false;
 
 		if (HoldingThrowable(body))
@@ -10418,6 +10569,29 @@ modded class SCR_AIAttackBehavior
 			!KK_GarrisonHold.HasVisibleEnemy(agentEntity)
 		)
 		{
+			return 0;
+		}
+
+		// Out of ammo on an attack order. Leaving the behavior lets the
+		// magazine change this order just started finish.
+		if (
+			(
+				KK_GarrisonHold.IsAttackSearch(character) &&
+				(
+					KK_GarrisonHold.EngageReloadRunning(character) ||
+					KK_GarrisonHold.EngageSwapping(character)
+				)
+			) ||
+			(
+				KK_GarrisonHold.IsAttackSearch(agentEntity) &&
+				(
+					KK_GarrisonHold.EngageReloadRunning(agentEntity) ||
+					KK_GarrisonHold.EngageSwapping(agentEntity)
+				)
+			)
+		)
+		{
+			m_bUseCombatMove = false;
 			return 0;
 		}
 
