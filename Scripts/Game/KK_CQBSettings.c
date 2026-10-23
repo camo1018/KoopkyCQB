@@ -149,6 +149,9 @@ modded class SCR_BaseGameMode
 	[Attribute("2", UIWidgets.EditBox, "Seconds the engaging unit will stop to engage the target before handing off the movement to base AI.", category: "Koopky CQB/Attack")]
 	protected float m_fKK_AttackEngageRepeat;
 
+	[Attribute("8", UIWidgets.EditBox, "Seconds an attack soldier keeps firing at a place he heard a shot and cannot see. Another shot starts the time over. 0 forgets the shot immediately.", category: "Koopky CQB/Attack")]
+	protected float m_fKK_HeardShot;
+
 	[Attribute("8", UIWidgets.EditBox, "Distance to the point that finishes an attack (m)", category: "Koopky CQB/Attack")]
 	protected float m_fKK_AttackArrivalRadius;
 
@@ -404,6 +407,7 @@ modded class SCR_BaseGameMode
 			KK_ReadFloat(context, "AttackEngageInitial", m_fKK_AttackEngageInitial);
 			KK_ReadFloat(context, "AttackEngageInterval", m_fKK_AttackEngageInterval);
 			KK_ReadFloat(context, "AttackEngageRepeat", m_fKK_AttackEngageRepeat);
+			KK_ReadFloat(context, "HeardShot", m_fKK_HeardShot);
 			KK_ReadFloat(context, "ArrivalRadius", m_fKK_AttackArrivalRadius);
 			KK_ReadFloat(context, "TakeCoverReturn", m_fKK_TakeCoverReturn);
 			KK_ReadFloat(context, "CoverRotate", m_fKK_CoverRotate);
@@ -612,6 +616,7 @@ modded class SCR_BaseGameMode
 		context.WriteValue("AttackEngageInitial", m_fKK_AttackEngageInitial);
 		context.WriteValue("AttackEngageInterval", m_fKK_AttackEngageInterval);
 		context.WriteValue("AttackEngageRepeat", m_fKK_AttackEngageRepeat);
+		context.WriteValue("HeardShot", m_fKK_HeardShot);
 		context.WriteValue("ArrivalRadius", m_fKK_AttackArrivalRadius);
 		context.WriteValue("TakeCoverReturn", m_fKK_TakeCoverReturn);
 		context.WriteValue("CoverRotate", m_fKK_CoverRotate);
@@ -799,6 +804,11 @@ modded class SCR_BaseGameMode
 	float KK_GetAttackEngageRepeat()
 	{
 		return Math.Max(m_fKK_AttackEngageRepeat, 0);
+	}
+
+	float KK_GetHeardShot()
+	{
+		return Math.Max(m_fKK_HeardShot, 0);
 	}
 
 	float KK_GetAttackArrivalRadius()
@@ -1111,6 +1121,7 @@ modded class SCR_BaseGameMode
 	void KK_SetAttackEngageInitial(float value) { m_fKK_AttackEngageInitial = value; }
 	void KK_SetAttackEngageInterval(float value) { m_fKK_AttackEngageInterval = value; }
 	void KK_SetAttackEngageRepeat(float value) { m_fKK_AttackEngageRepeat = value; }
+	void KK_SetHeardShot(float value) { m_fKK_HeardShot = value; }
 	void KK_SetAttackArrivalRadius(float value) { m_fKK_AttackArrivalRadius = value; }
 	void KK_SetTakeCoverReturn(float value) { m_fKK_TakeCoverReturn = value; }
 	void KK_SetCoverRotate(float value) { m_fKK_CoverRotate = value; }

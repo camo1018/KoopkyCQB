@@ -88,6 +88,7 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 50: return mode.KK_GetAttackEngageInitial();
 			case 51: return mode.KK_GetAttackEngageInterval();
 			case 52: return mode.KK_GetAttackEngageRepeat();
+			case 53: return mode.KK_GetHeardShot();
 			case 41: return mode.KK_GetRoomCombatRange();
 			case 43: return mode.KK_GetBarrelStuck();
 			case 44: return mode.KK_GetBarrelCool();
@@ -145,6 +146,7 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 50: mode.KK_SetAttackEngageInitial(value); break;
 			case 51: mode.KK_SetAttackEngageInterval(value); break;
 			case 52: mode.KK_SetAttackEngageRepeat(value); break;
+			case 53: mode.KK_SetHeardShot(value); break;
 			case 41: mode.KK_SetRoomCombatRange(value); break;
 			case 43: mode.KK_SetBarrelStuck(value); break;
 			case 44: mode.KK_SetBarrelCool(value); break;
@@ -539,6 +541,8 @@ class KK_CQBAttrAttackEngageInitial : KK_CQBFloatEditorAttribute {}
 class KK_CQBAttrAttackEngageInterval : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrAttackEngageRepeat : KK_CQBFloatEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrHeardShot : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrAttackArrivalRadius : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
