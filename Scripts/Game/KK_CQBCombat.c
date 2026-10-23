@@ -5042,6 +5042,16 @@ class KK_GarrisonHold
 		if (CannotShoot(body))
 		{
 			SetEngageStop(body, false);
+			// The look is dropped for the reload. The stored point has to
+			// keep its clock, or the 400 ms grace ends before the magazine
+			// is in and he has to spot the man again.
+			CharacterControllerComponent reloading = Controller(body);
+			if (
+				(reloading && reloading.IsReloading()) ||
+				IsEmptyReload(body)
+			)
+				HoldEngageAimClock(body);
+
 			ReleasePerceivedEnemy(body);
 			// The base attack keeps this behavior, so its reload never
 			// gets selected. Start the magazine change from here.
@@ -5394,6 +5404,10 @@ class KK_GarrisonHold
 
 		BaseMagazineComponent loaded = LoadedMagazine(body);
 		bool forceDetach = loaded && loaded.GetAmmoCount() > 0;
+		// Sampled before the call. A magazine that is already counted when
+		// ReloadWeaponWith returns would skip the guard, and the next tick
+		// would fire while the animation is still playing.
+		bool dry = GunIsDry(body);
 		SetFireWanted(body, false);
 		s_MoveFiring.RemoveItem(body);
 		if (!controller.ReloadWeaponWith(spare, forceDetach))
@@ -5403,7 +5417,7 @@ class KK_GarrisonHold
 		}
 
 		s_ReloadAt.Set(body, now);
-		if (GunIsDry(body))
+		if (dry)
 			s_EmptyReload.Insert(body);
 	}
 
@@ -5519,6 +5533,20 @@ class KK_GarrisonHold
 			return;
 
 		s_EngageAimPoint.Set(body, point);
+		s_EngageAimAt.Set(body, WorldTime());
+	}
+
+	// The reload cancels the look for several seconds. The grace is only
+	// long enough for one empty perception pass, so the clock is held
+	// while that reload is the reason the look is down.
+	protected static void HoldEngageAimClock(IEntity body)
+	{
+		if (!body || !s_EngageAimPoint.Contains(body))
+			return;
+
+		if (s_EngageAimPoint.Get(body) == vector.Zero)
+			return;
+
 		s_EngageAimAt.Set(body, WorldTime());
 	}
 
