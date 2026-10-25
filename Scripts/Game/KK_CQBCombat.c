@@ -1090,8 +1090,28 @@ class KK_GarrisonHold
 	protected static ref map<IEntity, int> s_TriggerRounds = new map<IEntity, int>();
 	protected static ref map<IEntity, float> s_TriggerRoundAt = new map<IEntity, float>();
 	protected static ref set<IEntity> s_TriggerRearm = new set<IEntity>();
+	// Attack engage used to hold automatic until the contact ended. A rifle
+	// past close range is moved to burst or single shot. A gun that only
+	// has automatic, and a machine gun, lets go after a short burst.
+	protected static ref map<IEntity, int> s_AutoBurstCap = new map<IEntity, int>();
+	protected static ref map<IEntity, int> s_AutoBurstFrom = new map<IEntity, int>();
+	protected static ref map<IEntity, float> s_AutoBurstGap = new map<IEntity, float>();
+	protected static ref map<IEntity, float> s_AutoBurstResume = new map<IEntity, float>();
+	protected static ref map<IEntity, float> s_FireModeTryAt = new map<IEntity, float>();
 	protected static const float TRIGGER_REPULL_MS = 400;
 	protected static const float TRIGGER_RELEASE_MS = 150;
+	// A rifle may stay on automatic inside this. Farther, it uses a burst
+	// if it has one, and single shots past the next band.
+	protected static const float ENGAGE_AUTO_M = 30;
+	protected static const float ENGAGE_BURST_M = 80;
+	protected static const float MG_BURST_NEAR_M = 40;
+	protected static const float MG_BURST_FAR_M = 100;
+	// Teammates domed in the back are the man just ahead. The ray stops here.
+	protected static const float LANE_NEAR_M = 20;
+	protected static ref TraceParam s_LaneTrace;
+	protected static IEntity s_LaneViewer;
+	protected static IEntity s_LaneTarget;
+	protected static bool s_LaneHitFriendly;
 	protected static const float ROOM_SCAN_RADIUS = 35;
 	protected static const int SHOT_CANDIDATES = 8;
 	protected static const float LEAN_OFFSET = 0.4;
@@ -5268,6 +5288,19 @@ class KK_GarrisonHold
 			!LauncherAgainstInfantry(body, enemy)
 		)
 		{
+			if (FriendlyInEngageLane(body, enemy, point))
+			{
+				SetFireWanted(body, false);
+				s_MoveFiring.RemoveItem(body);
+				LogEngage(body, "friendly");
+				return;
+			}
+
+			ApplyEngageDiscipline(body, point);
+			CharacterControllerComponent moving = Controller(body);
+			if (moving && moving.IsChangingFireMode())
+				return;
+
 			PressFire(body);
 			s_MoveFiring.Insert(body);
 			LogEngageShot(body);
@@ -5342,12 +5375,25 @@ class KK_GarrisonHold
 			return;
 		}
 
-		CommandWeapon(body, true, onPoint);
+		// The round has to reach him without a friendly in front of the
+		// muzzle. The rifle still stays on the point while that lane is shut.
+		bool laneClear = point == vector.Zero || !FriendlyInEngageLane(body, enemy, point);
+		bool changing = false;
+		CharacterControllerComponent engageController = Controller(body);
+		if (engageController && engageController.IsChangingFireMode())
+			changing = true;
+
+		if (onPoint && laneClear && !changing)
+			ApplyEngageDiscipline(body, point);
+
+		CommandWeapon(body, true, onPoint && laneClear && !changing);
 		// CommandWeapon can refuse the trigger and still leave the rifle
 		// ready. The aim check is what decides the shot. A dry gun stays
 		// off the trigger, or the reload never leaves the magazine well.
 		bool shoot =
 			onPoint &&
+			laneClear &&
+			!changing &&
 			WeaponIsRaised(body) &&
 			WeaponCanAcceptFire(body) &&
 			!GunIsDry(body) &&
@@ -5360,6 +5406,8 @@ class KK_GarrisonHold
 			s_MoveFiring.Insert(body);
 			LogEngageShot(body);
 		}
+		else if (!laneClear)
+			LogEngage(body, "friendly");
 		else if (onPoint && WeaponIsRaised(body))
 			LogEngage(body, "nofire " + FireDiag(body));
 		else if (onPoint)
@@ -11262,7 +11310,13 @@ class KK_GarrisonHold
 		if (wanted)
 		{
 			s_TriggerHeld.Insert(body);
-			WriteFireWanted(body, true);
+			// The burst already left. Keep him in the pump so the next one
+			// starts, but do not put the button back down early.
+			if (EngageBurstCooling(body))
+				WriteFireWanted(body, false);
+			else
+				WriteFireWanted(body, true);
+
 			EnsureTriggerPump();
 			return;
 		}
@@ -11271,6 +11325,10 @@ class KK_GarrisonHold
 		s_TriggerRounds.Remove(body);
 		s_TriggerRoundAt.Remove(body);
 		s_TriggerRearm.RemoveItem(body);
+		s_AutoBurstCap.Remove(body);
+		s_AutoBurstFrom.Remove(body);
+		s_AutoBurstGap.Remove(body);
+		s_AutoBurstResume.Remove(body);
 		WriteFireWanted(body, false);
 	}
 
@@ -11292,6 +11350,448 @@ class KK_GarrisonHold
 
 		EWeaponFiremodeType mode = weapon.GetCurrentFireModeType();
 		return mode == EWeaponFiremodeType.Semiauto || mode == EWeaponFiremodeType.Burst;
+	}
+
+	// Single shots at long range wait longer between pulls. A room fight
+	// keeps the short gap.
+	protected static float TriggerRepullMs(IEntity body)
+	{
+		if (!body || !IsAttackSearch(body) || !s_EngageAimPoint.Contains(body))
+			return TRIGGER_REPULL_MS;
+
+		float distance = vector.Distance(body.GetOrigin(), s_EngageAimPoint.Get(body));
+		BaseWeaponComponent weapon = CurrentWeapon(body);
+		if (weapon && MachineGun(weapon))
+			return 450;
+
+		if (distance >= ENGAGE_BURST_M)
+			return 800;
+
+		if (distance >= ENGAGE_AUTO_M)
+			return 500;
+
+		return TRIGGER_REPULL_MS;
+	}
+
+	// Puts the selector on a sane mode for this distance, and tells the
+	// pump how many automatic rounds to let out before it lifts the button.
+	protected static void ApplyEngageDiscipline(IEntity body, vector point)
+	{
+		if (!body || point == vector.Zero)
+			return;
+
+		BaseWeaponComponent weapon = CurrentWeapon(body);
+		if (!weapon || IsThrowableType(weapon.GetWeaponType()))
+			return;
+
+		BaseMuzzleComponent muzzle = weapon.GetCurrentMuzzle();
+		if (!muzzle)
+			return;
+
+		float distance = vector.Distance(AimLineOrigin(body, point), point);
+		EWeaponType type = weapon.GetWeaponType();
+		bool belt = MachineGun(weapon);
+		int want = PreferredEngageMode(muzzle, type, belt, distance);
+		if (want >= 0)
+			RequestFireMode(body, muzzle, want);
+
+		EWeaponFiremodeType mode = weapon.GetCurrentFireModeType();
+		NoteEngageBurst(
+			body,
+			EngageAutoCap(type, belt, mode, distance),
+			EngageBurstGap(type, belt, distance)
+		);
+	}
+
+	// Weapon Type on the weapon component. That field is how the prefab
+	// tells the AI what the gun is. A rifle tagged as a rifle stays a rifle.
+	protected static bool MachineGun(BaseWeaponComponent weapon)
+	{
+		if (!weapon)
+			return false;
+
+		EWeaponType type = weapon.GetWeaponType();
+		return type == EWeaponType.WT_MACHINEGUN || type == EWeaponType.WT_AUTOCANNON;
+	}
+
+	protected static int PreferredEngageMode(
+		BaseMuzzleComponent muzzle,
+		EWeaponType type,
+		bool belt,
+		float distance)
+	{
+		if (type == EWeaponType.WT_ROCKETLAUNCHER || type == EWeaponType.WT_GRENADELAUNCHER)
+			return -1;
+
+		// Machine guns only have automatic on most guns. Leave them there
+		// and shorten the trigger hold instead.
+		if (belt || type == EWeaponType.WT_MACHINEGUN || type == EWeaponType.WT_AUTOCANNON)
+		{
+			return FirstMode(
+				muzzle,
+				EWeaponFiremodeType.Auto,
+				EWeaponFiremodeType.Burst,
+				EWeaponFiremodeType.Semiauto
+			);
+		}
+
+		if (type == EWeaponType.WT_SNIPERRIFLE || distance >= ENGAGE_BURST_M)
+		{
+			return FirstMode(
+				muzzle,
+				EWeaponFiremodeType.Semiauto,
+				EWeaponFiremodeType.Burst,
+				EWeaponFiremodeType.Auto
+			);
+		}
+
+		if (distance >= ENGAGE_AUTO_M)
+		{
+			return FirstMode(
+				muzzle,
+				EWeaponFiremodeType.Burst,
+				EWeaponFiremodeType.Auto,
+				EWeaponFiremodeType.Semiauto
+			);
+		}
+
+		return FirstMode(
+			muzzle,
+			EWeaponFiremodeType.Auto,
+			EWeaponFiremodeType.Burst,
+			EWeaponFiremodeType.Semiauto
+		);
+	}
+
+	protected static int FirstMode(
+		BaseMuzzleComponent muzzle,
+		EWeaponFiremodeType first,
+		EWeaponFiremodeType second,
+		EWeaponFiremodeType third)
+	{
+		int index = FireModeOf(muzzle, first);
+		if (index >= 0)
+			return index;
+
+		index = FireModeOf(muzzle, second);
+		if (index >= 0)
+			return index;
+
+		return FireModeOf(muzzle, third);
+	}
+
+	protected static int FireModeOf(BaseMuzzleComponent muzzle, EWeaponFiremodeType want)
+	{
+		if (!muzzle)
+			return -1;
+
+		int count = muzzle.GetFireModesCount();
+		for (int i = 0; i < count; i++)
+		{
+			BaseFireMode mode = muzzle.GetFireMode(i);
+			if (!mode)
+				continue;
+
+			if (mode.GetFiremodeType() == want)
+				return i;
+		}
+
+		return -1;
+	}
+
+	// The selector animation restarts if this is sent again while it plays.
+	protected static void RequestFireMode(IEntity body, BaseMuzzleComponent muzzle, int want)
+	{
+		if (!body || !muzzle || want < 0 || muzzle.GetFireModeIndex() == want)
+			return;
+
+		CharacterControllerComponent controller = Controller(body);
+		if (!controller || controller.IsChangingFireMode())
+			return;
+
+		float now = WorldTime();
+		if (s_FireModeTryAt.Contains(body) && now - s_FireModeTryAt.Get(body) < 700)
+			return;
+
+		s_FireModeTryAt.Set(body, now);
+		controller.SetFireMode(want);
+	}
+
+	// Zero means the pump may hold automatic. A rifle inside close range
+	// uses that. Farther, and every machine gun, gets a round limit.
+	protected static int EngageAutoCap(
+		EWeaponType type,
+		bool belt,
+		EWeaponFiremodeType mode,
+		float distance)
+	{
+		if (mode != EWeaponFiremodeType.Auto)
+			return 0;
+
+		if (type == EWeaponType.WT_ROCKETLAUNCHER || type == EWeaponType.WT_GRENADELAUNCHER)
+			return 1;
+
+		if (type == EWeaponType.WT_SNIPERRIFLE)
+			return 1;
+
+		if (belt || type == EWeaponType.WT_MACHINEGUN || type == EWeaponType.WT_AUTOCANNON)
+		{
+			if (distance < MG_BURST_NEAR_M)
+				return 8;
+
+			if (distance < MG_BURST_FAR_M)
+				return 5;
+
+			return 3;
+		}
+
+		if (distance < ENGAGE_AUTO_M)
+			return 0;
+
+		if (distance < ENGAGE_BURST_M)
+			return 3;
+
+		return 2;
+	}
+
+	protected static float EngageBurstGap(EWeaponType type, bool belt, float distance)
+	{
+		bool mg = belt ||
+			type == EWeaponType.WT_MACHINEGUN ||
+			type == EWeaponType.WT_AUTOCANNON;
+		if (mg)
+		{
+			if (distance < MG_BURST_NEAR_M)
+				return 350;
+
+			if (distance < MG_BURST_FAR_M)
+				return 500;
+
+			return 700;
+		}
+
+		if (distance >= ENGAGE_BURST_M)
+			return 700;
+
+		return 420;
+	}
+
+	protected static void NoteEngageBurst(IEntity body, int cap, float gap)
+	{
+		if (!body)
+			return;
+
+		// Close automatic is a held trigger. A pause left over from a
+		// longer shot would keep cutting it.
+		if (cap <= 0)
+		{
+			s_AutoBurstCap.Remove(body);
+			s_AutoBurstFrom.Remove(body);
+			s_AutoBurstGap.Remove(body);
+			s_AutoBurstResume.Remove(body);
+			return;
+		}
+
+		s_AutoBurstCap.Set(body, cap);
+		s_AutoBurstGap.Set(body, gap);
+		if (!s_AutoBurstFrom.Contains(body) && !s_AutoBurstResume.Contains(body))
+			s_AutoBurstFrom.Set(body, LoadedRounds(CurrentWeapon(body)));
+	}
+
+	protected static bool EngageBurstCooling(IEntity body)
+	{
+		if (!body || !s_AutoBurstResume.Contains(body))
+			return false;
+
+		if (WorldTime() < s_AutoBurstResume.Get(body))
+			return true;
+
+		s_AutoBurstResume.Remove(body);
+		s_AutoBurstFrom.Remove(body);
+		return false;
+	}
+
+	protected static bool EngageBurstSpent(IEntity body)
+	{
+		if (!body || !s_AutoBurstCap.Contains(body))
+			return false;
+
+		int cap = s_AutoBurstCap.Get(body);
+		if (cap <= 0)
+			return false;
+
+		int rounds = LoadedRounds(CurrentWeapon(body));
+		if (!s_AutoBurstFrom.Contains(body))
+		{
+			s_AutoBurstFrom.Set(body, rounds);
+			return false;
+		}
+
+		int from = s_AutoBurstFrom.Get(body);
+		if (rounds > from)
+		{
+			s_AutoBurstFrom.Set(body, rounds);
+			return false;
+		}
+
+		return from - rounds >= cap;
+	}
+
+	protected static void StartEngageBurstCool(IEntity body)
+	{
+		if (!body)
+			return;
+
+		float gap = 420;
+		if (s_AutoBurstGap.Contains(body))
+			gap = s_AutoBurstGap.Get(body);
+
+		s_AutoBurstResume.Set(body, WorldTime() + gap);
+		s_AutoBurstFrom.Remove(body);
+	}
+
+	// One ray down the shot, only through the men standing close in front.
+	// The target himself is not a block. A wall ends the ray.
+	protected static bool FriendlyInEngageLane(IEntity body, IEntity enemy, vector aim)
+	{
+		if (!body || aim == vector.Zero)
+			return false;
+
+		vector from = AimLineOrigin(body, aim);
+		vector span = aim - from;
+		float length = span.Length();
+		if (length < 0.4)
+			return false;
+
+		vector to = aim;
+		if (length > LANE_NEAR_M)
+			to = from + (span * (LANE_NEAR_M / length));
+
+		LaneFraction(body, enemy, from, to);
+		return s_LaneHitFriendly;
+	}
+
+	// Fraction along the segment. A friendly character on that line sets
+	// the lane flag. Glass and brush are stepped through so the man
+	// behind them is still the hit.
+	protected static float LaneFraction(IEntity body, IEntity ignore, vector from, vector aim)
+	{
+		s_LaneHitFriendly = false;
+		BaseWorld world = null;
+		if (GetGame())
+			world = GetGame().GetWorld();
+
+		if (!world && body)
+			world = body.GetWorld();
+
+		if (!world)
+			return 0;
+
+		s_LaneViewer = body;
+		s_LaneTarget = ignore;
+		vector start = from;
+		vector end = aim;
+		float fraction = 1;
+		for (int hop = 0; hop < 8; hop++)
+		{
+			s_LaneTrace = new TraceParam();
+			s_LaneTrace.Flags = TraceFlags.ENTS | TraceFlags.WORLD;
+			s_LaneTrace.Exclude = body;
+			s_LaneTrace.Start = start;
+			s_LaneTrace.End = end;
+			fraction = world.TraceMove(s_LaneTrace, FilterEngageLane);
+			if (s_LaneHitFriendly || fraction >= 1 || !LaneShouldStep())
+				break;
+
+			vector dir = end - start;
+			float length = dir.Length();
+			if (length < 0.05)
+			{
+				fraction = 1;
+				break;
+			}
+
+			dir = dir * (1 / length);
+			vector next = start + (dir * (fraction * length)) + (dir * 0.06);
+			if (vector.Distance(next, end) < 0.1)
+			{
+				fraction = 1;
+				break;
+			}
+
+			start = next;
+		}
+
+		s_LaneViewer = null;
+		s_LaneTarget = null;
+		return fraction;
+	}
+
+	protected static bool LaneShouldStep()
+	{
+		if (!s_LaneTrace)
+			return false;
+
+		if (MaterialIsTransparent(s_LaneTrace.TraceMaterial))
+			return true;
+
+		if (MaterialIsTransparent(s_LaneTrace.ColliderName))
+			return true;
+
+		if (PropsAreTransparent(s_LaneTrace.SurfaceProps))
+			return true;
+
+		if (SurfaceIsTransparent(s_LaneTrace.TraceEnt))
+			return true;
+
+		if (WindowCollider(s_LaneTrace.TraceEnt))
+			return true;
+
+		if (NameIsFoliage(s_LaneTrace.TraceMaterial))
+			return true;
+
+		return EntityIsFoliage(s_LaneTrace.TraceEnt);
+	}
+
+	protected static bool FilterEngageLane(
+		IEntity entity,
+		vector start = "0 0 0",
+		vector dir = "0 0 0")
+	{
+		if (!entity || entity == s_LaneViewer)
+			return false;
+
+		if (SurfaceIsTransparent(entity) || EntityIsFoliage(entity))
+			return false;
+
+		IEntity current = entity;
+		int depth;
+		while (current && depth < 8)
+		{
+			if (current == s_LaneViewer)
+				return false;
+
+			// The man he is shooting ends the lane. Stopping here keeps a
+			// friendly behind that man from cancelling the shot.
+			if (SameCharacter(current, s_LaneTarget))
+				return true;
+
+			if (EntityIsFoliage(current))
+				return false;
+
+			if (ChimeraCharacter.Cast(current))
+			{
+				if (!IsHostile(s_LaneViewer, current))
+					s_LaneHitFriendly = true;
+
+				return true;
+			}
+
+			current = current.GetParent();
+			depth++;
+		}
+
+		return true;
 	}
 
 	protected static void WriteFireWanted(IEntity body, bool wanted)
@@ -11350,6 +11850,17 @@ class KK_GarrisonHold
 				if (IsAttackSearch(body))
 					LogFire(body, "drop");
 				s_TriggerHeld.RemoveItem(body);
+				s_AutoBurstCap.Remove(body);
+				s_AutoBurstFrom.Remove(body);
+				s_AutoBurstGap.Remove(body);
+				s_AutoBurstResume.Remove(body);
+				WriteFireWanted(body, false);
+				continue;
+			}
+
+			CharacterControllerComponent firing = Controller(body);
+			if (firing && firing.IsChangingFireMode())
+			{
 				WriteFireWanted(body, false);
 				continue;
 			}
@@ -11363,10 +11874,24 @@ class KK_GarrisonHold
 				continue;
 			}
 
-			// Full auto keeps the button down. Semi and burst need a new pull
-			// once the last cycle has had time to leave a round.
+			// Full auto keeps the button down. Attack engage caps that hold.
+			// Semi and burst need a new pull once the last cycle has had
+			// time to leave a round.
 			if (!NeedsNewPull(body))
 			{
+				if (EngageBurstCooling(body))
+				{
+					WriteFireWanted(body, false);
+					continue;
+				}
+
+				if (EngageBurstSpent(body))
+				{
+					StartEngageBurstCool(body);
+					WriteFireWanted(body, false);
+					continue;
+				}
+
 				WriteFireWanted(body, true);
 				continue;
 			}
@@ -11399,7 +11924,7 @@ class KK_GarrisonHold
 				continue;
 			}
 
-			if (now - s_TriggerRoundAt.Get(body) >= TRIGGER_REPULL_MS)
+			if (now - s_TriggerRoundAt.Get(body) >= TriggerRepullMs(body))
 			{
 				s_TriggerRearm.Insert(body);
 				s_TriggerRoundAt.Set(body, now);
