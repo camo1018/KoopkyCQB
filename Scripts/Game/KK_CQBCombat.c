@@ -11168,7 +11168,7 @@ class KK_GarrisonHold
 		if (SurfaceIsTransparent(s_SightTrace.TraceEnt))
 			return true;
 
-		return WindowCollider(s_SightTrace.TraceEnt);
+		return WindowCollider(s_SightTrace);
 	}
 
 	protected static bool PropsAreTransparent(SurfaceProperties properties)
@@ -11194,16 +11194,21 @@ class KK_GarrisonHold
 		return false;
 	}
 
-	protected static bool WindowCollider(IEntity entity)
+	// The collider comes from the ray that made the hit. A zone looked up
+	// from some other ray names the wrong surface.
+	protected static bool WindowCollider(TraceParam trace)
 	{
-		IEntity current = entity;
+		if (!trace)
+			return false;
+
+		IEntity current = trace.TraceEnt;
 		int depth;
 		while (current && depth < 4)
 		{
 			HitZoneContainerComponent container = HitZoneContainerComponent.Cast(
 				current.FindComponent(HitZoneContainerComponent)
 			);
-			if (container && ZoneIsWindow(container))
+			if (container && ZoneIsWindow(container, trace))
 				return true;
 
 			current = current.GetParent();
@@ -11213,14 +11218,14 @@ class KK_GarrisonHold
 		return false;
 	}
 
-	protected static bool ZoneIsWindow(notnull HitZoneContainerComponent container)
+	protected static bool ZoneIsWindow(notnull HitZoneContainerComponent container, notnull TraceParam trace)
 	{
 		HitZone zone = null;
-		if (!s_SightTrace.ColliderName.IsEmpty())
-			zone = container.GetHitZone(s_SightTrace.ColliderName);
+		if (!trace.ColliderName.IsEmpty())
+			zone = container.GetHitZone(trace.ColliderName);
 
-		if (!zone && s_SightTrace.ColliderIndex >= 0)
-			zone = container.GetHitZoneByColliderID(s_SightTrace.ColliderIndex);
+		if (!zone && trace.ColliderIndex >= 0)
+			zone = container.GetHitZoneByColliderID(trace.ColliderIndex);
 
 		if (!zone)
 			return false;
@@ -11675,11 +11680,13 @@ class KK_GarrisonHold
 		s_AutoBurstFrom.Remove(body);
 	}
 
-	// One ray down the shot, only through the men standing close in front.
-	// The target himself is not a block. A wall ends the ray.
-	// A man he cannot see is a guess. That ray runs to the aim point.
-	// Brush is stepped through, and the hit that remains decides it.
-	// Open air or a bush still fires. Ground and other solids do not.
+	// One ray down the shot, on the projectile layer. Brush that never
+	// stops a round is not on that layer, so a man behind it is still
+	// the hit. The target himself is not a block. A wall or a pane ends
+	// the ray. A man he cannot see is a guess. A second ray on the same
+	// layer checks cover. One thin shell is stepped past on that ray
+	// only. What remains, short of the aim point, is cover and he does
+	// not fire.
 	protected static bool FriendlyInEngageLane(IEntity body, IEntity enemy, vector aim)
 	{
 		if (!body || aim == vector.Zero)
@@ -11700,7 +11707,10 @@ class KK_GarrisonHold
 		if (s_LaneHitFriendly)
 			return true;
 
-		return unseen && s_LaneHitSolid;
+		if (!unseen)
+			return false;
+
+		return ProjectileBlocks(body, enemy, from, aim);
 	}
 
 	protected static string EngageLaneNote()
@@ -11711,9 +11721,9 @@ class KK_GarrisonHold
 		return "solid";
 	}
 
-	// Fraction along the segment. A friendly character on that line sets
-	// the lane flag. Glass and brush are stepped through so the man
-	// behind them is still the hit.
+	// One projectile ray. A friendly character on that line sets the lane
+	// flag. The layer itself ignores brush. Glass and thin sheet stay
+	// where the ray hits them.
 	protected static float LaneFraction(IEntity body, IEntity ignore, vector from, vector aim)
 	{
 		s_LaneHitFriendly = false;
@@ -11730,55 +11740,154 @@ class KK_GarrisonHold
 
 		s_LaneViewer = body;
 		s_LaneTarget = ignore;
-		vector start = from;
-		vector end = aim;
-		float fraction = 1;
-		for (int hop = 0; hop < 8; hop++)
-		{
-			s_LaneTrace = new TraceParam();
-			s_LaneTrace.Flags = TraceFlags.ENTS | TraceFlags.WORLD;
-			s_LaneTrace.Exclude = body;
-			s_LaneTrace.Start = start;
-			s_LaneTrace.End = end;
-			fraction = world.TraceMove(s_LaneTrace, FilterEngageLane);
-			if (s_LaneHitFriendly || fraction >= 1 || !LaneShouldStep())
-				break;
-
-			vector dir = end - start;
-			float length = dir.Length();
-			if (length < 0.05)
-			{
-				fraction = 1;
-				break;
-			}
-
-			dir = dir * (1 / length);
-			vector next = start + (dir * (fraction * length)) + (dir * 0.06);
-			if (vector.Distance(next, end) < 0.1)
-			{
-				fraction = 1;
-				break;
-			}
-
-			start = next;
-		}
-
-		// Brush and glass have been stepped through. A hit that is still
-		// short of the aim point is whatever was behind them. A bush in
-		// front of a hill leaves the hill, and that does not get a shot.
-		if (fraction < 1 && !s_LaneHitFriendly && !LaneShouldStep() && !LaneHitIsCharacter())
-			s_LaneHitSolid = true;
-
+		s_LaneTrace = new TraceParam();
+		s_LaneTrace.Flags = TraceFlags.ENTS | TraceFlags.WORLD;
+		s_LaneTrace.LayerMask = EPhysicsLayerPresets.Projectile;
+		s_LaneTrace.Exclude = body;
+		s_LaneTrace.Start = from;
+		s_LaneTrace.End = aim;
+		float fraction = world.TraceMove(s_LaneTrace, FilterEngageLane);
 		s_LaneViewer = null;
 		s_LaneTarget = null;
 		return fraction;
 	}
 
-	protected static bool LaneHitIsCharacter()
+	// Projectile layer only. A hit here is something a bullet can strike.
+	// Reaching the man means the round gets there. One thin shell is
+	// stepped past, and the man has to be directly behind it. A second
+	// shell is cover. A pane is cover unless its thickness says otherwise.
+	protected static bool ProjectileBlocks(IEntity body, IEntity ignore, vector from, vector aim)
+	{
+		s_LaneHitSolid = false;
+		BaseWorld world = null;
+		if (GetGame())
+			world = GetGame().GetWorld();
+
+		if (!world && body)
+			world = body.GetWorld();
+
+		if (!world)
+			return false;
+
+		s_LaneViewer = body;
+		s_LaneTarget = ignore;
+		float fraction = TraceProjectile(world, from, aim);
+		if (fraction >= 1 || LaneHitIsTarget())
+		{
+			s_LaneViewer = null;
+			s_LaneTarget = null;
+			return false;
+		}
+
+		// One shell only. The follow-up ray starts just past it. Anything
+		// that ray hits, other than the man, blocks the shot.
+		if (LaneHitPenetrates())
+		{
+			vector dir = aim - from;
+			float length = dir.Length();
+			if (length >= 0.05)
+			{
+				dir = dir * (1 / length);
+				vector next = from + (dir * (fraction * length)) + (dir * 0.06);
+				if (vector.Distance(next, aim) >= 0.1)
+				{
+					fraction = TraceProjectile(world, next, aim);
+					if (fraction >= 1 || LaneHitIsTarget())
+					{
+						s_LaneViewer = null;
+						s_LaneTarget = null;
+						return false;
+					}
+				}
+				else
+				{
+					s_LaneViewer = null;
+					s_LaneTarget = null;
+					return false;
+				}
+			}
+			else
+			{
+				s_LaneViewer = null;
+				s_LaneTarget = null;
+				return false;
+			}
+		}
+
+		s_LaneViewer = null;
+		s_LaneTarget = null;
+		s_LaneHitSolid = true;
+		return true;
+	}
+
+	protected static float TraceProjectile(BaseWorld world, vector start, vector end)
+	{
+		s_LaneTrace = new TraceParam();
+		s_LaneTrace.Flags = TraceFlags.ENTS | TraceFlags.WORLD;
+		s_LaneTrace.LayerMask = EPhysicsLayerPresets.Projectile;
+		s_LaneTrace.Exclude = s_LaneViewer;
+		s_LaneTrace.Start = start;
+		s_LaneTrace.End = end;
+		return world.TraceMove(s_LaneTrace, FilterProjectileBlock);
+	}
+
+	protected static bool LaneHitIsTarget()
+	{
+		if (!s_LaneTrace || !s_LaneTarget)
+			return false;
+
+		IEntity current = s_LaneTrace.TraceEnt;
+		int depth;
+		while (current && depth < 8)
+		{
+			if (SameCharacter(current, s_LaneTarget))
+				return true;
+
+			current = current.GetParent();
+			depth++;
+		}
+
+		return false;
+	}
+
+	protected static bool FilterProjectileBlock(
+		IEntity entity,
+		vector start = "0 0 0",
+		vector dir = "0 0 0")
+	{
+		if (!entity || entity == s_LaneViewer)
+			return entity == null;
+
+		return true;
+	}
+
+	// A thin shell only. Glass and windows are left to the thickness
+	// figure, same as any other surface on this ray.
+	protected static bool LaneHitPenetrates()
 	{
 		if (!s_LaneTrace)
 			return false;
 
+		return HitIsThin();
+	}
+
+	// Authored ballistic thickness only. About 4 mm or less is a shell
+	// the round goes through. No thickness set, or anything thicker,
+	// stays cover. A body is never a shell.
+	protected static bool HitIsThin()
+	{
+		if (LaneHitIsCharacter())
+			return false;
+
+		float thickness = BallisticThickness(s_LaneTrace.SurfaceProps);
+		if (thickness <= 0)
+			return false;
+
+		return (thickness <= 0.004) || (thickness >= 0.5 && thickness <= 4);
+	}
+
+	protected static bool LaneHitIsCharacter()
+	{
 		IEntity current = s_LaneTrace.TraceEnt;
 		int depth;
 		while (current && depth < 8)
@@ -11793,36 +11902,28 @@ class KK_GarrisonHold
 		return false;
 	}
 
-	protected static bool LaneShouldStep()
+	// The larger figure. A material that is allowed to be thick is thick.
+	// Zero means the material left thickness unset, so it stays cover.
+	// Water is never a shell.
+	protected static float BallisticThickness(SurfaceProperties properties)
 	{
-		if (!s_LaneTrace)
-			return false;
+		GameMaterial material = GameMaterial.Cast(properties);
+		if (!material)
+			return 0;
 
-		if (MaterialIsTransparent(s_LaneTrace.TraceMaterial))
-			return true;
+		BallisticInfo info = material.GetBallisticInfo();
+		if (!info)
+			return 0;
 
-		if (MaterialIsTransparent(s_LaneTrace.ColliderName))
-			return true;
+		if (info.IsWaterSurface())
+			return -1;
 
-		if (PropsAreTransparent(s_LaneTrace.SurfaceProps))
-			return true;
+		float thickness = info.GetThickness();
+		float thicknessMax = info.GetThicknessMax();
+		if (thicknessMax > thickness)
+			return thicknessMax;
 
-		if (SurfaceIsTransparent(s_LaneTrace.TraceEnt))
-			return true;
-
-		if (WindowCollider(s_LaneTrace.TraceEnt))
-			return true;
-
-		// A ground material named grass is the hill, not a bush. Only an
-		// actual foliage entity, or that name on some other prop, is cover
-		// the guess may fire through.
-		if (!s_LaneTrace.TraceEnt)
-			return false;
-
-		if (NameIsFoliage(s_LaneTrace.TraceMaterial))
-			return true;
-
-		return EntityIsFoliage(s_LaneTrace.TraceEnt);
+		return thickness;
 	}
 
 	protected static bool FilterEngageLane(
@@ -11833,13 +11934,9 @@ class KK_GarrisonHold
 		if (entity == s_LaneViewer)
 			return false;
 
-		// The landscape has no entity. It still stops the ray. Skipping it
-		// let a guess travel through a hill that sat behind a bush.
+		// The landscape has no entity. It still stops the ray.
 		if (!entity)
 			return true;
-
-		if (SurfaceIsTransparent(entity) || EntityIsFoliage(entity))
-			return false;
 
 		IEntity current = entity;
 		int depth;
@@ -11852,9 +11949,6 @@ class KK_GarrisonHold
 			// friendly behind that man from cancelling the shot.
 			if (SameCharacter(current, s_LaneTarget))
 				return true;
-
-			if (EntityIsFoliage(current))
-				return false;
 
 			if (ChimeraCharacter.Cast(current))
 			{
