@@ -286,8 +286,9 @@ modded class SCR_AICombatComponent
 
 		// A bound sprint is the move. A selected enemy here is what aims
 		// that move, and an aimed move will not sprint. He is remembered
-		// so the stop does not have to recognize him again.
-		if (KK_GarrisonHold.IsBoundSprint(GetOwner()))
+		// so the stop does not have to recognize him again. A live engage
+		// keeps that enemy. The step must not turn him off the man.
+		if (KK_GarrisonHold.IsBoundSprint(GetOwner()) && !KK_GarrisonHold.EngageOwnsTurn(GetOwner()))
 		{
 			KK_GarrisonHold.RememberSprintEnemy(GetOwner(), m_SelectedTarget);
 			KK_ClearTarget();
@@ -1112,6 +1113,9 @@ class KK_GarrisonHold
 	protected static IEntity s_LaneViewer;
 	protected static IEntity s_LaneTarget;
 	protected static bool s_LaneHitFriendly;
+	// The ray reached something that is not brush. A heard shot does not
+	// fire through that.
+	protected static bool s_LaneHitSolid;
 	protected static const float ROOM_SCAN_RADIUS = 35;
 	protected static const int SHOT_CANDIDATES = 8;
 	protected static const float LEAN_OFFSET = 0.4;
@@ -5190,13 +5194,6 @@ class KK_GarrisonHold
 		s_EngageUnarmed.RemoveItem(body);
 		NoteReloadPose(body);
 
-		if (IsBoundSprint(body))
-		{
-			SetEngageStop(body, false);
-			ReleasePerceivedEnemy(body);
-			return;
-		}
-
 		// Hands on a bandage or a grenade report a raised rifle and then
 		// refuse the shot. The rifle has to be the current weapon first.
 		EnsureEngageGun(body);
@@ -5292,7 +5289,7 @@ class KK_GarrisonHold
 			{
 				SetFireWanted(body, false);
 				s_MoveFiring.RemoveItem(body);
-				LogEngage(body, "friendly");
+				LogEngage(body, EngageLaneNote());
 				return;
 			}
 
@@ -5307,8 +5304,10 @@ class KK_GarrisonHold
 			return;
 		}
 
-		LogEngage(body, "moving");
-		ReleasePerceivedEnemy(body);
+		// Still on a step, and the rifle is not on him yet. The look stays
+		// on the man. Cancelling it lets the step turn him away, and the
+		// next pass turns him back.
+		HoldEngageShot(body, enemy, aim);
 	}
 
 	// Rocket, disposable, or RPG muzzle. A vehicle stays on the launcher.
@@ -5407,7 +5406,7 @@ class KK_GarrisonHold
 			LogEngageShot(body);
 		}
 		else if (!laneClear)
-			LogEngage(body, "friendly");
+			LogEngage(body, EngageLaneNote());
 		else if (onPoint && WeaponIsRaised(body))
 			LogEngage(body, "nofire " + FireDiag(body));
 		else if (onPoint)
@@ -5786,6 +5785,17 @@ class KK_GarrisonHold
 		return now >= s_EngageNextStop.Get(body);
 	}
 
+	// A contact is open. Advance steps and bound sprints leave his head
+	// on that man. Movement takes the look again once the contact ends.
+	static bool EngageOwnsTurn(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !AttackEngageEnabled() || !IsAttackSearch(body))
+			return false;
+
+		return s_EngageEpisode.Contains(body) || s_PerceivedFire.Contains(body);
+	}
+
 	// The engage still has this man. Attack healing stays off for that stretch.
 	protected static bool AttackContactOpen(IEntity body)
 	{
@@ -6055,7 +6065,7 @@ class KK_GarrisonHold
 		return controller && controller.IsChangingItem();
 	}
 
-	protected static void ReleasePerceivedEnemy(IEntity body)
+	protected static void ReleasePerceivedEnemy(IEntity body, bool cancelLook = true)
 	{
 		if (!body || !s_PerceivedFire.Contains(body))
 			return;
@@ -6066,6 +6076,11 @@ class KK_GarrisonHold
 		s_MoveFiring.RemoveItem(body);
 		SetFireWanted(body, false);
 		DropSnapTurn(body);
+
+		// A sprint that has earned the lane writes that look itself.
+		// Cancelling here would wipe it on the same pass.
+		if (!cancelLook)
+			return;
 
 		SCR_AIUtilityComponent utility = UtilityOf(body);
 		if (utility && utility.m_LookAction)
@@ -6086,7 +6101,12 @@ class KK_GarrisonHold
 		if (!body || !AttackEngageEnabled() || !IsAttackSearch(body))
 			return false;
 
-		if (IsBoundSprint(body) || !HasGunAmmo(body))
+		if (!HasGunAmmo(body))
+			return false;
+
+		// A bound sprint keeps the head only while engage has no man.
+		// A live contact stays on that man, sprint included.
+		if (IsBoundSprint(body) && !EngageOwnsTurn(body))
 			return false;
 
 		return true;
@@ -6511,7 +6531,7 @@ class KK_GarrisonHold
 			WriteAimAt(controller.GetAimingComponent(), AimLineOrigin(body, point), point, bodyYaw);
 		}
 
-		if (AttackTraveling(body) || !LifeStanding(controller))
+		if ((AttackTraveling(body) && !EngageOwnsTurn(body)) || !LifeStanding(controller))
 			return point;
 
 		vector flat = point - body.GetOrigin();
@@ -6831,10 +6851,12 @@ class KK_GarrisonHold
 		s_BoundSprint.RemoveItem(body);
 		if (wasSprinting)
 			LockSprintMove(body, false);
-		// The lane look outranks a man. Leave it up and the hold cannot
-		// turn onto a target.
-		if (wasSprinting)
+		// A stored sprint look is the next step. Cancelling it while he
+		// still has a man would take the head off that man.
+		if (wasSprinting && !EngageOwnsTurn(body))
 			DropSprintLook(body);
+		else if (wasSprinting)
+			s_SprintLook.Remove(body);
 	}
 
 	// While this is set, that combat move state will not take a request and
@@ -6902,6 +6924,9 @@ class KK_GarrisonHold
 
 	protected static void DropSprintLook(IEntity body)
 	{
+		if (!body || !s_SprintLook.Contains(body))
+			return;
+
 		s_SprintLook.Remove(body);
 
 		SCR_AIUtilityComponent utility = UtilityOf(body);
@@ -11652,6 +11677,9 @@ class KK_GarrisonHold
 
 	// One ray down the shot, only through the men standing close in front.
 	// The target himself is not a block. A wall ends the ray.
+	// A man he cannot see is a guess. That ray runs to the aim point.
+	// Brush is stepped through, and the hit that remains decides it.
+	// Open air or a bush still fires. Ground and other solids do not.
 	protected static bool FriendlyInEngageLane(IEntity body, IEntity enemy, vector aim)
 	{
 		if (!body || aim == vector.Zero)
@@ -11663,12 +11691,24 @@ class KK_GarrisonHold
 		if (length < 0.4)
 			return false;
 
+		bool unseen = !EngageSees(body, enemy);
 		vector to = aim;
-		if (length > LANE_NEAR_M)
+		if (!unseen && length > LANE_NEAR_M)
 			to = from + (span * (LANE_NEAR_M / length));
 
 		LaneFraction(body, enemy, from, to);
-		return s_LaneHitFriendly;
+		if (s_LaneHitFriendly)
+			return true;
+
+		return unseen && s_LaneHitSolid;
+	}
+
+	protected static string EngageLaneNote()
+	{
+		if (s_LaneHitFriendly)
+			return "friendly";
+
+		return "solid";
 	}
 
 	// Fraction along the segment. A friendly character on that line sets
@@ -11677,6 +11717,7 @@ class KK_GarrisonHold
 	protected static float LaneFraction(IEntity body, IEntity ignore, vector from, vector aim)
 	{
 		s_LaneHitFriendly = false;
+		s_LaneHitSolid = false;
 		BaseWorld world = null;
 		if (GetGame())
 			world = GetGame().GetWorld();
@@ -11722,9 +11763,34 @@ class KK_GarrisonHold
 			start = next;
 		}
 
+		// Brush and glass have been stepped through. A hit that is still
+		// short of the aim point is whatever was behind them. A bush in
+		// front of a hill leaves the hill, and that does not get a shot.
+		if (fraction < 1 && !s_LaneHitFriendly && !LaneShouldStep() && !LaneHitIsCharacter())
+			s_LaneHitSolid = true;
+
 		s_LaneViewer = null;
 		s_LaneTarget = null;
 		return fraction;
+	}
+
+	protected static bool LaneHitIsCharacter()
+	{
+		if (!s_LaneTrace)
+			return false;
+
+		IEntity current = s_LaneTrace.TraceEnt;
+		int depth;
+		while (current && depth < 8)
+		{
+			if (ChimeraCharacter.Cast(current))
+				return true;
+
+			current = current.GetParent();
+			depth++;
+		}
+
+		return false;
 	}
 
 	protected static bool LaneShouldStep()
@@ -11747,6 +11813,12 @@ class KK_GarrisonHold
 		if (WindowCollider(s_LaneTrace.TraceEnt))
 			return true;
 
+		// A ground material named grass is the hill, not a bush. Only an
+		// actual foliage entity, or that name on some other prop, is cover
+		// the guess may fire through.
+		if (!s_LaneTrace.TraceEnt)
+			return false;
+
 		if (NameIsFoliage(s_LaneTrace.TraceMaterial))
 			return true;
 
@@ -11758,8 +11830,13 @@ class KK_GarrisonHold
 		vector start = "0 0 0",
 		vector dir = "0 0 0")
 	{
-		if (!entity || entity == s_LaneViewer)
+		if (entity == s_LaneViewer)
 			return false;
+
+		// The landscape has no entity. It still stops the ray. Skipping it
+		// let a guess travel through a hill that sat behind a bush.
+		if (!entity)
+			return true;
 
 		if (SurfaceIsTransparent(entity) || EntityIsFoliage(entity))
 			return false;
@@ -13145,9 +13222,13 @@ modded class SCR_AISetWeaponRaised
 			return ENodeResult.SUCCESS;
 		}
 
-		// A bound sprint cannot keep the rifle up. The raise would cut the run.
-		// Sending the lower again restarts it and cuts the step off.
-		if (KK_GarrisonHold.IsBoundSprint(body) || KK_GarrisonHold.IsBoundSprint(owner))
+		// A bound sprint cannot keep the rifle up, unless engage is on a man.
+		// The raise would cut the run. Sending the lower again restarts it.
+		if (
+			(KK_GarrisonHold.IsBoundSprint(body) || KK_GarrisonHold.IsBoundSprint(owner)) &&
+			!KK_GarrisonHold.EngageOwnsTurn(body) &&
+			!KK_GarrisonHold.EngageOwnsTurn(owner)
+		)
 		{
 			if (body)
 			{

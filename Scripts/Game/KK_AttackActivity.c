@@ -1282,7 +1282,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 		{
 			KK_GarrisonHold.SetBoundSprint(agent, true);
 			KK_GarrisonHold.SetAdvancing(agent, false);
-			SetWeapon(agent, false);
+			if (!KK_GarrisonHold.EngageOwnsTurn(agent))
+				SetWeapon(agent, false);
 			return;
 		}
 
@@ -1478,6 +1479,11 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (!body)
 			return;
 
+		// Engage already has this man. The step look would turn him off
+		// the contact and the next engage pass would turn him back.
+		if (KK_GarrisonHold.EngageOwnsTurn(body))
+			return;
+
 		vector flat = goal - body.GetOrigin();
 		flat[1] = 0;
 		if (flat.Length() < 0.5)
@@ -1525,7 +1531,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 	protected void LookAt(notnull AIAgent agent, vector point, float priority = 4)
 	{
-		if (KK_GarrisonHold.PerceivedFireActive(agent))
+		if (KK_GarrisonHold.PerceivedFireActive(agent) || KK_GarrisonHold.EngageOwnsTurn(agent))
 			return;
 
 		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(agent);
