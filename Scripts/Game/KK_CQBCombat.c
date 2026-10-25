@@ -832,6 +832,10 @@ class KK_GarrisonHold
 	protected static ref map<IEntity, float> s_RaiseSentAt = new map<IEntity, float>();
 	// A lower already asked for. Sending it again restarts the pose.
 	protected static ref map<IEntity, float> s_LowerSentAt = new map<IEntity, float>();
+	// Long enough for a raise to report up. A second call inside this
+	// restarts the animation. Past it, a rifle that is still down never
+	// got the command.
+	protected static const float RAISE_RESEND_MS = 1500;
 	// This order has not seen a living enemy yet. Last-seen points from
 	// the previous clear of this house stay out of the selector.
 	protected static ref set<IEntity> s_FreshOrder = new set<IEntity>();
@@ -961,6 +965,11 @@ class KK_GarrisonHold
 		new map<IEntity, int>();
 	protected static ref map<IEntity, float> s_SnapLogAt =
 		new map<IEntity, float>();
+	protected static ref map<IEntity, float> s_EngageLogAt =
+		new map<IEntity, float>();
+	protected static ref map<IEntity, float> s_FireLogAt = new map<IEntity, float>();
+	protected static ref map<IEntity, float> s_EngageShotLogAt =
+		new map<IEntity, float>();
 	// Keys copied out of the live maps. Reused so a tick does not allocate.
 	protected static ref array<IEntity> s_SnapBodies = new array<IEntity>();
 	protected static ref array<IEntity> s_ShotBodies = new array<IEntity>();
@@ -1076,6 +1085,13 @@ class KK_GarrisonHold
 	protected static ref set<IEntity> s_TriggerHeld = new set<IEntity>();
 	protected static ref array<IEntity> s_TriggerBodies = new array<IEntity>();
 	protected static bool s_bTriggerPumping;
+	// Semi and burst fire one cycle per pull. A held button does not start
+	// the next one. Full auto stays held and is not in these maps.
+	protected static ref map<IEntity, int> s_TriggerRounds = new map<IEntity, int>();
+	protected static ref map<IEntity, float> s_TriggerRoundAt = new map<IEntity, float>();
+	protected static ref set<IEntity> s_TriggerRearm = new set<IEntity>();
+	protected static const float TRIGGER_REPULL_MS = 400;
+	protected static const float TRIGGER_RELEASE_MS = 150;
 	protected static const float ROOM_SCAN_RADIUS = 35;
 	protected static const int SHOT_CANDIDATES = 8;
 	protected static const float LEAN_OFFSET = 0.4;
@@ -1150,9 +1166,6 @@ class KK_GarrisonHold
 		new map<IEntity, int>();
 	protected static const float RELOAD_RETRY_MS = 1500;
 	protected static const float TOPOFF_START_MS = 750;
-	// An empty reload outlasts both of those. IsReloading() drops between
-	// stages, and a second order in that gap plays the animation again.
-	protected static const float EMPTY_RELOAD_MS = 4500;
 	protected static const float RELOAD_NODE_RADIUS = 0.2;
 	protected static const float RELOAD_NODE_THERE = 1.5;
 	protected static const float RELOAD_NODE_ARRIVE = 3;
@@ -2367,32 +2380,30 @@ class KK_GarrisonHold
 		return false;
 	}
 
-	// The building shot keeps the trigger down. That has to stay off until a
-	// dry gun has a magazine again, or the reload never starts. The flag
-	// also has to outlast the animation: IsReloading() is false between
-	// stages, and the gun is still empty then.
+	// IsReloading stays true after the magazine is seated and the rifle is
+	// back up. That tail is not a reload: the count is already in the gun.
+	protected static bool ReloadBlocksFire(IEntity body)
+	{
+		CharacterControllerComponent controller = Controller(body);
+		if (!controller || !controller.IsReloading())
+			return false;
+
+		if (!GunIsDry(body) && WeaponIsRaised(body))
+			return false;
+
+		return true;
+	}
+
+	// The building shot keeps the trigger down while an empty reload is
+	// playing. A raised rifle with rounds in it is done, even if the
+	// controller still says the reload is going.
 	protected static bool IsEmptyReload(IEntity body)
 	{
 		if (!body || !s_EmptyReload.Contains(body))
 			return false;
 
-		CharacterControllerComponent controller = Controller(body);
-		if (controller && controller.IsReloading())
+		if (ReloadBlocksFire(body))
 			return true;
-
-		if (!GunIsDry(body))
-		{
-			s_EmptyReload.RemoveItem(body);
-			return false;
-		}
-
-		if (
-			s_ReloadAt.Contains(body) &&
-			WorldTime() - s_ReloadAt.Get(body) < EMPTY_RELOAD_MS
-		)
-		{
-			return true;
-		}
 
 		s_EmptyReload.RemoveItem(body);
 		return false;
@@ -2407,8 +2418,7 @@ class KK_GarrisonHold
 		if (!body)
 			return;
 
-		CharacterControllerComponent controller = Controller(body);
-		bool active = (controller && controller.IsReloading()) || IsEmptyReload(body);
+		bool active = ReloadBlocksFire(body) || IsEmptyReload(body);
 		bool was = s_ReloadWasActive.Contains(body);
 		if (active)
 		{
@@ -2462,7 +2472,16 @@ class KK_GarrisonHold
 	protected static bool GunIsDry(IEntity body)
 	{
 		BaseMuzzleComponent muzzle = PrimaryMuzzle(body);
-		if (!muzzle || muzzle.GetAmmoCount() > 0)
+		if (!muzzle)
+		{
+			BaseWeaponComponent weapon = CurrentWeapon(body);
+			if (!weapon || IsThrowableType(weapon.GetWeaponType()))
+				return false;
+
+			return LoadedRounds(weapon) <= 0;
+		}
+
+		if (muzzle.GetAmmoCount() > 0)
 			return false;
 
 		BaseMagazineComponent loaded = muzzle.GetMagazine();
@@ -3840,6 +3859,108 @@ class KK_GarrisonHold
 		return muzzles[0];
 	}
 
+	// IsWeaponRaised stays true through low ready. The game's own raise
+	// also clears that, and a fire input does nothing until it is clear.
+	// A full magazine with an empty chamber is the same: the count stays
+	// put while the trigger is held.
+	protected static void MakeWeaponReady(IEntity body)
+	{
+		CharacterControllerComponent controller = Controller(body);
+		if (!controller)
+			return;
+
+		if (controller.IsPartiallyLowered())
+			controller.SetPartialLower(false);
+
+		BaseWeaponComponent weapon = CurrentWeapon(body);
+		if (weapon && weapon.GetCurrentFireModeType() == EWeaponFiremodeType.Safety)
+			controller.SetSafety(false, false);
+
+		if (controller.IsReloading() || controller.IsChangingItem())
+			return;
+
+		if (!weapon)
+			return;
+
+		// The shot uses the current muzzle. A rifle magazine on the first
+		// muzzle does not feed a launcher muzzle that is selected instead.
+		BaseMuzzleComponent muzzle = weapon.GetCurrentMuzzle();
+		array<BaseMuzzleComponent> muzzles = {};
+		weapon.GetMuzzlesList(muzzles);
+		if (
+			muzzle &&
+			muzzle.GetAmmoCount() <= 0 &&
+			muzzles.Count() > 1 &&
+			muzzles[0] &&
+			muzzles[0] != muzzle &&
+			MuzzleHasRound(muzzles[0])
+		)
+		{
+			LogFire(body, "switch-muzzle");
+			controller.SetMuzzle(0);
+		}
+
+		muzzle = weapon.GetCurrentMuzzle();
+		if (!NeedsChamber(muzzle))
+			return;
+
+		float now = WorldTime();
+		if (s_ReloadAt.Contains(body) && now - s_ReloadAt.Get(body) < RELOAD_RETRY_MS)
+			return;
+
+		s_ReloadAt.Set(body, now);
+		LogFire(body, "chamber");
+		controller.ReloadWeapon();
+	}
+
+	// Magazine is in, the muzzle that would fire has no round. Holding the
+	// trigger does not chamber it, and the logged count stays on the magazine.
+	protected static bool MuzzleHasRound(BaseMuzzleComponent muzzle)
+	{
+		if (!muzzle)
+			return false;
+
+		if (muzzle.GetAmmoCount() > 0)
+			return true;
+
+		if (muzzle.IsDisposable())
+			return false;
+
+		BaseMagazineComponent loaded = muzzle.GetMagazine();
+		return loaded && loaded.GetAmmoCount() > 0 && muzzle.IsCurrentBarrelChambered();
+	}
+
+	protected static bool NeedsChamber(BaseMuzzleComponent muzzle)
+	{
+		if (!muzzle || muzzle.IsDisposable() || !muzzle.IsChamberingPossible())
+			return false;
+
+		if (muzzle.GetAmmoCount() > 0 || muzzle.IsCurrentBarrelChambered())
+			return false;
+
+		BaseMagazineComponent loaded = muzzle.GetMagazine();
+		return loaded && loaded.GetAmmoCount() > 0;
+	}
+
+	protected static bool WeaponCanAcceptFire(IEntity body)
+	{
+		CharacterControllerComponent controller = Controller(body);
+		if (!controller || controller.IsPartiallyLowered() || !controller.GetCanFireWeapon())
+			return false;
+
+		BaseWeaponComponent weapon = CurrentWeapon(body);
+		if (!weapon)
+			return false;
+
+		if (weapon.GetCurrentFireModeType() == EWeaponFiremodeType.Safety)
+			return false;
+
+		if (NeedsChamber(weapon.GetCurrentMuzzle()))
+			return false;
+
+		return true;
+	}
+
 	// Only command the weapon when the stance changes. Repeating the same
 	// raise or lower restarts the animation.
 	protected static void CommandWeapon(IEntity body, bool raised, bool fire)
@@ -3889,6 +4010,15 @@ class KK_GarrisonHold
 		bool holdReload = !fire && IsQuietReload(body);
 		if (!holdReload)
 			RequestWeaponStance(body, raised);
+
+		// A lowered rifle does not fire. The trigger has to wait until the
+		// raise reports up, or the request is logged and no round leaves.
+		// Low ready, the safety, and an empty chamber report the same way.
+		if (fire)
+			MakeWeaponReady(body);
+
+		if (fire && (!WeaponIsRaised(body) || !WeaponCanAcceptFire(body)))
+			fire = false;
 
 		bool wasFiring = s_MoveFiring.Contains(body);
 		if (fire)
@@ -4139,7 +4269,12 @@ class KK_GarrisonHold
 		if (!NeedsMedical(body))
 			return false;
 
-		if (!OrderOwnsBehavior(body) && !IsAttackSearch(body))
+		// Attack heals on its own clock. A live engage contact is still the
+		// fight, so the bandage does not start and he does not count as healing.
+		if (IsAttackSearch(body))
+			return !AttackContactOpen(body);
+
+		if (!OrderOwnsBehavior(body))
 			return false;
 
 		if (OnClearOrder(body) && !ClearHealOpen(body))
@@ -5016,8 +5151,11 @@ class KK_GarrisonHold
 
 		// Nothing he is carrying can shoot. Leave him to the base attack,
 		// which can scavenge. A gun with rounds puts engage back.
-		if (!HasGunAmmo(body))
+		// A reload in progress hides the magazine from the ammo check.
+		// That is not an empty vest, and bailing here never logs again.
+		if (!HasGunAmmo(body) && !ReloadBlocksFire(body))
 		{
+			LogEngage(body, "no-ammo");
 			if (!s_EngageUnarmed.Contains(body))
 			{
 				s_EngageUnarmed.Insert(body);
@@ -5039,6 +5177,10 @@ class KK_GarrisonHold
 			return;
 		}
 
+		// Hands on a bandage or a grenade report a raised rifle and then
+		// refuse the shot. The rifle has to be the current weapon first.
+		EnsureEngageGun(body);
+
 		if (CannotShoot(body))
 		{
 			SetEngageStop(body, false);
@@ -5052,6 +5194,15 @@ class KK_GarrisonHold
 			)
 				HoldEngageAimClock(body);
 
+			LogEngage(
+				body,
+				string.Format(
+					"reload rounds=%1 reloading=%2 raised=%3",
+					LoadedRounds(CurrentWeapon(body)),
+					reloading && reloading.IsReloading(),
+					WeaponIsRaised(body)
+				)
+			);
 			ReleasePerceivedEnemy(body);
 			// The base attack keeps this behavior, so its reload never
 			// gets selected. Start the magazine change from here.
@@ -5064,6 +5215,7 @@ class KK_GarrisonHold
 		bool perceived = PerceivedEnemy(body, enemy, aim);
 		if (!perceived && !RecentEngageAim(body, aim))
 		{
+			LogEngage(body, "no-target");
 			EndEngageEpisode(body, true);
 			ReleasePerceivedEnemy(body);
 			return;
@@ -5102,7 +5254,57 @@ class KK_GarrisonHold
 			return;
 		}
 
+		// Already up and already on him. The move is not stopped and the
+		// rifle is not raised for this. A turn still waits for a stop.
+		vector point = aim;
+		if (point == vector.Zero && enemy)
+			point = ShotAimPoint(enemy);
+
+		if (
+			point != vector.Zero &&
+			EngageAimOnPoint(body, point) &&
+			WeaponIsRaised(body) &&
+			WeaponCanAcceptFire(body) &&
+			!LauncherAgainstInfantry(body, enemy)
+		)
+		{
+			PressFire(body);
+			s_MoveFiring.Insert(body);
+			LogEngageShot(body);
+			return;
+		}
+
+		LogEngage(body, "moving");
 		ReleasePerceivedEnemy(body);
+	}
+
+	// Rocket, disposable, or RPG muzzle. A vehicle stays on the launcher.
+	// No body is a person-sized point, so that is not a rocket either.
+	protected static bool LauncherAgainstInfantry(IEntity body, IEntity enemy)
+	{
+		if (enemy && !ChimeraCharacter.Cast(enemy))
+			return false;
+
+		return LauncherInHand(body);
+	}
+
+	protected static bool LauncherInHand(IEntity body)
+	{
+		BaseWeaponComponent weapon = CurrentWeapon(body);
+		if (!weapon)
+			return false;
+
+		if (weapon.GetWeaponType() == EWeaponType.WT_ROCKETLAUNCHER)
+			return true;
+
+		BaseMuzzleComponent muzzle = weapon.GetCurrentMuzzle();
+		if (!muzzle)
+			return false;
+
+		if (muzzle.IsDisposable())
+			return true;
+
+		return muzzle.GetMuzzleType() == EMuzzleType.MT_RPGMuzzle;
 	}
 
 	protected static void HoldEngageShot(IEntity body, IEntity enemy, vector aim)
@@ -5113,7 +5315,302 @@ class KK_GarrisonHold
 			s_EngageAimPoint.Set(body, point);
 		// Raise while the rifle is still coming around. The trigger waits
 		// until that aim is actually near the point.
-		CommandWeapon(body, true, EngageAimOnPoint(body, point));
+		bool onPoint = EngageAimOnPoint(body, point);
+		// A loaded gun is past the empty-magazine bash. Leaving that flag
+		// up clears the trigger on every later shot.
+		if (!GunIsDry(body))
+			EndReloadBash(body);
+
+		// A rocket at a man is not this shot. The rifle comes back in,
+		// and the launcher is not raised while that swap plays.
+		if (LauncherAgainstInfantry(body, enemy))
+		{
+			BaseWeaponComponent rifle = PrimaryWeapon(body);
+			if (!rifle || LauncherInHand(body) && rifle == CurrentWeapon(body))
+				rifle = EngageSwapWeapon(body);
+
+			if (
+				rifle &&
+				rifle != CurrentWeapon(body) &&
+				AvailableAmmo(body, rifle) > 0 &&
+				rifle.GetWeaponType() != EWeaponType.WT_ROCKETLAUNCHER
+			)
+				SwitchToWeapon(body, rifle);
+
+			SetFireWanted(body, false);
+			LogEngage(body, "launcher " + FireDiag(body));
+			return;
+		}
+
+		CommandWeapon(body, true, onPoint);
+		// CommandWeapon can refuse the trigger and still leave the rifle
+		// ready. The aim check is what decides the shot. A dry gun stays
+		// off the trigger, or the reload never leaves the magazine well.
+		bool shoot =
+			onPoint &&
+			WeaponIsRaised(body) &&
+			WeaponCanAcceptFire(body) &&
+			!GunIsDry(body) &&
+			!IsEmptyReload(body) &&
+			!YieldsWeaponForHeal(body) &&
+			!HoldingThrowable(body);
+		if (shoot)
+		{
+			PressFire(body);
+			s_MoveFiring.Insert(body);
+			LogEngageShot(body);
+		}
+		else if (onPoint && WeaponIsRaised(body))
+			LogEngage(body, "nofire " + FireDiag(body));
+		else if (onPoint)
+			LogEngage(body, "raise " + FireDiag(body));
+		else
+			LogEngage(body, EngageAimMiss(body, point));
+	}
+
+	// Nothing in hand, or a grenade. Puts a gun that still has rounds there.
+	// A rocket is left for the infantry check, which will not fire it at a man.
+	protected static void EnsureEngageGun(IEntity body)
+	{
+		if (!body || YieldsWeaponForHeal(body))
+			return;
+
+		BaseWeaponComponent current = CurrentWeapon(body);
+		if (current && !IsThrowableType(current.GetWeaponType()))
+			return;
+
+		BaseWeaponComponent rifle = PrimaryWeapon(body);
+		if (!rifle || rifle.GetWeaponType() == EWeaponType.WT_ROCKETLAUNCHER)
+			rifle = EngageSwapWeapon(body);
+
+		if (
+			!rifle ||
+			rifle == current ||
+			rifle.GetWeaponType() == EWeaponType.WT_ROCKETLAUNCHER ||
+			AvailableAmmo(body, rifle) <= 0
+		)
+			return;
+
+		SwitchToWeapon(body, rifle);
+	}
+
+	// Entity id plus the prefab. GetName() is empty on these characters.
+	protected static string SoldierLabel(IEntity body)
+	{
+		if (!body)
+			return "?";
+
+		string prefab = string.Empty;
+		EntityPrefabData data = body.GetPrefabData();
+		if (data)
+			prefab = string.Format("%1", data.GetPrefabName());
+
+		int cut = -1;
+		for (int i = 0; i < prefab.Length(); i++)
+		{
+			if (prefab[i] == "/")
+				cut = i;
+		}
+
+		if (cut >= 0 && cut < prefab.Length() - 1)
+			prefab = prefab.Substring(cut + 1, prefab.Length() - cut - 1);
+
+		return string.Format("%1 %2", body.GetID(), prefab);
+	}
+
+	// Once a second per soldier. The debug log switch has to be on.
+	protected static void LogEngage(IEntity body, string reason)
+	{
+		if (!body || !SCR_BaseGameMode.KK_LogEnabled())
+			return;
+
+		float now = WorldTime();
+		if (s_EngageLogAt.Contains(body) && now - s_EngageLogAt.Get(body) < 1000)
+			return;
+
+		s_EngageLogAt.Set(body, now);
+		PrintFormat("KK: Engage %1 %2", SoldierLabel(body), reason);
+	}
+
+	// Separate from the other engage lines, so a reload note in the same
+	// second does not hide the shot. Still once a second while he holds it.
+	protected static void LogEngageShot(IEntity body)
+	{
+		if (!body || !SCR_BaseGameMode.KK_LogEnabled())
+			return;
+
+		float now = WorldTime();
+		if (s_EngageShotLogAt.Contains(body) && now - s_EngageShotLogAt.Get(body) < 1000)
+			return;
+
+		s_EngageShotLogAt.Set(body, now);
+		PrintFormat(
+			"KK: Engage %1 shot rounds=%2 %3",
+			SoldierLabel(body),
+			LoadedRounds(CurrentWeapon(body)),
+			FireDiag(body)
+		);
+	}
+
+	// Once a second, separate from the shot line, for a rack, a muzzle
+	// switch, or the trigger being let go.
+	protected static void LogFire(IEntity body, string action)
+	{
+		if (!body || !SCR_BaseGameMode.KK_LogEnabled())
+			return;
+
+		float now = WorldTime();
+		if (s_FireLogAt.Contains(body) && now - s_FireLogAt.Get(body) < 1000)
+			return;
+
+		s_FireLogAt.Set(body, now);
+		PrintFormat("KK: Fire %1 %2 %3", SoldierLabel(body), action, FireDiag(body));
+	}
+
+	// Muzzle that would fire, the magazine behind it, and the controller
+	// gates around a shot. muzzle=-1 means there is no current muzzle.
+	protected static string FireDiag(IEntity body)
+	{
+		CharacterControllerComponent controller = Controller(body);
+		BaseWeaponComponent weapon = CurrentWeapon(body);
+		BaseMuzzleComponent muzzle;
+		int muzzleAmmo = -1;
+		int magAmmo = -1;
+		int chamber = -1;
+		int need = 0;
+		int mode = -1;
+		int wtype = -1;
+		int mtype = -1;
+		int idx = -1;
+		if (weapon)
+		{
+			wtype = weapon.GetWeaponType();
+			mode = weapon.GetCurrentFireModeType();
+			muzzle = weapon.GetCurrentMuzzle();
+			array<BaseMuzzleComponent> muzzles = {};
+			weapon.GetMuzzlesList(muzzles);
+			for (int i = 0; i < muzzles.Count(); i++)
+			{
+				if (muzzles[i] == muzzle)
+					idx = i;
+			}
+		}
+
+		if (muzzle)
+		{
+			muzzleAmmo = muzzle.GetAmmoCount();
+			mtype = muzzle.GetMuzzleType();
+			if (muzzle.IsCurrentBarrelChambered())
+				chamber = 1;
+			else
+				chamber = 0;
+			if (NeedsChamber(muzzle))
+				need = 1;
+			if (!muzzle.IsDisposable())
+			{
+				BaseMagazineComponent loaded = muzzle.GetMagazine();
+				if (loaded)
+					magAmmo = loaded.GetAmmoCount();
+			}
+		}
+
+		int canfire = 0;
+		int partial = 0;
+		int raised = 0;
+		int reloading = 0;
+		int changing = 0;
+		int sprint = 0;
+		int disabled = 0;
+		int obstruct = -1;
+		if (controller)
+		{
+			if (controller.GetCanFireWeapon())
+				canfire = 1;
+			if (controller.IsPartiallyLowered())
+				partial = 1;
+			if (controller.IsWeaponRaised())
+				raised = 1;
+			if (controller.IsReloading())
+				reloading = 1;
+			if (controller.IsChangingItem())
+				changing = 1;
+			if (controller.IsSprinting())
+				sprint = 1;
+			if (controller.GetDisableWeaponControls())
+				disabled = 1;
+			obstruct = controller.GetWeaponObstructedState();
+		}
+
+		string rounds = string.Format(
+			"muzzle=%1 mag=%2 chamber=%3 need=%4 canfire=%5 partial=%6 mode=%7 raised=%8",
+			muzzleAmmo,
+			magAmmo,
+			chamber,
+			need,
+			canfire,
+			partial,
+			mode,
+			raised
+		);
+		string state = string.Format(
+			"rel=%1 chg=%2 wtype=%3 mtype=%4 idx=%5 held=%6 obs=%7 sprint=%8",
+			reloading,
+			changing,
+			wtype,
+			mtype,
+			idx,
+			s_TriggerHeld.Contains(body),
+			obstruct,
+			sprint
+		);
+		return rounds + " " + state + string.Format(" dis=%1", disabled);
+	}
+
+	// Why the raised rifle did not get a trigger. Distances are meters,
+	// angles are degrees.
+	protected static string EngageAimMiss(IEntity body, vector point)
+	{
+		CharacterControllerComponent controller = Controller(body);
+		string flags = string.Format(
+			"raised=%1 reloading=%2 changing=%3 dry=%4 empty=%5 settle=%6",
+			WeaponIsRaised(body),
+			controller && controller.IsReloading(),
+			controller && controller.IsChangingItem(),
+			GunIsDry(body),
+			IsEmptyReload(body),
+			ReloadAimSettling(body)
+		);
+		flags = flags + " " + FireDiag(body);
+		if (!controller || point == vector.Zero)
+			return "no-aim " + flags;
+
+		AimingComponent aiming = controller.GetAimingComponent();
+		if (!aiming)
+			return "no-component " + flags;
+
+		vector dir = aiming.GetAimingDirectionWorld();
+		vector want = point - AimLineOrigin(body, point);
+		float distance = want.Length();
+		float off = -1;
+		if (dir.Length() > 0.01 && distance > 0.05)
+		{
+			dir.Normalize();
+			want.Normalize();
+			float dot = vector.Dot(dir, want);
+			if (dot > 1)
+				dot = 1;
+			if (dot < -1)
+				dot = -1;
+			off = Math.Acos(dot) / Math.DEG2RAD;
+		}
+
+		return string.Format(
+			"aim dist=%1 cone=%2 off=%3 %4",
+			distance,
+			EngageAimDegrees(distance),
+			off,
+			flags
+		);
 	}
 
 	// A new contact after the recent gap stops him for the initial duration.
@@ -5239,6 +5736,12 @@ class KK_GarrisonHold
 			return false;
 
 		return now >= s_EngageNextStop.Get(body);
+	}
+
+	// The engage still has this man. Attack healing stays off for that stretch.
+	protected static bool AttackContactOpen(IEntity body)
+	{
+		return body && s_EngageEpisode.Contains(body);
 	}
 
 	protected static void EndEngageEpisode(IEntity body, bool remember)
@@ -5381,6 +5884,24 @@ class KK_GarrisonHold
 		if (IsEmptyReload(body))
 			return;
 
+		// A reload while the rifle is up is refused, and the next raise
+		// cancels a magazine change that did start. The engage raise stays
+		// off until this gun can shoot again.
+		if (controller.IsWeaponRaised() || controller.IsWeaponADS())
+		{
+			controller.SetWeaponADS(false);
+			controller.SetWeaponRaised(false);
+			s_MoveWeaponUp.RemoveItem(body);
+			s_LowerSentAt.Set(body, WorldTime());
+		}
+
+		BaseWeaponComponent inHand = CurrentWeapon(body);
+		if (!inHand || IsThrowableType(inHand.GetWeaponType()))
+		{
+			EnsureEngageGun(body);
+			return;
+		}
+
 		float now = WorldTime();
 		if (
 			s_ReloadAt.Contains(body) &&
@@ -5393,8 +5914,18 @@ class KK_GarrisonHold
 		IEntity spare = FullerMagazine(body);
 		if (!spare)
 		{
+			// The magazine search can miss one the weapon will still take.
+			if (GunIsDry(body) && controller.ReloadWeapon())
+			{
+				s_ReloadAt.Set(body, now);
+				s_EmptyReload.Insert(body);
+				return;
+			}
+
 			BaseWeaponComponent other = EngageSwapWeapon(body);
-			if (other)
+			// The rocket is not a substitute magazine. Swapping to it and
+			// back leaves the empty rifle in hand and the reload never starts.
+			if (other && other.GetWeaponType() != EWeaponType.WT_ROCKETLAUNCHER)
 				SwitchToWeapon(body, other);
 			else
 				s_ReloadAt.Set(body, now);
@@ -5403,7 +5934,9 @@ class KK_GarrisonHold
 		}
 
 		BaseMagazineComponent loaded = LoadedMagazine(body);
-		bool forceDetach = loaded && loaded.GetAmmoCount() > 0;
+		// An empty magazine still fills the well. It has to come out, or
+		// the spare never seats and IsReloading stays false.
+		bool forceDetach = loaded != null;
 		// Sampled before the call. A magazine that is already counted when
 		// ReloadWeaponWith returns would skip the guard, and the next tick
 		// would fire while the animation is still playing.
@@ -5508,6 +6041,40 @@ class KK_GarrisonHold
 		if (IsBoundSprint(body) || !HasGunAmmo(body))
 			return false;
 
+		return true;
+	}
+
+	// The rifle stays up for the whole attack engage. A bound sprint, an
+	// empty gun, a reload, and a grenade still lower it. Nothing else does:
+	// the move behavior was putting it down between shots and the next
+	// raise then thought it was already on the way up.
+	static bool AttackEngageOwnsWeapon(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !AttackEngageOwnsLook(body))
+			return false;
+
+		if (YieldsWeaponForHeal(body) || IsDown(body))
+			return false;
+
+		if (CannotShoot(body) || IsQuietReload(body) || HoldingThrowable(body))
+			return false;
+
+		return true;
+	}
+
+	// Raises and reports that engage owns the rifle, so the caller does
+	// not run a lower.
+	static bool EngageHoldWeapon(IEntity soldier)
+	{
+		if (!AttackEngageOwnsWeapon(soldier))
+			return false;
+
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return false;
+
+		RequestWeaponStance(body, true);
 		return true;
 	}
 
@@ -6748,12 +7315,35 @@ class KK_GarrisonHold
 			return false;
 		}
 
-		// Snap aim was making the raised flag flicker. Sending the raise
-		// again restarts it, and the shot never leaves the rifle.
-		if (raised && !liveRaised && s_RaiseSentAt.Contains(body))
+		// It was up and something else put it down. Ask again. Waiting
+		// out the raise timer left the rifle down for the rest of the move.
+		if (raised && !liveRaised && s_RaiseSettled.Contains(body))
 		{
-			if (WorldTime() - s_RaiseSentAt.Get(body) < 500)
+			s_RaiseSettled.RemoveItem(body);
+			s_MoveWeaponUp.RemoveItem(body);
+			return true;
+		}
+
+		// The raise is still playing while the flag is down. Sending it
+		// again restarts that animation, so the rifle never finishes and
+		// the trigger never gets a round out. A lower that landed after
+		// the raise is the reason to ask again.
+		if (raised && !liveRaised && known && wasRaised && s_RaiseSentAt.Contains(body))
+		{
+			float raiseAt = s_RaiseSentAt.Get(body);
+			float lowerAt = -1;
+			if (s_LowerSentAt.Contains(body))
+				lowerAt = s_LowerSentAt.Get(body);
+
+			if (lowerAt > raiseAt)
+				return true;
+
+			// Still inside the raise. Another call restarts it.
+			if (WorldTime() - raiseAt < RAISE_RESEND_MS)
 				return false;
+
+			// It never reported up. Ask again.
+			return true;
 		}
 
 		if (!known || wasRaised != raised)
@@ -6761,12 +7351,6 @@ class KK_GarrisonHold
 
 		if (liveRaised == raised)
 			return false;
-
-		// Already asked for it up. Send it again once the wait above has
-		// passed: a later node put the rifle down, or the first raise never
-		// settled. Waiting for the settled pose left it down for good.
-		if (raised)
-			return true;
 
 		// Already asked for it down. Another lower restarts the pose.
 		// A raise that went out after that ask is the reason to send one more.
@@ -10684,7 +11268,30 @@ class KK_GarrisonHold
 		}
 
 		s_TriggerHeld.RemoveItem(body);
+		s_TriggerRounds.Remove(body);
+		s_TriggerRoundAt.Remove(body);
+		s_TriggerRearm.RemoveItem(body);
 		WriteFireWanted(body, false);
+	}
+
+	// A new pull is in progress. The shot check must not press over it.
+	protected static void PressFire(IEntity body)
+	{
+		if (!body || s_TriggerRearm.Contains(body))
+			return;
+
+		SetFireWanted(body, true);
+	}
+
+	// One cycle per trigger pull. Full auto is not one of these.
+	protected static bool NeedsNewPull(IEntity body)
+	{
+		BaseWeaponComponent weapon = CurrentWeapon(body);
+		if (!weapon)
+			return false;
+
+		EWeaponFiremodeType mode = weapon.GetCurrentFireModeType();
+		return mode == EWeaponFiremodeType.Semiauto || mode == EWeaponFiremodeType.Burst;
 	}
 
 	protected static void WriteFireWanted(IEntity body, bool wanted)
@@ -10740,7 +11347,63 @@ class KK_GarrisonHold
 
 			if (TriggerShouldDrop(body))
 			{
+				if (IsAttackSearch(body))
+					LogFire(body, "drop");
 				s_TriggerHeld.RemoveItem(body);
+				WriteFireWanted(body, false);
+				continue;
+			}
+
+			// Held across a reload, the input never rises again and the
+			// gun does not start. Leave it off until the controller can fire.
+			MakeWeaponReady(body);
+			if (!WeaponCanAcceptFire(body))
+			{
+				WriteFireWanted(body, false);
+				continue;
+			}
+
+			// Full auto keeps the button down. Semi and burst need a new pull
+			// once the last cycle has had time to leave a round.
+			if (!NeedsNewPull(body))
+			{
+				WriteFireWanted(body, true);
+				continue;
+			}
+
+			int rounds = LoadedRounds(CurrentWeapon(body));
+			float now = WorldTime();
+			if (s_TriggerRearm.Contains(body))
+			{
+				float released = 0;
+				if (s_TriggerRoundAt.Contains(body))
+					released = s_TriggerRoundAt.Get(body);
+				if (now - released < TRIGGER_RELEASE_MS)
+				{
+					WriteFireWanted(body, false);
+					continue;
+				}
+
+				s_TriggerRearm.RemoveItem(body);
+				s_TriggerRounds.Set(body, rounds);
+				s_TriggerRoundAt.Set(body, now);
+				WriteFireWanted(body, true);
+				continue;
+			}
+
+			if (!s_TriggerRounds.Contains(body) || s_TriggerRounds.Get(body) != rounds)
+			{
+				s_TriggerRounds.Set(body, rounds);
+				s_TriggerRoundAt.Set(body, now);
+				WriteFireWanted(body, true);
+				continue;
+			}
+
+			if (now - s_TriggerRoundAt.Get(body) >= TRIGGER_REPULL_MS)
+			{
+				s_TriggerRearm.Insert(body);
+				s_TriggerRoundAt.Set(body, now);
+				LogFire(body, "repull");
 				WriteFireWanted(body, false);
 				continue;
 			}
@@ -11893,6 +12556,38 @@ modded class SCR_AISetWeaponRaised
 		// enough for this node to fire again.
 		if (owner && KK_AgentMove.CrossingObstacle(owner))
 			return ENodeResult.SUCCESS;
+
+		// Attack engage owns the rifle. The rest of this node, and the
+		// vanilla move behavior under it, lower a man who is between shots.
+		if (
+			KK_GarrisonHold.EngageHoldWeapon(body) ||
+			KK_GarrisonHold.EngageHoldWeapon(owner)
+		)
+			return ENodeResult.SUCCESS;
+
+		// A dry attack rifle stays down. The vanilla raise was putting it
+		// back up and the magazine change never started.
+		IEntity reloading = body;
+		if (!reloading)
+			reloading = owner;
+		if (
+			reloading &&
+			KK_GarrisonHold.IsAttackSearch(reloading) &&
+			KK_GarrisonHold.CannotShoot(reloading)
+		)
+		{
+			CharacterControllerComponent reloader =
+				CharacterControllerComponent.Cast(
+					reloading.FindComponent(CharacterControllerComponent)
+				);
+			if (reloader && (reloader.IsWeaponRaised() || reloader.IsWeaponADS()))
+			{
+				reloader.SetWeaponADS(false);
+				reloader.SetWeaponRaised(false);
+			}
+
+			return ENodeResult.SUCCESS;
+		}
 
 		if (
 			(KK_GarrisonHold.IsDown(body) || KK_GarrisonHold.IsDown(owner)) &&
