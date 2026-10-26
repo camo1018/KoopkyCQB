@@ -448,9 +448,10 @@ modded class SCR_AICombatComponent
 			return;
 		}
 
-		// Attack engage already aimed. A contact or lost-contact snap here
-		// is a second look at the same priority, and the two restart each other.
-		if (KK_GarrisonHold.AttackEngageOwnsLook(GetOwner()))
+		// The plant already aimed. A contact snap here is a second look
+		// at the same priority, and the two restart each other. Between
+		// plants the step look is left alone.
+		if (KK_GarrisonHold.EngageOwnsTurn(GetOwner()))
 		{
 			vector engageAim;
 			if (KK_GarrisonHold.GetEngageAim(GetOwner(), engageAim))
@@ -5255,14 +5256,8 @@ class KK_GarrisonHold
 			return;
 		}
 
-		SetEngageStop(body, false);
-
-		if (!AttackTraveling(body))
-		{
-			HoldEngageShot(body, enemy, aim);
-			return;
-		}
-
+		// The next plant starts on the interval, including while the step
+		// is still the move. Waiting for him to slow down never starts it.
 		if (EngagePeriodicDue(body, now))
 		{
 			BeginEngageHold(body, now, EngageRepeatMs());
@@ -5271,42 +5266,44 @@ class KK_GarrisonHold
 			return;
 		}
 
-		// Already up and already on him. The move is not stopped and the
-		// rifle is not raised for this. A turn still waits for a stop.
-		vector point = aim;
-		if (point == vector.Zero && enemy)
-			point = ShotAimPoint(enemy);
+		SetEngageStop(body, false);
 
-		if (
-			point != vector.Zero &&
-			EngageAimOnPoint(body, point) &&
-			WeaponIsRaised(body) &&
-			WeaponCanAcceptFire(body) &&
-			!LauncherAgainstInfantry(body, enemy)
-		)
+		// A step that wants him moving owns the body until that plant.
+		// Writing the enemy look here lasts the whole contact, and the
+		// advance order turns him the other way for that same stretch.
+		if (StepWantsMove(body))
 		{
-			if (FriendlyInEngageLane(body, enemy, point))
+			if (s_PerceivedFire.Contains(body))
+				ReleasePerceivedEnemy(body);
+
+			vector point = aim;
+			if (point == vector.Zero && enemy)
+				point = ShotAimPoint(enemy);
+
+			if (
+				point != vector.Zero &&
+				EngageAimOnPoint(body, point) &&
+				WeaponIsRaised(body) &&
+				WeaponCanAcceptFire(body) &&
+				!LauncherAgainstInfantry(body, enemy) &&
+				!FriendlyInEngageLane(body, enemy, point)
+			)
 			{
-				SetFireWanted(body, false);
-				s_MoveFiring.RemoveItem(body);
-				LogEngage(body, EngageLaneNote());
-				return;
+				ApplyEngageDiscipline(body, point);
+				CharacterControllerComponent moving = Controller(body);
+				if (moving && moving.IsChangingFireMode())
+					return;
+
+				PressFire(body);
+				s_MoveFiring.Insert(body);
+				LogEngageShot(body);
 			}
 
-			ApplyEngageDiscipline(body, point);
-			CharacterControllerComponent moving = Controller(body);
-			if (moving && moving.IsChangingFireMode())
-				return;
-
-			PressFire(body);
-			s_MoveFiring.Insert(body);
-			LogEngageShot(body);
 			return;
 		}
 
-		// Still on a step, and the rifle is not on him yet. The look stays
-		// on the man. Cancelling it lets the step turn him away, and the
-		// next pass turns him back.
+		// Paused or arrived. Nothing is asking him to walk, so the shot
+		// does not fight a step.
 		HoldEngageShot(body, enemy, aim);
 	}
 
@@ -5785,15 +5782,16 @@ class KK_GarrisonHold
 		return now >= s_EngageNextStop.Get(body);
 	}
 
-	// A contact is open. Advance steps and bound sprints leave his head
-	// on that man. Movement takes the look again once the contact ends.
+	// The plant, or a shot taken while he is already stopped. A step
+	// between plants owns the head. Leaving it on the man for the whole
+	// contact is what the advance order turns back the other way.
 	static bool EngageOwnsTurn(IEntity soldier)
 	{
 		IEntity body = CharacterBody(soldier);
 		if (!body || !AttackEngageEnabled() || !IsAttackSearch(body))
 			return false;
 
-		return s_EngageEpisode.Contains(body) || s_PerceivedFire.Contains(body);
+		return IsEngageStopped(body) || s_PerceivedFire.Contains(body);
 	}
 
 	// The engage still has this man. Attack healing stays off for that stretch.
@@ -6531,7 +6529,10 @@ class KK_GarrisonHold
 			WriteAimAt(controller.GetAimingComponent(), AimLineOrigin(body, point), point, bodyYaw);
 		}
 
-		if ((AttackTraveling(body) && !EngageOwnsTurn(body)) || !LifeStanding(controller))
+		// A step is still carrying him. Writing the heading here yaws him
+		// onto the man, the move yaws him back, and that lasts until the
+		// contact ends.
+		if (AttackTraveling(body) || !LifeStanding(controller))
 			return point;
 
 		vector flat = point - body.GetOrigin();
@@ -6640,8 +6641,8 @@ class KK_GarrisonHold
 		return target.GetExposure() > 0;
 	}
 
-	// Above this he is still on a step. The look and the trigger stay on.
-	// The body is not turned onto the target until he drops under it.
+	// Above this he is still on a step. The body is not turned onto the
+	// target until that step has let him stop.
 	protected static bool AttackTraveling(IEntity body)
 	{
 		Physics physics = body.GetPhysics();
@@ -6651,6 +6652,26 @@ class KK_GarrisonHold
 		vector velocity = physics.GetVelocity();
 		velocity[1] = 0;
 		return velocity.Length() > 1.25;
+	}
+
+	// The advance order is still asking him to walk. Idle is a pause or
+	// the arrival, and that is the only time a shot between plants is
+	// allowed to turn him.
+	protected static bool StepWantsMove(IEntity body)
+	{
+		if (!body)
+			return false;
+
+		AICharacterMovementComponent movement = AICharacterMovementComponent.Cast(
+			body.FindComponent(AICharacterMovementComponent)
+		);
+		if (!movement)
+			return false;
+
+		EMovementType wanted = movement.GetMovementTypeWanted();
+		return wanted == EMovementType.WALK ||
+			wanted == EMovementType.RUN ||
+			wanted == EMovementType.SPRINT;
 	}
 
 	protected static bool ClosestContact(
@@ -12537,6 +12558,22 @@ modded class SCR_AIAttackBehavior
 			(KK_GarrisonHold.HasBuilding(agentEntity) && KK_GarrisonHold.MustDashToReload(agentEntity))
 		)
 		{
+			return 0;
+		}
+
+		// Attack-selected outranks the advance step for as long as the man
+		// stays selected. That is the whole contact, not the plant. Between
+		// plants the step is the move. The plant is the only window where
+		// this behavior takes him.
+		bool engageDriving =
+			KK_GarrisonHold.AttackEngageOwnsLook(character) ||
+			KK_GarrisonHold.AttackEngageOwnsLook(agentEntity);
+		bool planted =
+			KK_GarrisonHold.IsEngageStopped(character) ||
+			KK_GarrisonHold.IsEngageStopped(agentEntity);
+		if (engageDriving && !planted)
+		{
+			m_bUseCombatMove = false;
 			return 0;
 		}
 
