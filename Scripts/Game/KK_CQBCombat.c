@@ -4419,8 +4419,9 @@ class KK_GarrisonHold
 			ReleaseHealHold(body);
 	}
 
-	// Bandage or tourniquet while he is bleeding. A health item once
-	// the bleed is dealt with, or when the wound is only missing health.
+	// Bandage or tourniquet while he is bleeding. Morphine once it can
+	// treat the leg. A health item after that, or when the wound is
+	// only missing health.
 	protected static IEntity FindMedicalItem(IEntity body)
 	{
 		SCR_InventoryStorageManagerComponent inventory =
@@ -4495,14 +4496,18 @@ class KK_GarrisonHold
 				return 3;
 		}
 
-		if (type == SCR_EConsumableType.SALINE)
+		// Skipped unless the leg will take it. A bleed is stopped first.
+		if (type == SCR_EConsumableType.MORPHINE)
 			return 4;
 
-		if (type == SCR_EConsumableType.MED_KIT)
+		if (type == SCR_EConsumableType.SALINE)
 			return 5;
 
-		if (type == SCR_EConsumableType.HEALTH)
+		if (type == SCR_EConsumableType.MED_KIT)
 			return 6;
+
+		if (type == SCR_EConsumableType.HEALTH)
+			return 7;
 
 		return 0;
 	}
@@ -4558,11 +4563,17 @@ class KK_GarrisonHold
 
 		LeaveWeaponForHeal(body);
 
+		// A bound or take-cover dash is still flagged after the contact
+		// closes. That flag puts the sprint back and the bandage never starts.
+		SetBoundSprint(body, false);
+
 		CharacterControllerComponent controller = Controller(body);
 		if (controller && controller.IsWeaponADS())
 			controller.SetWeaponADS(false);
 
-		if (controller && !s_HealFootLock.Contains(body))
+		// The plant end writes full speed every refresh. The lock has to
+		// be put back, or a hurt man keeps walking the order.
+		if (controller)
 		{
 			s_HealFootLock.Insert(body);
 			controller.OverrideMaxSpeed(0);
@@ -5805,9 +5816,11 @@ class KK_GarrisonHold
 		if (!body)
 			return;
 
-		SetEngageStop(body, false);
 		bool had = s_EngageEpisode.Contains(body);
 		s_EngageEpisode.RemoveItem(body);
+		// After the episode is gone, a man who still needs a bandage
+		// counts as healing, and this stop must not give him his speed back.
+		SetEngageStop(body, false);
 		if (remember && had)
 			s_EngageEpisodeEnded.Set(body, WorldTime());
 
@@ -5894,7 +5907,9 @@ class KK_GarrisonHold
 		if (!controller)
 			return;
 
-		if (stop || IsPinned(body))
+		// A cover pin stays put. A bandage does too: ending the plant
+		// would otherwise put the walk back while he is still bleeding.
+		if (stop || IsPinned(body) || s_HealFootLock.Contains(body) || HealingNow(body))
 			controller.OverrideMaxSpeed(0);
 		else
 			controller.OverrideMaxSpeed(1);

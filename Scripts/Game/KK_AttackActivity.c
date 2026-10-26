@@ -1278,6 +1278,14 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (!agent)
 			return;
 
+		// The dash and the rifle raise belong to the push. A bandage
+		// has the hands and the feet on advance, bound, and take cover.
+		if (KK_GarrisonHold.HealingNow(agent))
+		{
+			KK_GarrisonHold.SetBoundSprint(agent, false);
+			return;
+		}
+
 		if (speed == EMovementType.SPRINT)
 		{
 			KK_GarrisonHold.SetBoundSprint(agent, true);
