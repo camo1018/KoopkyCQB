@@ -1,8 +1,8 @@
 # Koopky CQB
 
-Orders for clearing and holding buildings, and for pushing a squad outdoors. Works with the base game and with CRX Enfusion AI.
+Squad combat for buildings and the ground outside them. Clear and garrison orders move soldiers through an interior and hold it. Attack orders push them outdoors by bounds and cover. While those orders run, custom CQB combat handles spotting, aiming, and shooting. You can also author the posts and routes a building uses, and recruit a whole squad from one man. Works with the base game and with CRX Enfusion AI.
 
-Give **Clear Building**, **Garrison**, or an **Attack** pace from the commanding menu, or place the matching waypoint in the editor. Game Master also has a separate Koopky command bar (numpad 1–5) for the same orders. A clear or garrison aimed at a building piece, or placed inside one, locks that building. Otherwise the order uses the nearest occupiable building within the search radius (75 m by default). A command-menu order copies the current Koopky CQB scenario properties onto that waypoint. A waypoint placed in the editor keeps the values set on that waypoint until the order starts, then scenario values are applied.
+Give **Clear Building**, **Garrison**, or an **Attack** pace from the commanding menu, or place the matching waypoint in the editor. Game Master also has a separate Koopky command bar: numpad 1 garrison, 2 clear, 3 advance, 4 bound, 5 take cover. A clear or garrison aimed at a building piece, or placed inside one, locks that building. Otherwise the order uses the nearest occupiable building within the search radius (75 m by default). A command-menu order copies the current Koopky CQB scenario properties onto that waypoint. A waypoint placed in the editor keeps the values set on that waypoint until the order starts, then scenario values are applied.
 
 **Recruit Squad** recruits the whole squad of the soldier you are aiming at, not only that man.
 
@@ -37,11 +37,15 @@ A soldier who leaves his post is pulled back on an interval. He rotates to anoth
 
 ## Attack
 
-Outdoor push orders under the Attack page of the commanding menu, or from the Game Master Koopky bar.
+Outdoor push orders under the Attack page of the commanding menu, or from the Game Master Koopky bar. With nothing else queued, every pace holds at the point. Another waypoint queued starts when the squad arrives.
 
-- **Advance.** Pairs step toward the point, pause, and scan. With **Attack engage** on, he aims and fires at a current hostile while he is already stopped. The first sighting stops him for **Attack engage initial duration**. While that hostile stays perceived, **Attack engage interval** and **Attack engage repeat duration** stop him again. Between those stops the move is left alone.
-- **Bound.** The same push, with pairs bounding by lane. A bound sprint does not use that shot.
-- **Take cover.** Pairs bound into cover on the way. After one fighter in the moving pair has stopped, **Cover handoff** lets the holding pair bound if the others have not arrived. At the point, a target hands the move to the normal attack, which walks a soldier back if he leaves the return distance. With no target he stays on the cover spot. **Attack engage** keeps running in both cases until the order is cancelled or replaced.
+**Attack medic** is on by default. A medic leaves the push to treat men who are down or still need treatment, behind the squad. Everyone else keeps moving. A live contact keeps them in the fight. With another waypoint queued, the squad waits at the point until those men catch up and the squad has treated what it can.
+
+- **Advance.** Pairs step toward the point, pause, and scan.
+- **Bound.** The same push, with pairs bounding by lane. A bound sprint does not take the engage shot.
+- **Take cover.** Pairs bound into cover on the way. **Cover radius** is how far from the point a soldier looks for cover (25 m by default). He runs to that spot, including a man who gets there before the others. **Cover handoff** is how long after one fighter in the moving pair has stopped before the holding pair bounds, if the others have not arrived (2 s by default). Men who are down are not counted. 0 waits until every fighter who can still fight has arrived. At the point, **Cover rotate** moves him to the next cover after that many seconds (12 s by default). Later men leave a few seconds after the first. 0 stays in the first cover. A target hands the move to the normal attack. **Take cover return distance** is how far he may move from the point before he is walked back (40 m by default). With no target he stays on the cover spot.
+
+**Attack engage** is on by default. A soldier on an attack aims and fires at a man perception has noticed, identified or not, which skips the usual wait to confirm him. The first sighting stops him for **Attack engage initial duration** (2 s by default). A new man he can see starts that stop again. While the contact stays open, **Attack engage interval** (6 s) and **Attack engage repeat duration** (2 s) stop him again. Between those stops the move continues, and he can still fire if the rifle is already on the man. **Heard shot memory** keeps him firing at a place he heard a shot and cannot see (8 s by default). Another shot starts the time over. 0 forgets the shot immediately. Engage keeps running until the order is cancelled or replaced.
 
 **Attack lane spacing**, **Attack step length**, **Attack pause**, and **Attack finish distance** set how far apart the lanes sit, how far each step goes, how long a pair holds, and how close they must be to finish. Defaults are 12 m, 20 m, 2 s, and 8 m.
 
@@ -59,13 +63,13 @@ Outdoor push orders under the Attack page of the commanding menu, or from the Ga
 
 ## Combat
 
-While a soldier is clearing, garrisoning, or attacking, **Recognition speed** replaces his normal speed, then returns when the order ends. 1 is normal by default. **Stay sharp under fire** is on by default. Suppression does not slow recognition, and the first shot does not wait. On an attack waypoint he also stays at the alerted recognition rate for the whole order.
+While a soldier is clearing, garrisoning, or attacking, **Recognition speed** replaces his normal speed, then returns when the order ends. 1 is normal by default. **Stay sharp under fire** is on by default. Suppression does not slow recognition, and the first shot does not wait. On an attack he recognizes much faster than alerted for the whole order, and that rate is still scaled by **Recognition speed**.
 
 **Custom CQB AI** is on by default and is strongly suggested. It replaces the normal attack while soldiers are clearing or garrisoning, including outside the building within **CQB range** (50 m by default). A soldier fires himself at the nearest enemy he can see in that range. A window or a glass pane does not hide that man. The sight trace goes through it. A wall, a frame, and another soldier still block it. He plants and shoots in place, then picks the route back up once that man is gone. On a garrison, a man past that range is left to the normal attack: it aims and sets the fire rate, and snap aim stays off. He does not leave the route to chase. A clear leaves anyone past that range alone. Between contacts he looks along the uncleared route. After the sight line breaks, **Lost contact look** keeps the rifle on the last place the man was seen before the route look returns (2 s by default).
 
 **Sight conditions** is off by default. The ray is the same either way. Off, a clear ray is enough. On, a clear ray is only the first step. He then sees the man when that man is lit enough for how concealed he is. Concealment is not another wall. Crouching or lying down, holding still, and foliage around his body raise it. Running lowers it. A standing man in the open has none, so only very low light hides him. The distance of the ray does not change.
 
-**Shot check** is how often he looks, in milliseconds, from 50 to 100. It is 75 by default. **Shot delay** is how long that clear sight has to last before the round, in milliseconds, from 0 to 2000. It is 150 by default. 0 fires on the next check. **Shot delay by skill** is on by default. A noob waits four times the delay, a rookie twice, a veteran half, an expert a quarter, and a cylon does not wait. Off uses the delay for every skill. If only a step to his left or right can see the enemy, he leans that way and shoots from the peek. The rifle stays up on a clear while the room gun is aimed.
+**Shot check** is how often he looks, in milliseconds, from 50 to 100. It is 75 by default. **Shot men per frame** is how many of those soldiers are checked in one frame. It is 2 by default. 0 checks everyone who is due. **Shot delay** is how long that clear sight has to last before the round, in milliseconds, from 0 to 2000. It is 150 by default. 0 fires on the next check. **Shot delay by skill** is on by default. A noob waits four times the delay, a rookie twice, a veteran half, an expert a quarter, and a cylon does not wait. Off uses the delay for every skill. If only a step to his left or right can see the enemy, he leans that way and shoots from the peek. The rifle stays up on a clear while the room gun is aimed.
 
 **Aim point** is where that rifle goes. **Chest, then head** is the default: the upper chest, and the head when the chest is behind cover. **Head, then chest** does the reverse. **Chest** and **Head** stay on that point, with no fallback when it is behind cover. **Random** picks chest or head for each man, keeps that choice, and uses the other point when the first is behind cover.
 
@@ -91,7 +95,7 @@ Game Master scenario properties has a Koopky CQB tab, including Clear, Garrison,
 
 The **Config file** control on the tab writes the current values, reloads them, or restores the scenario defaults. Export again after a reset if the file should match.
 
-**Draw interior points** is off by default. It draws the plan for the latest clear or garrison order. **Debug log** is off by default. It writes KK log lines.
+**Draw interior points** is off by default. It draws the plan for the latest clear or garrison order. **Debug log** is off by default. It writes KK log lines. **Performance log** is off by default. Once a second it logs how long the CQB fight and snap aim took.
 
 ## Waypoint authoring
 
