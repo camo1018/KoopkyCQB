@@ -6435,12 +6435,27 @@ class KK_GarrisonHold
 		if (!body || !IsAttackSearch(body))
 			return;
 
+		IEntity source = shooter;
 		shooter = ShotCharacter(shooter);
 		if (shooter == body || (shooter && SharesGroup(body, shooter)))
 			return;
 
 		if (shooter && KnownFriendly(body, shooter))
 			return;
+
+		// ShotCharacter skips a corpse. The danger event stays after the
+		// kill, and stamping it as an unknown muzzle keeps the plant up.
+		if (!shooter)
+		{
+			IEntity actor = ShotActor(source);
+			if (actor && !IsTargetable(actor))
+			{
+				if (s_HeardShooter.Contains(body) && s_HeardShooter.Get(body) == actor)
+					ForgetHeardShot(body);
+
+				return;
+			}
+		}
 
 		vector place = shotPos;
 		if (place == vector.Zero && shooter)
@@ -6480,7 +6495,15 @@ class KK_GarrisonHold
 		if (s_HeardShooter.Contains(body))
 			shooter = s_HeardShooter.Get(body);
 
-		if (shooter && (!IsTargetable(shooter) || SharesGroup(body, shooter) || KnownFriendly(body, shooter)))
+		if (shooter && !IsTargetable(shooter))
+		{
+			// He was the man who fired. The place is his, and leaving it
+			// keeps the stop after he is dead.
+			ForgetHeardShot(body);
+			return false;
+		}
+
+		if (shooter && (SharesGroup(body, shooter) || KnownFriendly(body, shooter)))
 			shooter = null;
 
 		vector place = vector.Zero;
@@ -6571,6 +6594,25 @@ class KK_GarrisonHold
 		{
 			if (IsTargetable(current))
 				return current;
+
+			current = current.GetParent();
+			depth++;
+		}
+
+		return null;
+	}
+
+	// The character on the event, dead included. A weapon or an agent
+	// is walked up to the body that owns it.
+	protected static IEntity ShotActor(IEntity shooter)
+	{
+		IEntity current = shooter;
+		int depth;
+		while (current && depth < 6)
+		{
+			IEntity body = CharacterBody(current);
+			if (body && Controller(body))
+				return body;
 
 			current = current.GetParent();
 			depth++;
