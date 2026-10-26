@@ -4534,6 +4534,148 @@ class KK_GarrisonHold
 		return effect.ActivateEffect(body, body, item, null);
 	}
 
+	protected static ref set<IEntity> s_MedicDetail = new set<IEntity>();
+
+	// Off the push, treating or being treated. Engage does not take his rifle.
+	static void SetMedicDetail(IEntity soldier, bool on)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		if (on)
+			s_MedicDetail.Insert(body);
+		else
+			s_MedicDetail.RemoveItem(body);
+	}
+
+	static bool MedicDetail(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		return body && s_MedicDetail.Contains(body);
+	}
+
+	// True when this man is carrying something that can be used on that patient.
+	static bool CanTreatPatient(IEntity medic, IEntity patient)
+	{
+		return FindTreatItem(medic, patient) != null;
+	}
+
+	// Plays the medic's item on the patient. False when nothing he carries applies.
+	static bool TryMedicTreat(IEntity medic, IEntity patient)
+	{
+		IEntity medicBody = CharacterBody(medic);
+		IEntity patientBody = CharacterBody(patient);
+		if (!medicBody || !patientBody || medicBody == patientBody)
+			return false;
+
+		CharacterControllerComponent controller = Controller(medicBody);
+		if (!controller || controller.IsDead() || controller.IsUnconscious())
+			return false;
+
+		if (controller.IsUsingItem() || controller.IsChangingItem())
+			return true;
+
+		if (controller.IsWeaponRaised() || controller.IsWeaponADS() || controller.IsSprinting())
+		{
+			LeaveWeaponForHeal(medicBody);
+			return false;
+		}
+
+		IEntity item = FindTreatItem(medicBody, patientBody);
+		if (!item)
+			return false;
+
+		if (!ActivateTreat(patientBody, medicBody, item))
+			return false;
+
+		// Any treatment item, not only a bandage. A contact must not cut the gesture off.
+		s_HealGestureItem.Set(medicBody, item);
+		s_HealGestureAt.Set(medicBody, WorldTime());
+		s_HealGestureSeen.RemoveItem(medicBody);
+		return true;
+	}
+
+	protected static IEntity FindTreatItem(IEntity medic, IEntity patient)
+	{
+		SCR_InventoryStorageManagerComponent inventory =
+			SCR_InventoryStorageManagerComponent.Cast(
+				medic.FindComponent(SCR_InventoryStorageManagerComponent)
+			);
+		if (!inventory || !patient)
+			return null;
+
+		bool bleeding = false;
+		SCR_CharacterDamageManagerComponent damage =
+			SCR_CharacterDamageManagerComponent.Cast(
+				patient.FindComponent(SCR_CharacterDamageManagerComponent)
+			);
+		if (damage)
+			bleeding = damage.IsBleeding();
+
+		s_HealItems.Clear();
+		inventory.GetItems(s_HealItems);
+
+		IEntity best;
+		int bestRank = 0;
+		foreach (IEntity item : s_HealItems)
+		{
+			if (!item)
+				continue;
+
+			SCR_ConsumableItemComponent consumable =
+				SCR_ConsumableItemComponent.Cast(
+					item.FindComponent(SCR_ConsumableItemComponent)
+				);
+			if (!consumable)
+				continue;
+
+			SCR_ConsumableEffectHealthItems effect =
+				SCR_ConsumableEffectHealthItems.Cast(consumable.GetConsumableEffect());
+			if (!effect)
+				continue;
+
+			int rank = MedicalRank(consumable.GetConsumableType(), bleeding);
+			if (rank <= 0)
+				continue;
+
+			if (best && rank >= bestRank)
+				continue;
+
+			SCR_EConsumableFailReason reason;
+			if (!effect.CanApplyEffect(patient, medic, reason))
+				continue;
+
+			if (!effect.GetAnimationParameters(item, medic))
+				continue;
+
+			best = item;
+			bestRank = rank;
+		}
+
+		return best;
+	}
+
+	protected static bool ActivateTreat(IEntity patient, IEntity medic, IEntity item)
+	{
+		if (!patient || !medic || !item)
+			return false;
+
+		SCR_ConsumableItemComponent consumable =
+			SCR_ConsumableItemComponent.Cast(
+				item.FindComponent(SCR_ConsumableItemComponent)
+			);
+		if (!consumable)
+			return false;
+
+		SCR_ConsumableEffectHealthItems effect =
+			SCR_ConsumableEffectHealthItems.Cast(consumable.GetConsumableEffect());
+		if (!effect)
+			return false;
+
+		return effect.ActivateEffect(patient, medic, item, null);
+	}
+
 	// True while he should be bandaging, or a gesture is already playing.
 	// An empty inventory does not count, or he would stand in the pose
 	// with nothing to use.
@@ -5924,6 +6066,16 @@ class KK_GarrisonHold
 		return mode.KK_GetAttackEngage();
 	}
 
+	// Medic and patient leave the attack push. Off keeps the whole squad on it.
+	static bool AttackMedicEnabled()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return true;
+
+		return mode.KK_GetAttackMedic();
+	}
+
 	// An empty gun on this order. The building reload does not run here,
 	// and the attack behavior does not hand the magazine change off.
 	protected static void StartEngageReload(IEntity body)
@@ -6106,12 +6258,23 @@ class KK_GarrisonHold
 		return body && s_PerceivedFire.Contains(body);
 	}
 
+	// The engage episode is still open. A medic does not walk off while it is.
+	static bool EngageContactOpen(IEntity soldier)
+	{
+		return AttackContactOpen(CharacterBody(soldier));
+	}
+
 	// Armed attack engage. The route contact look is not used, including
 	// between stops, or it takes the head back as soon as the stop lets go.
 	static bool AttackEngageOwnsLook(IEntity soldier)
 	{
 		IEntity body = CharacterBody(soldier);
 		if (!body || !AttackEngageEnabled() || !IsAttackSearch(body))
+			return false;
+
+		// Treatment owns his hands. A plant look would take the bandage off.
+		// A gesture already playing stays through a new contact.
+		if (s_MedicDetail.Contains(body) || HealingNow(body))
 			return false;
 
 		if (!HasGunAmmo(body))

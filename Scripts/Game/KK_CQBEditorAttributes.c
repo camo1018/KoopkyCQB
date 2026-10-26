@@ -219,6 +219,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 25: return mode.KK_GetSightConditions();
 			case 45: return mode.KK_GetPerformanceLog();
 			case 49: return mode.KK_GetAttackEngage();
+			case 54: return mode.KK_GetAttackMedic();
 		}
 
 		return mode.KK_GetGarrisonAfterClear();
@@ -252,6 +253,7 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 25: mode.KK_SetSightConditions(value); break;
 			case 45: mode.KK_SetPerformanceLog(value); break;
 			case 49: mode.KK_SetAttackEngage(value); break;
+			case 54: mode.KK_SetAttackMedic(value); break;
 			default: mode.KK_SetGarrisonAfterClear(value); break;
 		}
 	}
@@ -535,6 +537,8 @@ class KK_CQBAttrCoverRotate : KK_CQBFloatEditorAttribute {}
 class KK_CQBAttrCoverRadius : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrAttackEngage : KK_CQBBoolEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrAttackMedic : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrAttackEngageInitial : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]

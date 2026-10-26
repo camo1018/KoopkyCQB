@@ -96,6 +96,12 @@ class KK_AttackActivity : SCR_AIActivityBase
 	protected bool m_bPaceSet;
 	protected bool m_bAtPoint;
 	protected float m_fEmptySince;
+	// Medic and the men he is treating. The push does not issue their step.
+	protected ref set<AIAgent> m_Treatment = new set<AIAgent>();
+	protected AIAgent m_Medic;
+	protected AIAgent m_MedicPatient;
+	protected float m_fMedicOrderAt;
+	protected bool m_bMedicHeld;
 
 	protected static const float STEP_REACH = 4;
 	// Close enough to the cover spot to plant. Looser than this and he
@@ -208,26 +214,65 @@ class KK_AttackActivity : SCR_AIActivityBase
 		// On the point with another order behind this one, the push ends
 		// and that order starts. With nothing queued, every pace holds
 		// the way take cover does, and the attack stays in charge.
+		// A medic left behind holds that handoff until he and the wounded
+		// man are in, and until the squad has treated what it can.
 		bool startedOnPoint = FlatDistance(m_vOrigin, m_vTarget) <= Arrival();
 		bool squadAtPoint = m_bAtPoint || startedOnPoint || AllNearTarget();
 		bool waypointFollows = HasFollowingWaypoint();
-		if (squadAtPoint && waypointFollows)
+		bool medic = KK_GarrisonHold.AttackMedicEnabled();
+		bool contact = SquadContactOpen();
+		if (!medic || contact)
+			EndTreatment(contact);
+		else
+			UpdateTreatment(now);
+
+		bool fightersIn = FightersInside();
+		if (!medic && squadAtPoint && waypointFollows)
 		{
 			CompleteAttack();
 			return 0;
+		}
+
+		if (medic && waypointFollows && (fightersIn || squadAtPoint))
+		{
+			if (contact)
+			{
+				if ((squadAtPoint || WalkersInside()) && !GestureInProgress())
+				{
+					CompleteAttack();
+					return 0;
+				}
+			}
+			else
+			{
+				UpdateArrivals(now);
+				RecallStragglers(now);
+				if (!TreatmentBlocksHandoff() && WalkersInside())
+				{
+					CompleteAttack();
+					return 0;
+				}
+
+				return GetPriority();
+			}
 		}
 
 		NotePaceChange();
 
 		// Take cover plants as each man arrives. Advance and bound keep
 		// their push until the squad is there, then use that same plant.
-		bool holdAtPoint = !waypointFollows && (IsTakeCover() || squadAtPoint);
+		bool holdAtPoint = !waypointFollows && (IsTakeCover() || squadAtPoint || (medic && fightersIn));
 		if (holdAtPoint)
+		{
 			UpdateArrivals(now);
+			if (medic)
+				RecallStragglers(now);
+		}
 
 		// Finish distance ends the push. After that, only the return distance
 		// pulls them back. Leaving the finish radius must not restart the push.
-		if (holdAtPoint && squadAtPoint)
+		bool pushFinished = squadAtPoint || (medic && fightersIn);
+		if (holdAtPoint && pushFinished)
 		{
 			m_bAtPoint = true;
 			return GetPriority();
@@ -276,7 +321,10 @@ class KK_AttackActivity : SCR_AIActivityBase
 		EMovementType speed,
 		float now)
 	{
-			if (mover.m_bArrived)
+		if (ServingTreatment(agent))
+			return;
+
+		if (mover.m_bArrived)
 		{
 			LookAgentAlong(agent, AdvanceAxis(), SCAN_AHEAD);
 			return;
@@ -482,6 +530,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 		float now)
 	{
 		if (!agent.GetControlledEntity() || IsReleased(agent) || AtPointCover(agent))
+			return;
+
+		if (ServingTreatment(agent))
 			return;
 
 		if (KK_AgentMove.CrossingObstacle(agent))
@@ -786,6 +837,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 		foreach (AIAgent agent : pair.m_aAgents)
 		{
 			if (!agent || !agent.GetControlledEntity() || IsReleased(agent) || AtPointCover(agent))
+				continue;
+
+			if (ServingTreatment(agent))
 				continue;
 
 			if (m_mSettledAt.Contains(agent))
@@ -1230,6 +1284,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 			if (m_mSettledAt.Contains(agent) || IsReleased(agent) || AtPointCover(agent))
 				continue;
 
+			if (ServingTreatment(agent))
+				continue;
+
 			// A new order, a stance change, or a look snap drops him off
 			// the wall onto the side he climbed from.
 			if (KK_AgentMove.CrossingObstacle(agent))
@@ -1264,6 +1321,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 		foreach (AIAgent agent : pair.m_aAgents)
 		{
 			if (!agent || m_mSettledAt.Contains(agent) || IsReleased(agent) || AtPointCover(agent))
+				continue;
+
+			if (ServingTreatment(agent))
 				continue;
 
 			KK_AgentMove.SetWantedSpeed(agent, speed);
@@ -1356,7 +1416,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 	{
 		foreach (AIAgent agent : pair.m_aAgents)
 		{
-			if (IsReleased(agent) || AtPointCover(agent))
+			if (IsReleased(agent) || AtPointCover(agent) || ServingTreatment(agent))
 				continue;
 
 			SetCrouch(agent, crouch);
@@ -1689,6 +1749,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 			if (!agent || !agent.GetControlledEntity() || IsReleased(agent) || AtPointCover(agent))
 				continue;
 
+			if (ServingTreatment(agent))
+				continue;
+
 			// The sprint order from this frame has not started yet. A speed of
 			// zero here is him standing at the start, not him waiting at the slot.
 			KK_AttackMover mover = MoverFor(agent);
@@ -2013,6 +2076,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 			if (!agent || !agent.GetControlledEntity() || IsReleased(agent) || AtPointCover(agent))
 				continue;
 
+			if (ServingTreatment(agent))
+				continue;
+
 			KK_AgentMove.Issue(
 				this,
 				m_Group,
@@ -2032,7 +2098,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 	{
 		foreach (AIAgent agent : pair.m_aAgents)
 		{
-			if (!agent || IsReleased(agent) || AtPointCover(agent))
+			if (!agent || IsReleased(agent) || AtPointCover(agent) || ServingTreatment(agent))
 				continue;
 
 			IEntity body = agent.GetControlledEntity();
@@ -2053,10 +2119,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 		foreach (AIAgent agent : pair.m_aAgents)
 		{
-			if (!agent || IsReleased(agent))
+			if (!agent || IsReleased(agent) || ServingTreatment(agent))
 				continue;
-
-			if (haveAxis && !HasLivingTarget(agent))
 				LookAgentDownLane(agent, axis);
 		}
 	}
@@ -2162,7 +2226,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 			foreach (AIAgent agent : pair.m_aAgents)
 			{
-				if (!agent || !agent.GetControlledEntity())
+				if (!agent || !agent.GetControlledEntity() || ServingTreatment(agent))
 					continue;
 
 				float distance = FlatDistance(
@@ -3183,6 +3247,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 	protected void ReleaseSoldiers()
 	{
+		EndTreatment();
+
 		for (int i = 0; i < m_mPairOf.Count(); i++)
 		{
 			AIAgent agent = m_mPairOf.GetKey(i);
@@ -3332,6 +3398,504 @@ class KK_AttackActivity : SCR_AIActivityBase
 		EAIActionState state = GetActionState();
 		return state != EAIActionState.FAILED &&
 			state != EAIActionState.COMPLETED;
+	}
+
+	// The push leaves these men. A live contact puts them back on it.
+	protected bool ServingTreatment(AIAgent agent)
+	{
+		return agent && m_Treatment.Contains(agent);
+	}
+
+	protected bool SquadContactOpen()
+	{
+		if (SquadInFight())
+			return true;
+
+		foreach (KK_AttackPair pair : m_aPairs)
+		{
+			if (!pair)
+				continue;
+
+			foreach (AIAgent agent : pair.m_aAgents)
+			{
+				if (agent && KK_GarrisonHold.EngageContactOpen(agent))
+					return true;
+			}
+		}
+
+		return false;
+	}
+
+	protected bool NeedsTreatment(AIAgent agent)
+	{
+		if (!agent || !agent.GetControlledEntity())
+			return false;
+
+		if (!CanFight(agent) && !KK_GarrisonHold.IsDown(agent))
+			return false;
+
+		if (KK_GarrisonHold.IsDown(agent))
+			return true;
+
+		return KK_GarrisonHold.NeedsMedical(agent);
+	}
+
+	// Fighters still on the push, all of them inside the finish distance.
+	// A medic out with a patient does not count.
+	protected bool FightersInside()
+	{
+		bool any = false;
+
+		foreach (KK_AttackPair pair : m_aPairs)
+		{
+			if (!pair)
+				continue;
+
+			foreach (AIAgent agent : pair.m_aAgents)
+			{
+				if (!CanFight(agent) || ServingTreatment(agent))
+					continue;
+
+				if (!agent.GetControlledEntity())
+					continue;
+
+				float distance = FlatDistance(agent.GetControlledEntity().GetOrigin(), m_vTarget);
+				if (distance > Arrival())
+					return false;
+
+				any = true;
+			}
+		}
+
+		return any;
+	}
+
+	// Every man who can walk is at the point, including a medic who has finished.
+	protected bool WalkersInside()
+	{
+		bool any = false;
+
+		foreach (KK_AttackPair pair : m_aPairs)
+		{
+			if (!pair)
+				continue;
+
+			foreach (AIAgent agent : pair.m_aAgents)
+			{
+				if (!CanFight(agent))
+					continue;
+
+				if (!agent.GetControlledEntity())
+					continue;
+
+				float distance = FlatDistance(agent.GetControlledEntity().GetOrigin(), m_vTarget);
+				if (distance > Arrival())
+					return false;
+
+				any = true;
+			}
+		}
+
+		return any;
+	}
+
+	// Someone can still be helped. A downed man with nobody able to treat him does not hold the next order.
+	protected bool TreatmentBlocksHandoff()
+	{
+		foreach (KK_AttackPair pair : m_aPairs)
+		{
+			if (!pair)
+				continue;
+
+			foreach (AIAgent agent : pair.m_aAgents)
+			{
+				if (!NeedsTreatment(agent))
+					continue;
+
+				if (KK_GarrisonHold.IsDown(agent))
+				{
+					if (SomeoneCanTreat(agent))
+						return true;
+
+					continue;
+				}
+
+				if (KK_GarrisonHold.CanTreatPatient(agent, agent) || SomeoneCanTreat(agent))
+					return true;
+			}
+		}
+
+		return false;
+	}
+
+	protected bool SomeoneCanTreat(AIAgent patient)
+	{
+		foreach (KK_AttackPair pair : m_aPairs)
+		{
+			if (!pair)
+				continue;
+
+			foreach (AIAgent agent : pair.m_aAgents)
+			{
+				if (!agent || agent == patient || !CanFight(agent))
+					continue;
+
+				if (KK_GarrisonHold.CanTreatPatient(agent, patient))
+					return true;
+			}
+		}
+
+		return false;
+	}
+
+	// An item is already in someone's hands. The push waits for that gesture.
+	protected bool GestureInProgress()
+	{
+		if (m_Medic && KK_GarrisonHold.HealingNow(m_Medic))
+			return true;
+
+		foreach (AIAgent agent : m_Treatment)
+		{
+			if (agent && KK_GarrisonHold.HealingNow(agent))
+				return true;
+		}
+
+		return false;
+	}
+
+	// keepGesture leaves a medic, and the man he is treating, on an item
+	// that is already in his hands. Everyone else goes back to the push.
+	protected void EndTreatment(bool keepGesture = false)
+	{
+		bool medicBusy = keepGesture && GestureInProgress();
+		array<AIAgent> release = {};
+		foreach (AIAgent agent : m_Treatment)
+		{
+			if (!agent)
+				continue;
+
+			if (medicBusy && (agent == m_Medic || agent == m_MedicPatient))
+				continue;
+
+			if (keepGesture && KK_GarrisonHold.HealingNow(agent))
+				continue;
+
+			release.Insert(agent);
+		}
+
+		foreach (AIAgent agent : release)
+		{
+			KK_GarrisonHold.SetMedicDetail(agent, false);
+			RestorePace(agent);
+			m_Treatment.RemoveItem(agent);
+		}
+
+		if (m_Treatment.Count() > 0)
+			return;
+
+		m_Medic = null;
+		m_MedicPatient = null;
+		m_bMedicHeld = false;
+	}
+
+	protected void UpdateTreatment(float now)
+	{
+		array<AIAgent> patients = {};
+		foreach (KK_AttackPair pair : m_aPairs)
+		{
+			if (!pair)
+				continue;
+
+			foreach (AIAgent agent : pair.m_aAgents)
+			{
+				if (NeedsTreatment(agent))
+					patients.Insert(agent);
+			}
+		}
+
+		if (patients.Count() == 0)
+		{
+			EndTreatment(true);
+			return;
+		}
+
+		bool medicBusy = GestureInProgress();
+		AIAgent busyMedic = m_Medic;
+		AIAgent busyPatient = m_MedicPatient;
+
+		AIAgent patient = PickPatient(patients);
+		AIAgent medic = null;
+		bool standingNeedsHelp = patient && !KK_GarrisonHold.IsDown(patient) && !KK_GarrisonHold.CanTreatPatient(patient, patient);
+		if (patient && (KK_GarrisonHold.IsDown(patient) || standingNeedsHelp))
+			medic = PickMedic(patient);
+
+		ref set<AIAgent> next = new set<AIAgent>();
+		foreach (AIAgent agent : patients)
+		{
+			if (KK_GarrisonHold.IsDown(agent))
+			{
+				next.Insert(agent);
+				continue;
+			}
+
+			if (KK_GarrisonHold.CanTreatPatient(agent, agent) || (agent == patient && medic))
+				next.Insert(agent);
+		}
+
+		if (medic)
+			next.Insert(medic);
+
+		if (medicBusy)
+		{
+			if (busyMedic)
+				next.Insert(busyMedic);
+
+			if (busyPatient)
+				next.Insert(busyPatient);
+		}
+
+		foreach (AIAgent agent : m_Treatment)
+		{
+			if (agent && !next.Contains(agent))
+			{
+				KK_GarrisonHold.SetMedicDetail(agent, false);
+				RestorePace(agent);
+			}
+		}
+
+		foreach (AIAgent agent : next)
+		{
+			if (!m_Treatment.Contains(agent))
+				PullOffPush(agent);
+		}
+
+		m_Treatment.Clear();
+		foreach (AIAgent agent : next)
+		{
+			m_Treatment.Insert(agent);
+			KK_GarrisonHold.SetMedicDetail(agent, true);
+		}
+
+		if (medicBusy)
+		{
+			m_Medic = busyMedic;
+			m_MedicPatient = busyPatient;
+			return;
+		}
+
+		m_Medic = medic;
+		m_MedicPatient = patient;
+
+		foreach (AIAgent agent : patients)
+		{
+			if (next.Contains(agent))
+				HoldPatient(agent);
+		}
+
+		if (!medic || !patient)
+			return;
+
+		IEntity medicBody = medic.GetControlledEntity();
+		IEntity patientBody = patient.GetControlledEntity();
+		if (!medicBody || !patientBody)
+			return;
+
+		float apart = FlatDistance(medicBody.GetOrigin(), patientBody.GetOrigin());
+		if (apart > 2.5)
+		{
+			m_bMedicHeld = false;
+			CharacterControllerComponent walking = CharacterControllerComponent.Cast(
+				medicBody.FindComponent(CharacterControllerComponent)
+			);
+			if (walking)
+				walking.OverrideMaxSpeed(1);
+
+			if (now - m_fMedicOrderAt >= KK_AgentMove.REISSUE_INTERVAL_MS)
+			{
+				KK_GarrisonHold.SetBoundSprint(medic, false);
+				KK_AgentMove.Issue(
+					this,
+					m_Group,
+					medic,
+					patientBody.GetOrigin(),
+					m_mSoloHandlers,
+					KK_AgentMove.PRIORITY_LEVEL,
+					EMovementType.WALK
+				);
+				m_fMedicOrderAt = now;
+			}
+
+			return;
+		}
+
+		if (!m_bMedicHeld)
+		{
+			CancelAgent(medic);
+			m_bMedicHeld = true;
+		}
+
+		CharacterControllerComponent stopped = CharacterControllerComponent.Cast(
+			medicBody.FindComponent(CharacterControllerComponent)
+		);
+		if (stopped)
+			stopped.OverrideMaxSpeed(0);
+
+		KK_GarrisonHold.TryMedicTreat(medic, patient);
+	}
+
+	protected AIAgent PickPatient(array<AIAgent> patients)
+	{
+		AIAgent bestDown;
+		float bestDownDist = 0;
+		AIAgent bestHurt;
+		float bestHurtDist = 0;
+		bool haveDown;
+		bool haveHurt;
+
+		foreach (AIAgent patient : patients)
+		{
+			if (!patient || !patient.GetControlledEntity())
+				continue;
+
+			float along = FlatDistance(patient.GetControlledEntity().GetOrigin(), m_vTarget);
+			if (KK_GarrisonHold.IsDown(patient))
+			{
+				if (!haveDown || along > bestDownDist)
+				{
+					bestDown = patient;
+					bestDownDist = along;
+					haveDown = true;
+				}
+
+				continue;
+			}
+
+			if (!haveHurt || along > bestHurtDist)
+			{
+				bestHurt = patient;
+				bestHurtDist = along;
+				haveHurt = true;
+			}
+		}
+
+		if (haveDown)
+			return bestDown;
+
+		return bestHurt;
+	}
+
+	protected AIAgent PickMedic(AIAgent patient)
+	{
+		if (!patient || !patient.GetControlledEntity())
+			return null;
+
+		AIAgent best;
+		float bestDist = 0;
+		vector origin = patient.GetControlledEntity().GetOrigin();
+
+		foreach (KK_AttackPair pair : m_aPairs)
+		{
+			if (!pair)
+				continue;
+
+			foreach (AIAgent agent : pair.m_aAgents)
+			{
+				if (!CanFight(agent) || agent == patient || !agent.GetControlledEntity())
+					continue;
+
+				if (!KK_GarrisonHold.CanTreatPatient(agent, patient))
+					continue;
+
+				float distance = FlatDistance(agent.GetControlledEntity().GetOrigin(), origin);
+				if (best && distance >= bestDist)
+					continue;
+
+				best = agent;
+				bestDist = distance;
+			}
+		}
+
+		return best;
+	}
+
+	protected void RestorePace(AIAgent agent)
+	{
+		if (!agent || KK_GarrisonHold.HealingNow(agent))
+			return;
+
+		IEntity body = agent.GetControlledEntity();
+		if (!body)
+			return;
+
+		CharacterControllerComponent controller = CharacterControllerComponent.Cast(
+			body.FindComponent(CharacterControllerComponent)
+		);
+		if (controller)
+			controller.OverrideMaxSpeed(1);
+	}
+
+	protected void HoldPatient(AIAgent patient)
+	{
+		if (!patient)
+			return;
+
+		KK_GarrisonHold.SetBoundSprint(patient, false);
+		if (!KK_GarrisonHold.IsDown(patient))
+			KK_GarrisonHold.HoldForHeal(patient);
+	}
+
+	protected void PullOffPush(AIAgent agent)
+	{
+		if (!agent)
+			return;
+
+		CancelAgent(agent);
+		KK_GarrisonHold.SetBoundSprint(agent, false);
+		IEntity body = agent.GetControlledEntity();
+		if (body)
+			KK_GarrisonHold.SetPinned(body, false);
+	}
+
+	// Men who finished treatment, or never left, and are still short of a hold.
+	protected void RecallStragglers(float now)
+	{
+		foreach (KK_AttackPair pair : m_aPairs)
+		{
+			if (!pair)
+				continue;
+
+			foreach (AIAgent agent : pair.m_aAgents)
+			{
+				if (!CanFight(agent) || ServingTreatment(agent) || IsReleased(agent))
+					continue;
+
+				if (!agent.GetControlledEntity())
+					continue;
+
+				float distance = FlatDistance(agent.GetControlledEntity().GetOrigin(), m_vTarget);
+				if (distance <= Arrival())
+					continue;
+
+				if (
+					m_mReturnAt.Contains(agent) &&
+					now - m_mReturnAt.Get(agent) < KK_AgentMove.REISSUE_INTERVAL_MS
+				)
+					continue;
+
+				KK_GarrisonHold.SetBoundSprint(agent, false);
+				RestorePace(agent);
+				KK_AgentMove.Issue(
+					this,
+					m_Group,
+					agent,
+					m_vTarget,
+					m_mSoloHandlers,
+					KK_AgentMove.PRIORITY_LEVEL,
+					EMovementType.RUN
+				);
+				m_mReturnAt.Set(agent, now);
+			}
+		}
 	}
 
 	// Another order sits behind this one. The hold at the point is for

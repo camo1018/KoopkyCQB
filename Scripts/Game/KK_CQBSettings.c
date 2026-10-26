@@ -140,6 +140,9 @@ modded class SCR_BaseGameMode
 	[Attribute("1", UIWidgets.CheckBox, "Allow AI on attack waypoints to engage more quickly than what vanilla AI allows by skipping enemy confirmation stage when a target is first spotted.", category: "Koopky CQB/Attack")]
 	protected bool m_bKK_AttackEngage;
 
+	[Attribute("1", UIWidgets.CheckBox, "If enabled, a medic leaves an attack push to treat men who are down or still need treatment, behind the squad. Everyone else keeps moving. A live contact keeps them in the fight. With another waypoint queued, the squad waits at the point until those men catch up and the squad has treated what it can.", category: "Koopky CQB/Attack")]
+	protected bool m_bKK_AttackMedic;
+
 	[Attribute("2", UIWidgets.EditBox, "Upon first contact with an enemy, engaging unit will stop to engage the target for this many seconds before handing off the movement to base AI.", category: "Koopky CQB/Attack")]
 	protected float m_fKK_AttackEngageInitial;
 
@@ -404,6 +407,7 @@ modded class SCR_BaseGameMode
 			KK_ReadFloat(context, "Pause", m_fKK_AttackPause);
 			KK_ReadFloat(context, "CoverHandoff", m_fKK_CoverHandoff);
 			KK_ReadBool(context, "AttackEngage", m_bKK_AttackEngage);
+			KK_ReadBool(context, "AttackMedic", m_bKK_AttackMedic);
 			KK_ReadFloat(context, "AttackEngageInitial", m_fKK_AttackEngageInitial);
 			KK_ReadFloat(context, "AttackEngageInterval", m_fKK_AttackEngageInterval);
 			KK_ReadFloat(context, "AttackEngageRepeat", m_fKK_AttackEngageRepeat);
@@ -613,6 +617,7 @@ modded class SCR_BaseGameMode
 		context.WriteValue("Pause", m_fKK_AttackPause);
 		context.WriteValue("CoverHandoff", m_fKK_CoverHandoff);
 		context.WriteValue("AttackEngage", m_bKK_AttackEngage);
+		context.WriteValue("AttackMedic", m_bKK_AttackMedic);
 		context.WriteValue("AttackEngageInitial", m_fKK_AttackEngageInitial);
 		context.WriteValue("AttackEngageInterval", m_fKK_AttackEngageInterval);
 		context.WriteValue("AttackEngageRepeat", m_fKK_AttackEngageRepeat);
@@ -789,6 +794,11 @@ modded class SCR_BaseGameMode
 	bool KK_GetAttackEngage()
 	{
 		return m_bKK_AttackEngage;
+	}
+
+	bool KK_GetAttackMedic()
+	{
+		return m_bKK_AttackMedic;
 	}
 
 	float KK_GetAttackEngageInitial()
@@ -1118,6 +1128,7 @@ modded class SCR_BaseGameMode
 	void KK_SetAttackPause(float value) { m_fKK_AttackPause = value; }
 	void KK_SetCoverHandoff(float value) { m_fKK_CoverHandoff = value; }
 	void KK_SetAttackEngage(bool value) { m_bKK_AttackEngage = value; }
+	void KK_SetAttackMedic(bool value) { m_bKK_AttackMedic = value; }
 	void KK_SetAttackEngageInitial(float value) { m_fKK_AttackEngageInitial = value; }
 	void KK_SetAttackEngageInterval(float value) { m_fKK_AttackEngageInterval = value; }
 	void KK_SetAttackEngageRepeat(float value) { m_fKK_AttackEngageRepeat = value; }
