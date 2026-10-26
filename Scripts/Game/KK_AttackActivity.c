@@ -113,6 +113,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 	// After the last target drops, keep the attack in charge this long
 	// so a flicker does not plant him back in the cover.
 	protected static const float FIGHT_CLEAR_MS = 4000;
+	// Threatened at the point, and the round still cannot reach him.
+	// He leaves that cover instead of standing in it.
+	protected static const float COVER_LANE_STUCK_MS = 2000;
 	// Below this he has stopped. Faster than this he is still on the sprint,
 	// and taking the sprint flag off turns that move into a sidestep.
 	protected static const float MEMBER_STOP = 1.25;
@@ -2229,6 +2232,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 				if (!agent || !agent.GetControlledEntity() || ServingTreatment(agent))
 					continue;
 
+				if (ShiftIfStuck(agent, pair, now))
+					continue;
+
 				float distance = FlatDistance(
 					agent.GetControlledEntity().GetOrigin(),
 					m_vTarget
@@ -2488,6 +2494,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (!m_mCoverHold.Contains(agent))
 		{
 			CancelAgent(agent);
+			KK_GarrisonHold.SetCoverShift(agent, false);
 			KK_GarrisonHold.SetPinned(body, false);
 			SetCrouch(agent, true);
 			ApplyWeaponForSpeed(agent, EMovementType.WALK);
@@ -2539,6 +2546,64 @@ class KK_AttackActivity : SCR_AIActivityBase
 		int count = m_aPointCovers.Count();
 		vector spot = m_aPointCovers[Math.Mod(index, count)];
 		return SpreadCover(spot, index / count);
+	}
+
+	// At the point, and the shot from here has failed long enough. He takes
+	// the next cover. One cover has nowhere to go, so he stays and keeps
+	// trying the return shot.
+	protected bool ShiftIfStuck(
+		AIAgent agent,
+		notnull KK_AttackPair pair,
+		float now)
+	{
+		if (!agent || !agent.GetControlledEntity())
+			return false;
+
+		float distance = FlatDistance(agent.GetControlledEntity().GetOrigin(), m_vTarget);
+		bool atPoint = distance <= Arrival() ||
+			(m_mCoverSlot.Contains(agent) && distance <= CoverRadius());
+		if (!atPoint)
+			return false;
+
+		if (KK_GarrisonHold.IsCoverShift(agent))
+		{
+			vector slot = CoverSlot(pair, agent);
+			bool planted = FlatDistance(agent.GetControlledEntity().GetOrigin(), slot) <= COVER_REACH;
+			if (planted)
+			{
+				KK_GarrisonHold.SetCoverShift(agent, false);
+				return false;
+			}
+
+			m_Released.RemoveItem(agent);
+			KK_GarrisonHold.ReleaseEngageFeet(agent);
+			SeekPointCover(agent, pair, now);
+			return true;
+		}
+
+		if (KK_GarrisonHold.CannotShoot(agent))
+			return false;
+
+		if (!KK_GarrisonHold.EngageLaneBlocked(agent, COVER_LANE_STUCK_MS))
+			return false;
+
+		EnsurePointCovers();
+		if (!m_aPointCovers || m_aPointCovers.Count() < 2)
+			return false;
+
+		if (!m_mCoverSlot.Contains(agent))
+			CoverSlot(pair, agent);
+		else
+			AdvanceCover(agent);
+
+		m_Released.RemoveItem(agent);
+		m_mCoverHold.Remove(agent);
+		m_mCoverAt.Remove(agent);
+		KK_GarrisonHold.SetCoverShift(agent, true);
+		KK_GarrisonHold.ClearEngageLaneBlock(agent);
+		KK_GarrisonHold.ReleaseEngageFeet(agent);
+		SeekPointCover(agent, pair, now);
+		return true;
 	}
 
 	// Planted long enough, and not in a shot. One cover has nowhere to go.

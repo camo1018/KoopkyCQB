@@ -892,6 +892,14 @@ class KK_GarrisonHold
 	protected static ref array<BaseTarget> s_EngageScan = new array<BaseTarget>();
 	// Feet locked for a forced engage stop. A cover pin is a different set.
 	protected static ref set<IEntity> s_EngageStop = new set<IEntity>();
+	// Walking to another cover at the point. The shot from this spot cannot
+	// reach the man who is shooting, so the engage stop stays off until he
+	// is planted or that lane opens.
+	protected static ref set<IEntity> s_CoverShift = new set<IEntity>();
+	// World time the projectile lane to that man first failed. Cleared when
+	// a round can get there, or when he leaves the spot.
+	protected static ref map<IEntity, float> s_LaneBlockedAt =
+		new map<IEntity, float>();
 	// No carried gun can be fed. Engage stays off until one can.
 	protected static ref set<IEntity> s_EngageUnarmed = new set<IEntity>();
 	// A shot this attack soldier heard. The shooter can still be unknown
@@ -1110,6 +1118,8 @@ class KK_GarrisonHold
 	protected static const float MG_BURST_FAR_M = 100;
 	// Teammates domed in the back are the man just ahead. The ray stops here.
 	protected static const float LANE_NEAR_M = 20;
+	// A shooter who can hit a squadmate this close is close enough to answer.
+	protected static const float SQUAD_RETURN_M = 80;
 	protected static ref TraceParam s_LaneTrace;
 	protected static IEntity s_LaneViewer;
 	protected static IEntity s_LaneTarget;
@@ -5304,6 +5314,8 @@ class KK_GarrisonHold
 		s_AttackSearch.RemoveItem(body);
 		s_AttackGatherAt.Remove(body);
 		s_AttackGather.Remove(body);
+		s_CoverShift.RemoveItem(body);
+		s_LaneBlockedAt.Remove(body);
 		EndEngageEpisode(body, false);
 		ReleasePerceivedEnemy(body);
 		ForgetSprintEnemy(body);
@@ -5404,7 +5416,7 @@ class KK_GarrisonHold
 
 		if (EngageHoldActive(body, now))
 		{
-			SetEngageStop(body, true);
+			SetEngageStop(body, !IsCoverShift(body));
 			HoldEngageShot(body, enemy, aim);
 			return;
 		}
@@ -5414,7 +5426,7 @@ class KK_GarrisonHold
 		if (EngagePeriodicDue(body, now))
 		{
 			BeginEngageHold(body, now, EngageRepeatMs());
-			SetEngageStop(body, true);
+			SetEngageStop(body, !IsCoverShift(body));
 			HoldEngageShot(body, enemy, aim);
 			return;
 		}
@@ -5433,13 +5445,15 @@ class KK_GarrisonHold
 			if (point == vector.Zero && enemy)
 				point = ShotAimPoint(enemy);
 
+			bool laneClear = point == vector.Zero || !FriendlyInEngageLane(body, enemy, point);
+			NoteEngageLane(body, point != vector.Zero && !laneClear);
 			if (
 				point != vector.Zero &&
 				EngageAimOnPoint(body, point) &&
 				WeaponIsRaised(body) &&
 				WeaponCanAcceptFire(body) &&
 				!LauncherAgainstInfantry(body, enemy) &&
-				!FriendlyInEngageLane(body, enemy, point)
+				laneClear
 			)
 			{
 				ApplyEngageDiscipline(body, point);
@@ -5527,6 +5541,7 @@ class KK_GarrisonHold
 		// The round has to reach him without a friendly in front of the
 		// muzzle. The rifle still stays on the point while that lane is shut.
 		bool laneClear = point == vector.Zero || !FriendlyInEngageLane(body, enemy, point);
+		NoteEngageLane(body, point != vector.Zero && !laneClear);
 		bool changing = false;
 		CharacterControllerComponent engageController = Controller(body);
 		if (engageController && engageController.IsChangingFireMode())
@@ -5960,6 +5975,7 @@ class KK_GarrisonHold
 
 		bool had = s_EngageEpisode.Contains(body);
 		s_EngageEpisode.RemoveItem(body);
+		s_LaneBlockedAt.Remove(body);
 		// After the episode is gone, a man who still needs a bandage
 		// counts as healing, and this stop must not give him his speed back.
 		SetEngageStop(body, false);
@@ -6055,6 +6071,85 @@ class KK_GarrisonHold
 			controller.OverrideMaxSpeed(0);
 		else
 			controller.OverrideMaxSpeed(1);
+	}
+
+	// The cover walk at the point. Engage had locked his feet on the threat.
+	static void ReleaseEngageFeet(IEntity soldier)
+	{
+		SetEngageStop(CharacterBody(soldier), false);
+	}
+
+	static void SetCoverShift(IEntity soldier, bool shifting)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		if (shifting)
+			s_CoverShift.Insert(body);
+		else
+			s_CoverShift.RemoveItem(body);
+	}
+
+	static bool IsCoverShift(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		return body && s_CoverShift.Contains(body);
+	}
+
+	// True once the shot at this spot has failed for that long. A clear
+	// lane, or leaving the spot, drops the clock.
+	static bool EngageLaneBlocked(IEntity soldier, float forMs)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !s_LaneBlockedAt.Contains(body))
+			return false;
+
+		if (forMs <= 0)
+			return true;
+
+		return WorldTime() - s_LaneBlockedAt.Get(body) >= forMs;
+	}
+
+	static void ClearEngageLaneBlock(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (body)
+			s_LaneBlockedAt.Remove(body);
+	}
+
+	// A blocked lane while he is walking to the next cover does not start
+	// the clock. An open lane ends that walk, so the next pass can plant
+	// and shoot.
+	protected static void NoteEngageLane(IEntity body, bool blocked)
+	{
+		if (!body)
+			return;
+
+		if (s_CoverShift.Contains(body))
+		{
+			if (!blocked)
+				s_CoverShift.RemoveItem(body);
+
+			return;
+		}
+
+		// A bound is already a move. The clock is the time he spends
+		// stopped on a spot the round cannot leave.
+		if (AttackTraveling(body))
+		{
+			s_LaneBlockedAt.Remove(body);
+			return;
+		}
+
+		if (!blocked)
+		{
+			s_LaneBlockedAt.Remove(body);
+			return;
+		}
+
+		if (!s_LaneBlockedAt.Contains(body))
+			s_LaneBlockedAt.Set(body, WorldTime());
 	}
 
 	protected static bool AttackEngageEnabled()
@@ -6752,7 +6847,7 @@ class KK_GarrisonHold
 		// A step is still carrying him. Writing the heading here yaws him
 		// onto the man, the move yaws him back, and that lasts until the
 		// contact ends.
-		if (AttackTraveling(body) || !LifeStanding(controller))
+		if (AttackTraveling(body) || IsCoverShift(body) || !LifeStanding(controller))
 			return point;
 
 		vector flat = point - body.GetOrigin();
@@ -11926,8 +12021,9 @@ class KK_GarrisonHold
 	// the hit. The target himself is not a block. A wall or a pane ends
 	// the ray. A man he cannot see is a guess. A second ray on the same
 	// layer checks cover. One thin shell is stepped past on that ray
-	// only. What remains, short of the aim point, is cover and he does
-	// not fire.
+	// only. What remains, short of the aim point, is cover. His body is
+	// tried next, then a ray back from him, before that cover cancels
+	// the shot.
 	protected static bool FriendlyInEngageLane(IEntity body, IEntity enemy, vector aim)
 	{
 		if (!body || aim == vector.Zero)
@@ -11951,7 +12047,33 @@ class KK_GarrisonHold
 		if (!unseen)
 			return false;
 
-		return ProjectileBlocks(body, enemy, from, aim);
+		if (!ProjectileBlocks(body, enemy, from, aim))
+			return false;
+
+		// The ray toward him stopped on the brush around his body. His own
+		// shot starts inside that brush, so the same line traced back from
+		// him reaches us when ours does not. A lane he can use is a lane
+		// we shoot down.
+		IEntity shooter = enemy;
+		if (!shooter && s_HeardShooter.Contains(body))
+			shooter = s_HeardShooter.Get(body);
+
+		// The aim point is scattered around a man in cover. A ray to that
+		// point can miss his body and stop on the brush beside him. His
+		// chest and his head are checked before giving up on the shot.
+		if (shooter && BodyShotReaches(body, shooter, from))
+		{
+			LogEngage(body, "return");
+			return false;
+		}
+
+		if (shooter && ShooterReachesSquad(shooter, body))
+		{
+			LogEngage(body, "return");
+			return false;
+		}
+
+		return true;
 	}
 
 	protected static string EngageLaneNote()
@@ -11960,6 +12082,156 @@ class KK_GarrisonHold
 			return "friendly";
 
 		return "solid";
+	}
+
+	// Our muzzle to his chest, then his head. The scattered aim is not used.
+	protected static bool BodyShotReaches(IEntity body, IEntity shooter, vector from)
+	{
+		vector chest = ChestPoint(shooter);
+		if (chest == vector.Zero)
+			chest = shooter.GetOrigin() + Vector(0, 1.2, 0);
+
+		if (RoundReaches(body, shooter, from, chest))
+			return true;
+
+		vector head = HeadPoint(shooter);
+		if (head == vector.Zero || vector.Distance(head, chest) < 0.05)
+			return false;
+
+		return RoundReaches(body, shooter, from, head);
+	}
+
+	// True when his muzzle or his eyes can put a round on this soldier or
+	// on a squadmate near him. Brush that wraps the shooter is skipped by
+	// starting the ray on him.
+	protected static bool ShooterReachesSquad(IEntity shooter, IEntity defender)
+	{
+		if (!shooter || !defender || SameCharacter(shooter, defender))
+			return false;
+
+		if (!IsTargetable(shooter))
+			return false;
+
+		if (SharesGroup(defender, shooter) || KnownFriendly(defender, shooter))
+			return false;
+
+		if (vector.Distance(shooter.GetOrigin(), defender.GetOrigin()) > ATTACK_CONTACT_RANGE)
+			return false;
+
+		if (ShooterReaches(shooter, defender))
+			return true;
+
+		SCR_AIGroup group = GroupOf(defender);
+		if (!group)
+			return false;
+
+		array<AIAgent> agents = {};
+		group.GetAgents(agents);
+		foreach (AIAgent agent : agents)
+		{
+			if (!agent)
+				continue;
+
+			IEntity mate = agent.GetControlledEntity();
+			if (!mate || mate == defender || !IsTargetable(mate))
+				continue;
+
+			if (vector.Distance(defender.GetOrigin(), mate.GetOrigin()) > SQUAD_RETURN_M)
+				continue;
+
+			if (ShooterReaches(shooter, mate))
+				return true;
+		}
+
+		return false;
+	}
+
+	protected static bool ShooterReaches(IEntity shooter, IEntity defender)
+	{
+		vector chest = ChestPoint(defender);
+		if (chest == vector.Zero)
+			chest = defender.GetOrigin() + Vector(0, 1.2, 0);
+
+		if (RoundReaches(shooter, defender, EngageShotOrigin(shooter, chest, true), chest))
+			return true;
+
+		if (RoundReaches(shooter, defender, EngageShotOrigin(shooter, chest, false), chest))
+			return true;
+
+		vector head = HeadPoint(defender);
+		if (head == vector.Zero || vector.Distance(head, chest) < 0.05)
+			return false;
+
+		if (RoundReaches(shooter, defender, EngageShotOrigin(shooter, head, true), head))
+			return true;
+
+		return RoundReaches(shooter, defender, EngageShotOrigin(shooter, head, false), head);
+	}
+
+	// Muzzle first, then the eyes. A short step along the shot leaves his
+	// own weapon and the volume he is standing inside.
+	protected static vector EngageShotOrigin(IEntity shooter, vector toward, bool muzzle)
+	{
+		vector from;
+		if (muzzle)
+		{
+			from = MuzzlePosition(shooter, 0);
+		}
+		else
+		{
+			from = shooter.GetOrigin() + Vector(0, 1.6, 0);
+			ChimeraCharacter character = ChimeraCharacter.Cast(shooter);
+			if (character)
+				from = character.EyePosition();
+		}
+
+		vector dir = toward - from;
+		if (dir.Length() > 0.4)
+		{
+			dir.Normalize();
+			from = from + (dir * 0.25);
+		}
+
+		return from;
+	}
+
+	protected static bool RoundReaches(IEntity shooter, IEntity defender, vector from, vector aim)
+	{
+		if (!shooter || !defender || from == vector.Zero || aim == vector.Zero)
+			return false;
+
+		if (vector.Distance(from, aim) < 0.4)
+			return false;
+
+		BaseWorld world = null;
+		if (GetGame())
+			world = GetGame().GetWorld();
+
+		if (!world)
+			world = shooter.GetWorld();
+
+		if (!world)
+			return false;
+
+		s_LaneViewer = shooter;
+		s_LaneTarget = defender;
+		float fraction = TraceProjectile(world, from, aim);
+		bool reached = fraction >= 1 || LaneHitIsTarget() || LaneHitIsSquadmate(defender);
+		s_LaneViewer = null;
+		s_LaneTarget = null;
+		return reached;
+	}
+
+	protected static bool LaneHitIsSquadmate(IEntity defender)
+	{
+		if (!s_LaneTrace || !defender)
+			return false;
+
+		IEntity hit = CharacterOf(s_LaneTrace.TraceEnt);
+		if (!hit || SameCharacter(hit, s_LaneViewer))
+			return false;
+
+		return SameCharacter(hit, defender) || SharesGroup(defender, hit);
 	}
 
 	// One projectile ray. A friendly character on that line sets the lane
