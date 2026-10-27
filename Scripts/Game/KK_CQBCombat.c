@@ -904,13 +904,24 @@ class KK_GarrisonHold
 	protected static ref set<IEntity> s_EngageUnarmed = new set<IEntity>();
 	// A shot this attack soldier heard. The shooter can still be unknown
 	// to perception when the bush hides every aim point. The note is how
-	// long he keeps firing at that man. The place is the muzzle, used when
-	// the body itself was not on the event.
+	// long he keeps firing at that man. The place is the muzzle and the
+	// direction is the shot line, used when a later strike has to be
+	// compared with where he stands.
 	protected static ref map<IEntity, IEntity> s_HeardShooter =
 		new map<IEntity, IEntity>();
 	protected static ref map<IEntity, vector> s_HeardPlace =
 		new map<IEntity, vector>();
+	protected static ref map<IEntity, vector> s_HeardDir =
+		new map<IEntity, vector>();
 	protected static ref map<IEntity, float> s_HeardWhen =
+		new map<IEntity, float>();
+	// Who last sent a bullet at this soldier, and when. A landed hit, a
+	// strike near his feet, and a strike past him on the shot line all
+	// write this. The lane ray can still miss a man in brush after one
+	// of those.
+	protected static ref map<IEntity, IEntity> s_HitBy =
+		new map<IEntity, IEntity>();
+	protected static ref map<IEntity, float> s_HitByAt =
 		new map<IEntity, float>();
 	protected static const float THREAT_CONTACT_S = 8;
 	protected static const float ATTACK_CONTACT_RANGE = 180;
@@ -1118,8 +1129,16 @@ class KK_GarrisonHold
 	protected static const float MG_BURST_FAR_M = 100;
 	// Teammates domed in the back are the man just ahead. The ray stops here.
 	protected static const float LANE_NEAR_M = 20;
-	// A shooter who can hit a squadmate this close is close enough to answer.
+	// A bullet that hit him, struck nearby, or landed past him. A
+	// squadmate this close counts as the same shot.
 	protected static const float SQUAD_RETURN_M = 80;
+	// His feet sit inside this radius of the shot line. A strike farther
+	// along that line then counts as a round that passed him.
+	protected static const float FLYBY_RADIUS = 13;
+	// Vanilla nearby impact. The strike is inside this of his feet.
+	protected static const float IMPACT_RADIUS = 10;
+	// The strike has to sit on the shot line. Slack for drop.
+	protected static const float IMPACT_LINE_M = 4;
 	protected static ref TraceParam s_LaneTrace;
 	protected static IEntity s_LaneViewer;
 	protected static IEntity s_LaneTarget;
@@ -5316,6 +5335,8 @@ class KK_GarrisonHold
 		s_AttackGather.Remove(body);
 		s_CoverShift.RemoveItem(body);
 		s_LaneBlockedAt.Remove(body);
+		s_HitBy.Remove(body);
+		s_HitByAt.Remove(body);
 		EndEngageEpisode(body, false);
 		ReleasePerceivedEnemy(body);
 		ForgetSprintEnemy(body);
@@ -6524,7 +6545,7 @@ class KK_GarrisonHold
 	// Heard a shot. The vanilla reaction drops it when his side has not
 	// been seen yet, which is a man firing from a bush. The real faction
 	// is enough. The muzzle place is kept when the body is not on the event.
-	static void NoteAttackGunshot(IEntity listener, IEntity shooter, vector shotPos)
+	static void NoteAttackGunshot(IEntity listener, IEntity shooter, vector shotPos, vector shotDir)
 	{
 		IEntity body = CharacterBody(listener);
 		if (!body || !IsAttackSearch(body))
@@ -6568,7 +6589,91 @@ class KK_GarrisonHold
 			s_HeardShooter.Remove(body);
 
 		s_HeardPlace.Set(body, place);
+		vector dir = shotDir;
+		if (dir.Length() > 0.01)
+			dir.Normalize();
+		else
+			dir = vector.Zero;
+
+		s_HeardDir.Set(body, dir);
 		s_HeardWhen.Set(body, WorldTime());
+	}
+
+	// A round struck within the impact radius, or farther along his shot
+	// line than he stands. The event often has no shooter, so the man he
+	// just heard firing is the one who owns it.
+	static void NoteNearbyImpact(IEntity listener, AIDangerEvent danger)
+	{
+		IEntity body = CharacterBody(listener);
+		if (!body || !IsAttackSearch(body) || !danger)
+			return;
+
+		vector place = danger.GetPosition();
+		if (place == vector.Zero)
+			return;
+
+		IEntity shooter = ShotCharacter(danger.GetObject());
+		if (!shooter)
+			shooter = ShotCharacter(danger.GetVictim());
+
+		if (shooter && (SameCharacter(shooter, body) || SharesGroup(body, shooter) || KnownFriendly(body, shooter)))
+			return;
+
+		if (!shooter && s_HeardShooter.Contains(body) && s_HeardWhen.Contains(body))
+		{
+			if (WorldTime() - s_HeardWhen.Get(body) <= HeardShotMs())
+				shooter = s_HeardShooter.Get(body);
+		}
+
+		if (!shooter || SameCharacter(shooter, body))
+			return;
+
+		if (SharesGroup(body, shooter) || KnownFriendly(body, shooter))
+			return;
+
+		bool near = vector.DistanceSq(body.GetOrigin(), place) <= IMPACT_RADIUS * IMPACT_RADIUS;
+		if (!near && !ImpactLandedPast(body, shooter, place))
+			return;
+
+		NoteBulletThreat(body, shooter);
+	}
+
+	// His feet are inside the shot tube, and this strike is farther along
+	// that line than he is. The landing is the stop point. A round that
+	// stops short of him does not count.
+	protected static bool ImpactLandedPast(IEntity body, IEntity shooter, vector place)
+	{
+		if (!body || !shooter || place == vector.Zero)
+			return false;
+
+		if (!s_HeardDir.Contains(body) || !s_HeardPlace.Contains(body) || !s_HeardWhen.Contains(body))
+			return false;
+
+		if (WorldTime() - s_HeardWhen.Get(body) > HeardShotMs())
+			return false;
+
+		if (!s_HeardShooter.Contains(body) || !SameCharacter(s_HeardShooter.Get(body), shooter))
+			return false;
+
+		vector dir = s_HeardDir.Get(body);
+		if (dir.Length() < 0.01)
+			return false;
+
+		vector shotPos = s_HeardPlace.Get(body);
+		float along = vector.Dot(body.GetOrigin() - shotPos, dir);
+		if (along <= 0 || along > ATTACK_CONTACT_RANGE)
+			return false;
+
+		vector closest = shotPos + (dir * along);
+		if ((body.GetOrigin() - closest).Length() > FLYBY_RADIUS)
+			return false;
+
+		float landed = vector.Dot(place - shotPos, dir);
+		if (landed <= along)
+			return false;
+
+		vector strike = shotPos + (dir * landed);
+		return (place - strike).Length() <= IMPACT_LINE_M;
 	}
 
 	protected static bool HeardShooter(IEntity body, out IEntity enemy, out vector aim)
@@ -6654,7 +6759,17 @@ class KK_GarrisonHold
 			if (!shooter)
 				shooter = shot.GetObject();
 
-			NoteAttackGunshot(body, shooter, shot.GetPosition());
+			NoteAttackGunshot(body, shooter, shot.GetPosition(), shot.GetDirection());
+		}
+
+		for (int hit = 0; hit < count; hit++)
+		{
+			int hitRepeats;
+			AIDangerEvent hitEvent = agent.GetDangerEvent(hit, hitRepeats);
+			if (!hitEvent || hitEvent.GetDangerType() != EAIDangerEventType.Danger_ProjectileHit)
+				continue;
+
+			NoteNearbyImpact(body, hitEvent);
 		}
 	}
 
@@ -6665,6 +6780,7 @@ class KK_GarrisonHold
 
 		s_HeardShooter.Remove(body);
 		s_HeardPlace.Remove(body);
+		s_HeardDir.Remove(body);
 		s_HeardWhen.Remove(body);
 	}
 
@@ -10724,6 +10840,8 @@ class KK_GarrisonHold
 	// and neither does damage he deals to himself.
 	static void NoteTargetDamaged(IEntity hitOwner, BaseDamageContext damageContext)
 	{
+		NoteReturnHit(hitOwner, damageContext);
+
 		if (!damageContext || damageContext.damageValue <= 0 || !damageContext.instigator)
 			return;
 
@@ -10760,6 +10878,87 @@ class KK_GarrisonHold
 		}
 
 		return null;
+	}
+
+	// A bullet that landed. The lane ray is unchanged. This is only the
+	// record that lets him shoot back after that hit.
+	protected static void NoteReturnHit(IEntity hitOwner, BaseDamageContext damageContext)
+	{
+		if (!damageContext || damageContext.damageValue <= 0 || !damageContext.instigator)
+			return;
+
+		if (damageContext.damageType != EDamageType.KINETIC)
+			return;
+
+		IEntity victim = hitOwner;
+		if (!ChimeraCharacter.Cast(victim))
+			victim = damageContext.hitEntity;
+
+		victim = CharacterBody(victim);
+		IEntity shooter = InstigatorBody(damageContext.instigator);
+		if (!victim || !shooter || SameCharacter(shooter, victim))
+			return;
+
+		if (SharesGroup(victim, shooter) || KnownFriendly(victim, shooter))
+			return;
+
+		NoteBulletThreat(victim, shooter);
+	}
+
+	protected static void NoteBulletThreat(IEntity victim, IEntity shooter)
+	{
+		if (!victim || !shooter)
+			return;
+
+		s_HitBy.Set(victim, shooter);
+		s_HitByAt.Set(victim, WorldTime());
+	}
+
+	// He, or a squadmate near him, has already had a bullet from this man
+	// land on him, strike within the impact radius, or land past him on
+	// the shot line.
+	protected static bool ShooterHitSquad(IEntity shooter, IEntity body)
+	{
+		if (!shooter || !body)
+			return false;
+
+		if (HitByShooter(body, shooter))
+			return true;
+
+		SCR_AIGroup group = GroupOf(body);
+		if (!group)
+			return false;
+
+		array<AIAgent> agents = {};
+		group.GetAgents(agents);
+		foreach (AIAgent agent : agents)
+		{
+			if (!agent)
+				continue;
+
+			IEntity mate = agent.GetControlledEntity();
+			if (!mate || mate == body)
+				continue;
+
+			if (vector.Distance(body.GetOrigin(), mate.GetOrigin()) > SQUAD_RETURN_M)
+				continue;
+
+			if (HitByShooter(mate, shooter))
+				return true;
+		}
+
+		return false;
+	}
+
+	protected static bool HitByShooter(IEntity victim, IEntity shooter)
+	{
+		if (!victim || !shooter || !s_HitBy.Contains(victim) || !s_HitByAt.Contains(victim))
+			return false;
+
+		if (WorldTime() - s_HitByAt.Get(victim) > HeardShotMs())
+			return false;
+
+		return SameCharacter(s_HitBy.Get(victim), shooter);
 	}
 
 	protected static void StartBarrelMove(IEntity body, IEntity enemy, float now)
@@ -12021,9 +12220,9 @@ class KK_GarrisonHold
 	// the hit. The target himself is not a block. A wall or a pane ends
 	// the ray. A man he cannot see is a guess. A second ray on the same
 	// layer checks cover. One thin shell is stepped past on that ray
-	// only. What remains, short of the aim point, is cover. His body is
-	// tried next, then a ray back from him, before that cover cancels
-	// the shot.
+	// only. What remains, short of the aim point, is cover and he does
+	// not fire. A bullet from that man that hit him, struck within the
+	// impact radius, or landed past him on the shot line still shoots.
 	protected static bool FriendlyInEngageLane(IEntity body, IEntity enemy, vector aim)
 	{
 		if (!body || aim == vector.Zero)
@@ -12050,24 +12249,11 @@ class KK_GarrisonHold
 		if (!ProjectileBlocks(body, enemy, from, aim))
 			return false;
 
-		// The ray toward him stopped on the brush around his body. His own
-		// shot starts inside that brush, so the same line traced back from
-		// him reaches us when ours does not. A lane he can use is a lane
-		// we shoot down.
 		IEntity shooter = enemy;
 		if (!shooter && s_HeardShooter.Contains(body))
 			shooter = s_HeardShooter.Get(body);
 
-		// The aim point is scattered around a man in cover. A ray to that
-		// point can miss his body and stop on the brush beside him. His
-		// chest and his head are checked before giving up on the shot.
-		if (shooter && BodyShotReaches(body, shooter, from))
-		{
-			LogEngage(body, "return");
-			return false;
-		}
-
-		if (shooter && ShooterReachesSquad(shooter, body))
+		if (shooter && ShooterHitSquad(shooter, body))
 		{
 			LogEngage(body, "return");
 			return false;
@@ -12082,156 +12268,6 @@ class KK_GarrisonHold
 			return "friendly";
 
 		return "solid";
-	}
-
-	// Our muzzle to his chest, then his head. The scattered aim is not used.
-	protected static bool BodyShotReaches(IEntity body, IEntity shooter, vector from)
-	{
-		vector chest = ChestPoint(shooter);
-		if (chest == vector.Zero)
-			chest = shooter.GetOrigin() + Vector(0, 1.2, 0);
-
-		if (RoundReaches(body, shooter, from, chest))
-			return true;
-
-		vector head = HeadPoint(shooter);
-		if (head == vector.Zero || vector.Distance(head, chest) < 0.05)
-			return false;
-
-		return RoundReaches(body, shooter, from, head);
-	}
-
-	// True when his muzzle or his eyes can put a round on this soldier or
-	// on a squadmate near him. Brush that wraps the shooter is skipped by
-	// starting the ray on him.
-	protected static bool ShooterReachesSquad(IEntity shooter, IEntity defender)
-	{
-		if (!shooter || !defender || SameCharacter(shooter, defender))
-			return false;
-
-		if (!IsTargetable(shooter))
-			return false;
-
-		if (SharesGroup(defender, shooter) || KnownFriendly(defender, shooter))
-			return false;
-
-		if (vector.Distance(shooter.GetOrigin(), defender.GetOrigin()) > ATTACK_CONTACT_RANGE)
-			return false;
-
-		if (ShooterReaches(shooter, defender))
-			return true;
-
-		SCR_AIGroup group = GroupOf(defender);
-		if (!group)
-			return false;
-
-		array<AIAgent> agents = {};
-		group.GetAgents(agents);
-		foreach (AIAgent agent : agents)
-		{
-			if (!agent)
-				continue;
-
-			IEntity mate = agent.GetControlledEntity();
-			if (!mate || mate == defender || !IsTargetable(mate))
-				continue;
-
-			if (vector.Distance(defender.GetOrigin(), mate.GetOrigin()) > SQUAD_RETURN_M)
-				continue;
-
-			if (ShooterReaches(shooter, mate))
-				return true;
-		}
-
-		return false;
-	}
-
-	protected static bool ShooterReaches(IEntity shooter, IEntity defender)
-	{
-		vector chest = ChestPoint(defender);
-		if (chest == vector.Zero)
-			chest = defender.GetOrigin() + Vector(0, 1.2, 0);
-
-		if (RoundReaches(shooter, defender, EngageShotOrigin(shooter, chest, true), chest))
-			return true;
-
-		if (RoundReaches(shooter, defender, EngageShotOrigin(shooter, chest, false), chest))
-			return true;
-
-		vector head = HeadPoint(defender);
-		if (head == vector.Zero || vector.Distance(head, chest) < 0.05)
-			return false;
-
-		if (RoundReaches(shooter, defender, EngageShotOrigin(shooter, head, true), head))
-			return true;
-
-		return RoundReaches(shooter, defender, EngageShotOrigin(shooter, head, false), head);
-	}
-
-	// Muzzle first, then the eyes. A short step along the shot leaves his
-	// own weapon and the volume he is standing inside.
-	protected static vector EngageShotOrigin(IEntity shooter, vector toward, bool muzzle)
-	{
-		vector from;
-		if (muzzle)
-		{
-			from = MuzzlePosition(shooter, 0);
-		}
-		else
-		{
-			from = shooter.GetOrigin() + Vector(0, 1.6, 0);
-			ChimeraCharacter character = ChimeraCharacter.Cast(shooter);
-			if (character)
-				from = character.EyePosition();
-		}
-
-		vector dir = toward - from;
-		if (dir.Length() > 0.4)
-		{
-			dir.Normalize();
-			from = from + (dir * 0.25);
-		}
-
-		return from;
-	}
-
-	protected static bool RoundReaches(IEntity shooter, IEntity defender, vector from, vector aim)
-	{
-		if (!shooter || !defender || from == vector.Zero || aim == vector.Zero)
-			return false;
-
-		if (vector.Distance(from, aim) < 0.4)
-			return false;
-
-		BaseWorld world = null;
-		if (GetGame())
-			world = GetGame().GetWorld();
-
-		if (!world)
-			world = shooter.GetWorld();
-
-		if (!world)
-			return false;
-
-		s_LaneViewer = shooter;
-		s_LaneTarget = defender;
-		float fraction = TraceProjectile(world, from, aim);
-		bool reached = fraction >= 1 || LaneHitIsTarget() || LaneHitIsSquadmate(defender);
-		s_LaneViewer = null;
-		s_LaneTarget = null;
-		return reached;
-	}
-
-	protected static bool LaneHitIsSquadmate(IEntity defender)
-	{
-		if (!s_LaneTrace || !defender)
-			return false;
-
-		IEntity hit = CharacterOf(s_LaneTrace.TraceEnt);
-		if (!hit || SameCharacter(hit, s_LaneViewer))
-			return false;
-
-		return SameCharacter(hit, defender) || SharesGroup(defender, hit);
 	}
 
 	// One projectile ray. A friendly character on that line sets the lane
@@ -13637,9 +13673,31 @@ modded class SCR_AIDangerReaction_WeaponFired
 			if (!shooter)
 				shooter = shot.GetObject();
 
-			KK_GarrisonHold.NoteAttackGunshot(utility.m_OwnerEntity, shooter, shot.GetPosition());
-			KK_GarrisonHold.NoteAttackGunshot(utility.GetOwner(), shooter, shot.GetPosition());
+			KK_GarrisonHold.NoteAttackGunshot(utility.m_OwnerEntity, shooter, shot.GetPosition(), shot.GetDirection());
+			KK_GarrisonHold.NoteAttackGunshot(utility.GetOwner(), shooter, shot.GetPosition(), shot.GetDirection());
 		}
+
+		return super.PerformReaction(
+			utility,
+			threatSystem,
+			dangerEvent,
+			dangerEventCount
+		);
+	}
+}
+
+// A strike near him, or past him on the shot line. The threat call only
+// carries a count, so the position is read here, before that call.
+modded class SCR_AIDangerReaction_ProjectileHit
+{
+	override bool PerformReaction(
+		notnull SCR_AIUtilityComponent utility,
+		notnull SCR_AIThreatSystem threatSystem,
+		AIDangerEvent dangerEvent,
+		int dangerEventCount)
+	{
+		KK_GarrisonHold.NoteNearbyImpact(utility.m_OwnerEntity, dangerEvent);
+		KK_GarrisonHold.NoteNearbyImpact(utility.GetOwner(), dangerEvent);
 
 		return super.PerformReaction(
 			utility,
