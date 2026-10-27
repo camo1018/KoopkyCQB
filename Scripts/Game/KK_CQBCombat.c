@@ -905,8 +905,7 @@ class KK_GarrisonHold
 	// A shot this attack soldier heard. The shooter can still be unknown
 	// to perception when the bush hides every aim point. The note is how
 	// long he keeps firing at that man. The place is the muzzle and the
-	// direction is the shot line, used when a later strike has to be
-	// compared with where he stands.
+	// direction marks that shot. A hidden target traces this line once.
 	protected static ref map<IEntity, IEntity> s_HeardShooter =
 		new map<IEntity, IEntity>();
 	protected static ref map<IEntity, vector> s_HeardPlace =
@@ -916,7 +915,7 @@ class KK_GarrisonHold
 	protected static ref map<IEntity, float> s_HeardWhen =
 		new map<IEntity, float>();
 	// Who last sent a bullet at this soldier, and when. A landed hit, a
-	// strike near his feet, and a strike past him on the shot line all
+	// strike near his feet, and an open path from a shooter he heard all
 	// write this. The lane ray can still miss a man in brush after one
 	// of those.
 	protected static ref map<IEntity, IEntity> s_HitBy =
@@ -991,6 +990,24 @@ class KK_GarrisonHold
 	protected static ref map<IEntity, float> s_FireLogAt = new map<IEntity, float>();
 	protected static ref map<IEntity, float> s_EngageShotLogAt =
 		new map<IEntity, float>();
+	// Last threat note printed per soldier. The same gunshot and the same
+	// strike sit on the agent for many frames, so a repeat is not logged.
+	protected static ref map<IEntity, string> s_ThreatLineLog =
+		new map<IEntity, string>();
+	protected static ref map<IEntity, string> s_ThreatImpactLog =
+		new map<IEntity, string>();
+	protected static ref map<IEntity, string> s_ThreatHitLog =
+		new map<IEntity, string>();
+	protected static ref map<IEntity, string> s_ThreatPathLog =
+		new map<IEntity, string>();
+	// One path result per stored shot. The order evaluates much more
+	// often than the line changes.
+	protected static ref map<IEntity, string> s_PathKey =
+		new map<IEntity, string>();
+	protected static ref map<IEntity, bool> s_PathOpen =
+		new map<IEntity, bool>();
+	protected static IEntity s_PathExclude;
+	protected static IEntity s_PathTarget;
 	// Keys copied out of the live maps. Reused so a tick does not allocate.
 	protected static ref array<IEntity> s_SnapBodies = new array<IEntity>();
 	protected static ref array<IEntity> s_ShotBodies = new array<IEntity>();
@@ -1129,16 +1146,14 @@ class KK_GarrisonHold
 	protected static const float MG_BURST_FAR_M = 100;
 	// Teammates domed in the back are the man just ahead. The ray stops here.
 	protected static const float LANE_NEAR_M = 20;
-	// A bullet that hit him, struck nearby, or landed past him. A
-	// squadmate this close counts as the same shot.
+	// A bullet that hit him, struck nearby, or has an open path from a
+	// shooter he heard. A squadmate this close counts as the same shot.
 	protected static const float SQUAD_RETURN_M = 80;
-	// His feet sit inside this radius of the shot line. A strike farther
-	// along that line then counts as a round that passed him.
-	protected static const float FLYBY_RADIUS = 13;
+	// Five rays around the muzzle. One that reaches him means the path
+	// is open. Farther apart starts to test a different gap.
+	protected static const float PATH_RAY_SPREAD = 0.3;
 	// Vanilla nearby impact. The strike is inside this of his feet.
 	protected static const float IMPACT_RADIUS = 10;
-	// The strike has to sit on the shot line. Slack for drop.
-	protected static const float IMPACT_LINE_M = 4;
 	protected static ref TraceParam s_LaneTrace;
 	protected static IEntity s_LaneViewer;
 	protected static IEntity s_LaneTarget;
@@ -5651,6 +5666,45 @@ class KK_GarrisonHold
 		return string.Format("%1 %2", body.GetID(), prefab);
 	}
 
+	// One decimal. The threat log is compared as text, so a raw float
+	// would look like a new line every frame.
+	protected static float ThreatTenth(float value)
+	{
+		return Math.Round(value * 10) / 10;
+	}
+
+	protected static string ThreatVec(vector value)
+	{
+		return string.Format(
+			"%1 %2 %3",
+			ThreatTenth(value[0]),
+			ThreatTenth(value[1]),
+			ThreatTenth(value[2])
+		);
+	}
+
+	protected static string ThreatWho(IEntity body)
+	{
+		if (!body)
+			return "unknown";
+
+		return SoldierLabel(body);
+	}
+
+	// The debug log switch gates this. The same note for the same soldier
+	// is printed once, because the danger event stays on the agent.
+	protected static void LogThreatNote(map<IEntity, string> seen, IEntity body, string note)
+	{
+		if (!body || !seen || note == string.Empty || !SCR_BaseGameMode.KK_LogEnabled())
+			return;
+
+		if (seen.Contains(body) && seen.Get(body) == note)
+			return;
+
+		seen.Set(body, note);
+		PrintFormat("KK: Threat %1 %2", SoldierLabel(body), note);
+	}
+
 	// Once a second per soldier. The debug log switch has to be on.
 	protected static void LogEngage(IEntity body, string reason)
 	{
@@ -6597,11 +6651,20 @@ class KK_GarrisonHold
 
 		s_HeardDir.Set(body, dir);
 		s_HeardWhen.Set(body, WorldTime());
+		LogThreatNote(
+			s_ThreatLineLog,
+			body,
+			string.Format(
+				"line shooter=%1 muzzle=%2 dir=%3",
+				ThreatWho(shooter),
+				ThreatVec(place),
+				ThreatVec(dir)
+			)
+		);
 	}
 
-	// A round struck within the impact radius, or farther along his shot
-	// line than he stands. The event often has no shooter, so the man he
-	// just heard firing is the one who owns it.
+	// A round struck within the impact radius. The event often has no
+	// shooter, so the man he just heard firing is the one who owns it.
 	static void NoteNearbyImpact(IEntity listener, AIDangerEvent danger)
 	{
 		IEntity body = CharacterBody(listener);
@@ -6612,12 +6675,20 @@ class KK_GarrisonHold
 		if (place == vector.Zero)
 			return;
 
-		IEntity shooter = ShotCharacter(danger.GetObject());
-		if (!shooter)
-			shooter = ShotCharacter(danger.GetVictim());
+		IEntity named = ShotCharacter(danger.GetObject());
+		if (!named)
+			named = ShotCharacter(danger.GetVictim());
+
+		string source = "heard";
+		IEntity shooter = named;
+		if (named)
+			source = "event";
 
 		if (shooter && (SameCharacter(shooter, body) || SharesGroup(body, shooter) || KnownFriendly(body, shooter)))
+		{
+			LogThreatNote(s_ThreatImpactLog, body, "impact skip self-or-friendly");
 			return;
+		}
 
 		if (!shooter && s_HeardShooter.Contains(body) && s_HeardWhen.Contains(body))
 		{
@@ -6626,54 +6697,183 @@ class KK_GarrisonHold
 		}
 
 		if (!shooter || SameCharacter(shooter, body))
+		{
+			LogThreatNote(s_ThreatImpactLog, body, "impact no-shooter");
 			return;
+		}
 
 		if (SharesGroup(body, shooter) || KnownFriendly(body, shooter))
+		{
+			LogThreatNote(s_ThreatImpactLog, body, "impact skip friendly");
 			return;
+		}
 
 		bool near = vector.DistanceSq(body.GetOrigin(), place) <= IMPACT_RADIUS * IMPACT_RADIUS;
-		if (!near && !ImpactLandedPast(body, shooter, place))
+		string verdict = "drop";
+		if (near)
+			verdict = "record";
+
+		LogThreatNote(
+			s_ThreatImpactLog,
+			body,
+			string.Format(
+				"impact %1 feet=%2 shooter=%3 %4",
+				verdict,
+				ThreatTenth(vector.Distance(body.GetOrigin(), place)),
+				ThreatWho(shooter),
+				source
+			)
+		);
+
+		if (!near)
 			return;
 
 		NoteBulletThreat(body, shooter);
 	}
 
-	// His feet are inside the shot tube, and this strike is farther along
-	// that line than he is. The landing is the stop point. A round that
-	// stops short of him does not count.
-	protected static bool ImpactLandedPast(IEntity body, IEntity shooter, vector place)
+	// The hidden man is the one engage is deciding on, and his own shot
+	// toward that man is blocked. Five projectile rays leave the muzzle
+	// on a plane facing this soldier. One that arrives means the path is
+	// open. The same stored shot is not traced again.
+	protected static bool HeardPathOpen(IEntity body, IEntity shooter)
 	{
-		if (!body || !shooter || place == vector.Zero)
+		if (!body || !shooter)
 			return false;
 
-		if (!s_HeardDir.Contains(body) || !s_HeardPlace.Contains(body) || !s_HeardWhen.Contains(body))
+		if (!s_HeardShooter.Contains(body) || !s_HeardWhen.Contains(body) || !s_HeardPlace.Contains(body) || !s_HeardDir.Contains(body))
 			return false;
 
 		if (WorldTime() - s_HeardWhen.Get(body) > HeardShotMs())
 			return false;
 
-		if (!s_HeardShooter.Contains(body) || !SameCharacter(s_HeardShooter.Get(body), shooter))
-			return false;
-
-		vector dir = s_HeardDir.Get(body);
-		if (dir.Length() < 0.01)
+		if (!SameCharacter(s_HeardShooter.Get(body), shooter))
 			return false;
 
 		vector shotPos = s_HeardPlace.Get(body);
-		float along = vector.Dot(body.GetOrigin() - shotPos, dir);
-		if (along <= 0 || along > ATTACK_CONTACT_RANGE)
+		vector shotDir = s_HeardDir.Get(body);
+		string key = string.Format(
+			"%1|%2|%3",
+			shooter.GetID(),
+			ThreatVec(shotPos),
+			ThreatVec(shotDir)
+		);
+		if (s_PathKey.Contains(body) && s_PathKey.Get(body) == key && s_PathOpen.Contains(body))
+			return s_PathOpen.Get(body);
+
+		bool open = PathReaches(body, shooter, shotPos);
+		s_PathKey.Set(body, key);
+		s_PathOpen.Set(body, open);
+		string pathNote = "blocked";
+		if (open)
+			pathNote = "open";
+
+		LogThreatNote(
+			s_ThreatPathLog,
+			body,
+			string.Format("path %1 shooter=%2", pathNote, ThreatWho(shooter))
+		);
+		return open;
+	}
+
+	protected static bool PathReaches(IEntity body, IEntity shooter, vector shotPos)
+	{
+		vector toSoldier = body.GetOrigin() - shotPos;
+		float distance = toSoldier.Length();
+		if (distance < 0.6)
 			return false;
 
-		vector closest = shotPos + (dir * along);
-		if ((body.GetOrigin() - closest).Length() > FLYBY_RADIUS)
+		vector dir = toSoldier * (1 / distance);
+		vector worldUp = "0 1 0";
+		if (Math.AbsFloat(vector.Dot(dir, worldUp)) > 0.99)
+			worldUp = "1 0 0";
+
+		vector right = PathCross(dir, worldUp);
+		right.Normalize();
+		vector up = PathCross(right, dir);
+		up.Normalize();
+		float step = 0.3;
+		float reach = distance - step;
+		if (reach < 0.3)
 			return false;
 
-		float landed = vector.Dot(place - shotPos, dir);
-		if (landed <= along)
+		BaseWorld world = null;
+		if (GetGame())
+			world = GetGame().GetWorld();
+
+		if (!world)
+			world = body.GetWorld();
+
+		if (!world)
 			return false;
 
-		vector strike = shotPos + (dir * landed);
-		return (place - strike).Length() <= IMPACT_LINE_M;
+		s_PathExclude = shooter;
+		s_PathTarget = body;
+		bool open =
+			PathRay(world, shotPos + (dir * step), dir, reach) ||
+			PathRay(world, shotPos + (dir * step) + (right * PATH_RAY_SPREAD), dir, reach) ||
+			PathRay(world, shotPos + (dir * step) - (right * PATH_RAY_SPREAD), dir, reach) ||
+			PathRay(world, shotPos + (dir * step) + (up * PATH_RAY_SPREAD), dir, reach) ||
+			PathRay(world, shotPos + (dir * step) - (up * PATH_RAY_SPREAD), dir, reach);
+		s_PathExclude = null;
+		s_PathTarget = null;
+		return open;
+	}
+
+	protected static vector PathCross(vector a, vector b)
+	{
+		return Vector(
+			a[1] * b[2] - a[2] * b[1],
+			a[2] * b[0] - a[0] * b[2],
+			a[0] * b[1] - a[1] * b[0]
+		);
+	}
+
+	protected static bool PathRay(BaseWorld world, vector start, vector dir, float reach)
+	{
+		TraceParam trace = new TraceParam();
+		trace.Flags = TraceFlags.ENTS | TraceFlags.WORLD;
+		trace.LayerMask = EPhysicsLayerPresets.Projectile;
+		trace.Exclude = s_PathExclude;
+		trace.Start = start;
+		trace.End = start + (dir * reach);
+		float fraction = world.TraceMove(trace, FilterPathBlock);
+		if (fraction >= 1)
+			return true;
+
+		IEntity hit = trace.TraceEnt;
+		int depth;
+		while (hit && depth < 8)
+		{
+			if (SameCharacter(hit, s_PathTarget))
+				return true;
+
+			hit = hit.GetParent();
+			depth++;
+		}
+
+		return false;
+	}
+
+	protected static bool FilterPathBlock(
+		IEntity entity,
+		vector start = "0 0 0",
+		vector dir = "0 0 0")
+	{
+		if (!entity)
+			return true;
+
+		IEntity current = entity;
+		int depth;
+		while (current && depth < 8)
+		{
+			if (current == s_PathExclude)
+				return false;
+
+			current = current.GetParent();
+			depth++;
+		}
+
+		return true;
 	}
 
 	protected static bool HeardShooter(IEntity body, out IEntity enemy, out vector aim)
@@ -6782,6 +6982,8 @@ class KK_GarrisonHold
 		s_HeardPlace.Remove(body);
 		s_HeardDir.Remove(body);
 		s_HeardWhen.Remove(body);
+		s_PathKey.Remove(body);
+		s_PathOpen.Remove(body);
 	}
 
 	// A faction we already know is not an enemy. An unresolved side is
@@ -10902,6 +11104,11 @@ class KK_GarrisonHold
 		if (SharesGroup(victim, shooter) || KnownFriendly(victim, shooter))
 			return;
 
+		LogThreatNote(
+			s_ThreatHitLog,
+			victim,
+			string.Format("hit shooter=%1", ThreatWho(shooter))
+		);
 		NoteBulletThreat(victim, shooter);
 	}
 
@@ -10915,8 +11122,8 @@ class KK_GarrisonHold
 	}
 
 	// He, or a squadmate near him, has already had a bullet from this man
-	// land on him, strike within the impact radius, or land past him on
-	// the shot line.
+	// land on him, strike within the impact radius, or reach him along
+	// an open path from a shot he heard.
 	protected static bool ShooterHitSquad(IEntity shooter, IEntity body)
 	{
 		if (!shooter || !body)
@@ -12217,12 +12424,12 @@ class KK_GarrisonHold
 
 	// One ray down the shot, on the projectile layer. Brush that never
 	// stops a round is not on that layer, so a man behind it is still
-	// the hit. The target himself is not a block. A wall or a pane ends
-	// the ray. A man he cannot see is a guess. A second ray on the same
-	// layer checks cover. One thin shell is stepped past on that ray
-	// only. What remains, short of the aim point, is cover and he does
-	// not fire. A bullet from that man that hit him, struck within the
-	// impact radius, or landed past him on the shot line still shoots.
+	// the hit. The target himself is not a block. A wall, a pane, or a
+	// shell ends the ray. A man he can see is checked only for a friendly
+	// in the first stretch. A man he cannot see is a guess: anything on
+	// that ray short of the aim point holds the shot. A bullet from that
+	// man that hit him, struck within the impact radius, or reaches him
+	// on one of five rays from the muzzle still shoots.
 	protected static bool FriendlyInEngageLane(IEntity body, IEntity enemy, vector aim)
 	{
 		if (!body || aim == vector.Zero)
@@ -12255,6 +12462,13 @@ class KK_GarrisonHold
 
 		if (shooter && ShooterHitSquad(shooter, body))
 		{
+			LogEngage(body, "return");
+			return false;
+		}
+
+		if (shooter && HeardPathOpen(body, shooter))
+		{
+			NoteBulletThreat(body, shooter);
 			LogEngage(body, "return");
 			return false;
 		}
@@ -12302,9 +12516,9 @@ class KK_GarrisonHold
 	}
 
 	// Projectile layer only. A hit here is something a bullet can strike.
-	// Reaching the man means the round gets there. One thin shell is
-	// stepped past, and the man has to be directly behind it. A second
-	// shell is cover. A pane is cover unless its thickness says otherwise.
+	// Reaching the man means the round gets there. A shell, a pane, or a
+	// wall short of him holds the shot. The five rays from his muzzle are
+	// what can still open it.
 	protected static bool ProjectileBlocks(IEntity body, IEntity ignore, vector from, vector aim)
 	{
 		s_LaneHitSolid = false;
@@ -12321,50 +12535,12 @@ class KK_GarrisonHold
 		s_LaneViewer = body;
 		s_LaneTarget = ignore;
 		float fraction = TraceProjectile(world, from, aim);
-		if (fraction >= 1 || LaneHitIsTarget())
-		{
-			s_LaneViewer = null;
-			s_LaneTarget = null;
-			return false;
-		}
-
-		// One shell only. The follow-up ray starts just past it. Anything
-		// that ray hits, other than the man, blocks the shot.
-		if (LaneHitPenetrates())
-		{
-			vector dir = aim - from;
-			float length = dir.Length();
-			if (length >= 0.05)
-			{
-				dir = dir * (1 / length);
-				vector next = from + (dir * (fraction * length)) + (dir * 0.06);
-				if (vector.Distance(next, aim) >= 0.1)
-				{
-					fraction = TraceProjectile(world, next, aim);
-					if (fraction >= 1 || LaneHitIsTarget())
-					{
-						s_LaneViewer = null;
-						s_LaneTarget = null;
-						return false;
-					}
-				}
-				else
-				{
-					s_LaneViewer = null;
-					s_LaneTarget = null;
-					return false;
-				}
-			}
-			else
-			{
-				s_LaneViewer = null;
-				s_LaneTarget = null;
-				return false;
-			}
-		}
-
+		bool clear = fraction >= 1 || LaneHitIsTarget();
 		s_LaneViewer = null;
 		s_LaneTarget = null;
+		if (clear)
+			return false;
+
 		s_LaneHitSolid = true;
 		return true;
 	}
@@ -12408,71 +12584,6 @@ class KK_GarrisonHold
 			return entity == null;
 
 		return true;
-	}
-
-	// A thin shell only. Glass and windows are left to the thickness
-	// figure, same as any other surface on this ray.
-	protected static bool LaneHitPenetrates()
-	{
-		if (!s_LaneTrace)
-			return false;
-
-		return HitIsThin();
-	}
-
-	// Authored ballistic thickness only. About 4 mm or less is a shell
-	// the round goes through. No thickness set, or anything thicker,
-	// stays cover. A body is never a shell.
-	protected static bool HitIsThin()
-	{
-		if (LaneHitIsCharacter())
-			return false;
-
-		float thickness = BallisticThickness(s_LaneTrace.SurfaceProps);
-		if (thickness <= 0)
-			return false;
-
-		return (thickness <= 0.004) || (thickness >= 0.5 && thickness <= 4);
-	}
-
-	protected static bool LaneHitIsCharacter()
-	{
-		IEntity current = s_LaneTrace.TraceEnt;
-		int depth;
-		while (current && depth < 8)
-		{
-			if (ChimeraCharacter.Cast(current))
-				return true;
-
-			current = current.GetParent();
-			depth++;
-		}
-
-		return false;
-	}
-
-	// The larger figure. A material that is allowed to be thick is thick.
-	// Zero means the material left thickness unset, so it stays cover.
-	// Water is never a shell.
-	protected static float BallisticThickness(SurfaceProperties properties)
-	{
-		GameMaterial material = GameMaterial.Cast(properties);
-		if (!material)
-			return 0;
-
-		BallisticInfo info = material.GetBallisticInfo();
-		if (!info)
-			return 0;
-
-		if (info.IsWaterSurface())
-			return -1;
-
-		float thickness = info.GetThickness();
-		float thicknessMax = info.GetThicknessMax();
-		if (thicknessMax > thickness)
-			return thicknessMax;
-
-		return thickness;
 	}
 
 	protected static bool FilterEngageLane(
@@ -13686,8 +13797,8 @@ modded class SCR_AIDangerReaction_WeaponFired
 	}
 }
 
-// A strike near him, or past him on the shot line. The threat call only
-// carries a count, so the position is read here, before that call.
+// A strike within 10 m. The threat call only carries a count, so the
+// position is read here, before that call.
 modded class SCR_AIDangerReaction_ProjectileHit
 {
 	override bool PerformReaction(
