@@ -100,6 +100,10 @@ class KK_AttackActivity : SCR_AIActivityBase
 	// Set by the last PlanGoal call. The mover copies it onto its own step.
 	protected bool m_bLastPlanFinal;
 	protected float m_fEmptySince;
+	// Wall time of the last CustomEvaluate. Engage plants freeze move
+	// clocks by this frame's delta so stuck, pause, and handoff wait.
+	protected float m_fEvalAt;
+	protected float m_fEvalDt;
 	// Medic and the men he is treating. The push does not issue their step.
 	protected ref set<AIAgent> m_Treatment = new set<AIAgent>();
 	protected AIAgent m_Medic;
@@ -200,6 +204,12 @@ class KK_AttackActivity : SCR_AIActivityBase
 		float now = 0;
 		if (GetGame() && GetGame().GetWorld())
 			now = GetGame().GetWorld().GetWorldTime();
+
+		if (m_fEvalAt > 0 && now >= m_fEvalAt)
+			m_fEvalDt = now - m_fEvalAt;
+		else
+			m_fEvalDt = 0;
+		m_fEvalAt = now;
 
 		RefreshPairs();
 
@@ -337,6 +347,14 @@ class KK_AttackActivity : SCR_AIActivityBase
 			return;
 		}
 
+		// Engage owns his feet. Leave the step, pause, and stuck clock
+		// where they were until the plant ends.
+		if (EngagePlantHolds(agent))
+		{
+			HoldEngageMove(agent, mover, now);
+			return;
+		}
+
 		if (!mover.m_bHasGoal)
 		{
 			StartAgentStep(agent, pair, mover, speed, now);
@@ -444,6 +462,12 @@ class KK_AttackActivity : SCR_AIActivityBase
 		IEntity body = agent.GetControlledEntity();
 		if (!body)
 			return;
+
+		if (EngagePlantHolds(agent))
+		{
+			HoldEngageMove(agent, mover, now);
+			return;
+		}
 
 		if (AgentDoor(agent, mover.m_vGoal))
 		{
@@ -714,7 +738,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 		// then the next pair sprints.
 		if (IsTakeCover() && runner.m_bPaused)
 		{
-			if (now - runner.m_fPauseSince < PauseMs())
+			if (HoldEngagePair(runner, now) || now - runner.m_fPauseSince < PauseMs())
 			{
 				CoverHold(runner, now);
 				return;
@@ -733,7 +757,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 			return;
 		}
 
-		if (!runner.m_bHasGoal || runner.m_bHolding || runner.m_bArrived)
+		// A plant is not the end of this bound, and it does not start the next.
+		if (!PairEngagePlant(runner) && (!runner.m_bHasGoal || runner.m_bHolding || runner.m_bArrived))
 			StartStep(runner, EMovementType.SPRINT, now);
 
 		// One man stopped, and the handoff time, is enough. His partner
@@ -800,7 +825,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 		if (pair.m_bPaused)
 		{
-			if (now - pair.m_fPauseSince < PauseMs())
+			if (HoldEngagePair(pair, now) || now - pair.m_fPauseSince < PauseMs())
 			{
 				CoverHold(pair, now);
 				return;
@@ -811,7 +836,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 			return;
 		}
 
-		if (!pair.m_bHasGoal || pair.m_bHolding)
+		// A plant is not the end of this bound, and it does not start the next.
+		if (!PairEngagePlant(pair) && (!pair.m_bHasGoal || pair.m_bHolding))
 			StartStep(pair, EMovementType.SPRINT, now);
 
 		// Same handoff as several pairs. One man at his own step does not
@@ -962,6 +988,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 		EMovementType speed,
 		float now)
 	{
+		if (HoldEngagePair(pair, now))
+			return;
+
 		if (UpdateDoors(pair))
 		{
 			pair.m_fStillSince = now;
@@ -1761,6 +1790,13 @@ class KK_AttackActivity : SCR_AIActivityBase
 			if (ServingTreatment(agent))
 				continue;
 
+			// Engage planted him. That stop is not an arrival on the slot.
+			if (EngagePlantHolds(agent))
+			{
+				HoldEngageMove(agent, MoverFor(agent), now);
+				continue;
+			}
+
 			// The sprint order from this frame has not started yet. A speed of
 			// zero here is him standing at the start, not him waiting at the slot.
 			KK_AttackMover mover = MoverFor(agent);
@@ -1858,6 +1894,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 		int fighters = 0;
 		int arrived = 0;
 		bool stopped = false;
+		bool engageHold = false;
 
 		foreach (AIAgent agent : pair.m_aAgents)
 		{
@@ -1869,6 +1906,14 @@ class KK_AttackActivity : SCR_AIActivityBase
 			// That is not the cover handoff.
 			if (KK_AgentMove.CrossingObstacle(agent))
 				continue;
+
+			// Stopped by the shot, including inside the slot radius.
+			// That is not an arrival and it does not start the handoff.
+			if (EngagePlantHolds(agent))
+			{
+				engageHold = true;
+				continue;
+			}
 
 			if (CloseToOwnSlot(agent, pair))
 				arrived++;
@@ -1883,6 +1928,14 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 		if (arrived == fighters)
 			return true;
+
+		// An engage plant is not a bound arrival. Hold the handoff clock
+		// until that plant ends, then keep waiting out the rest.
+		if (engageHold)
+		{
+			HoldEngagePairClocks(pair, now);
+			return false;
+		}
 
 		if (!stopped || CoverHandoffMs() <= 0)
 			return false;
@@ -1903,6 +1956,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 				continue;
 
 			any = true;
+			if (EngagePlantHolds(agent))
+				return false;
+
 			if (KK_AgentMove.CrossingObstacle(agent))
 				return false;
 
@@ -2025,6 +2081,105 @@ class KK_AttackActivity : SCR_AIActivityBase
 		vector velocity = physics.GetVelocity();
 		velocity[1] = 0;
 		return velocity.Length();
+	}
+
+	// Attack engage has locked his feet for a plant. The advance step,
+	// bound, and take cover clocks must wait that out.
+	protected bool EngagePlantHolds(AIAgent agent)
+	{
+		return agent && KK_GarrisonHold.IsEngageStopped(agent);
+	}
+
+	protected bool PairEngagePlant(notnull KK_AttackPair pair)
+	{
+		foreach (AIAgent agent : pair.m_aAgents)
+		{
+			if (EngagePlantHolds(agent))
+				return true;
+		}
+
+		return false;
+	}
+
+	// Push a "since" stamp forward so the wait does not elapse while
+	// engage has his feet.
+	protected void SlideAgentClock(map<AIAgent, float> clocks, AIAgent agent)
+	{
+		if (!clocks || !agent || m_fEvalDt <= 0 || !clocks.Contains(agent))
+			return;
+
+		clocks.Set(agent, clocks.Get(agent) + m_fEvalDt);
+	}
+
+	// Freeze the step, pause, and stuck clocks for one soldier. The plant
+	// is not an arrival and not a pathing stall.
+	protected void HoldEngageMove(AIAgent agent, KK_AttackMover mover, float now)
+	{
+		if (!mover)
+			return;
+
+		IEntity body;
+		if (agent)
+			body = agent.GetControlledEntity();
+		if (body)
+		{
+			mover.m_vStillPosition = body.GetOrigin();
+			mover.m_fStillSince = now;
+		}
+
+		if (mover.m_bPaused && m_fEvalDt > 0)
+			mover.m_fPauseSince = mover.m_fPauseSince + m_fEvalDt;
+	}
+
+	// True when any fighter in the pair is planted by engage. Freezes the
+	// pair pause, stuck, and handoff clocks for that stretch.
+	protected bool HoldEngagePair(notnull KK_AttackPair pair, float now)
+	{
+		bool hold = false;
+
+		foreach (AIAgent agent : pair.m_aAgents)
+		{
+			if (!EngagePlantHolds(agent))
+				continue;
+
+			hold = true;
+			HoldEngageMove(agent, MoverFor(agent), now);
+		}
+
+		if (!hold)
+			return false;
+
+		HoldEngagePairClocks(pair, now);
+		return true;
+	}
+
+	protected void HoldEngagePairClocks(notnull KK_AttackPair pair, float now)
+	{
+		pair.m_vStillPosition = PairCenter(pair);
+		pair.m_fStillSince = now;
+
+		if (m_fEvalDt <= 0)
+			return;
+
+		if (pair.m_bPaused)
+			pair.m_fPauseSince = pair.m_fPauseSince + m_fEvalDt;
+
+		if (pair.m_fFirstStopAt > 0)
+			pair.m_fFirstStopAt = pair.m_fFirstStopAt + m_fEvalDt;
+	}
+
+	// Cover rotate and the stay reissue wait on wall time. Push those
+	// starts forward for the plant so he does not leave the moment it ends.
+	protected void HoldEngageCover(AIAgent agent, float now)
+	{
+		if (!agent || m_fEvalDt <= 0)
+			return;
+
+		if (m_mCoverHold.Contains(agent))
+			m_mCoverHold.Set(agent, m_mCoverHold.Get(agent) + m_fEvalDt);
+
+		if (m_mCoverAt.Contains(agent))
+			m_mCoverAt.Set(agent, m_mCoverAt.Get(agent) + m_fEvalDt);
 	}
 
 	protected void IssueSettledStay(notnull AIAgent agent, float now)
@@ -2286,6 +2441,12 @@ class KK_AttackActivity : SCR_AIActivityBase
 				{
 					if (distance > ReturnDistance())
 					{
+						if (EngagePlantHolds(agent))
+						{
+							SlideAgentClock(m_mReturnAt, agent);
+							continue;
+						}
+
 						WalkSoldierBack(agent, pair, now);
 						continue;
 					}
@@ -2484,6 +2645,14 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (!body)
 			return;
 
+		// Engage owns the plant. Leave cover walk, stay, and rotate where
+		// they were until that shot ends.
+		if (EngagePlantHolds(agent))
+		{
+			HoldEngageCover(agent, now);
+			return;
+		}
+
 		if (m_mSettledAt.Contains(agent))
 			m_mSettledAt.Remove(agent);
 
@@ -2612,6 +2781,11 @@ class KK_AttackActivity : SCR_AIActivityBase
 		float now)
 	{
 		if (!agent || !agent.GetControlledEntity())
+			return false;
+
+		// A cover shift already released the plant so he can walk. A new
+		// engage plant waits; do not start another shift from that stop.
+		if (EngagePlantHolds(agent) && !KK_GarrisonHold.IsCoverShift(agent))
 			return false;
 
 		float distance = FlatDistance(agent.GetControlledEntity().GetOrigin(), m_vTarget);
@@ -4015,6 +4189,12 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 				if (ReachedDestination(agent.GetControlledEntity().GetOrigin()))
 					continue;
+
+				if (EngagePlantHolds(agent))
+				{
+					SlideAgentClock(m_mReturnAt, agent);
+					continue;
+				}
 
 				if (
 					m_mReturnAt.Contains(agent) &&

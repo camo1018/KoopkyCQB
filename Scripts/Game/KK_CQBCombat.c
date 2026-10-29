@@ -6217,6 +6217,16 @@ class KK_GarrisonHold
 			return;
 		}
 
+		// The engage plant is why he is standing. That time does not
+		// count toward leaving the cover.
+		if (IsEngageStopped(body))
+		{
+			if (s_LaneBlockedAt.Contains(body))
+				s_LaneBlockedAt.Set(body, WorldTime());
+
+			return;
+		}
+
 		if (!blocked)
 		{
 			s_LaneBlockedAt.Remove(body);
