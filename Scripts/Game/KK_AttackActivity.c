@@ -39,6 +39,8 @@ class KK_AttackMover
 	vector m_vStillPosition;
 	int m_iNudges;
 	float m_fProgressBoost;
+	// This step is the one on the point. He holds his own lane there.
+	bool m_bFinal;
 
 	void KK_AttackMover()
 	{
@@ -95,6 +97,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 	protected KK_EAttackPace m_eApplied;
 	protected bool m_bPaceSet;
 	protected bool m_bAtPoint;
+	// Set by the last PlanGoal call. The mover copies it onto its own step.
+	protected bool m_bLastPlanFinal;
 	protected float m_fEmptySince;
 	// Medic and the men he is treating. The push does not issue their step.
 	protected ref set<AIAgent> m_Treatment = new set<AIAgent>();
@@ -341,7 +345,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 		if (AgentReached(agent, mover))
 		{
-			if (GoalIsFinal(mover.m_vGoal))
+			if (mover.m_bFinal)
 			{
 				mover.m_bArrived = true;
 				StopAdvanceAgent(agent);
@@ -412,11 +416,15 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 		vector from = body.GetOrigin();
 		mover.m_vGoal = PlanGoal(from, mover.m_fProgressBoost, pair.m_iIndex, body);
-		if (FlatDistance(from, mover.m_vGoal) <= STEP_REACH)
+		// He is already on a step that is still short of the point. On the
+		// point itself the lane stays, and the side slot is still ahead.
+		if (!m_bLastPlanFinal && FlatDistance(from, mover.m_vGoal) <= STEP_REACH)
 		{
 			mover.m_fProgressBoost = mover.m_fProgressBoost + StepLength();
 			mover.m_vGoal = PlanGoal(from, mover.m_fProgressBoost, pair.m_iIndex, body);
 		}
+
+		mover.m_bFinal = m_bLastPlanFinal;
 
 		mover.m_bHasGoal = true;
 		mover.m_fStillSince = now;
@@ -598,7 +606,11 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (KK_AgentMove.CrossingObstacle(agent))
 			return false;
 
-		return FlatDistance(body.GetOrigin(), mover.m_vGoal) <= STEP_REACH;
+		KK_AttackPair pair = PairOf(agent);
+		if (!pair)
+			return FlatDistance(body.GetOrigin(), mover.m_vGoal) <= STEP_REACH;
+
+		return CloseToOwnSlot(agent, pair);
 	}
 
 	protected bool AgentDoor(notnull AIAgent agent, vector goal)
@@ -1049,30 +1061,27 @@ class KK_AttackActivity : SCR_AIActivityBase
 		vector axis;
 		vector right;
 		if (!BuildAxis(axis, right))
+		{
+			m_bLastPlanFinal = true;
 			return m_vTarget;
+		}
 
 		float progress = vector.Dot(from - m_vOrigin, axis);
 		progress = progress + progressBoost;
 		float total = vector.Dot(m_vTarget - m_vOrigin, axis);
 		float next = progress + StepLength();
 
-		vector goal;
+		// The last step keeps the lane. Folding every pair onto the point
+		// stacked the squad, and the flat finish radius then called a man
+		// still on his lane short of the order.
 		bool finalStep = next >= total - 1;
+		vector goal = m_vOrigin + (axis * next) + LaneOffset(laneIndex, right);
 		if (finalStep)
-		{
-			float stagger = 2;
-			if (Math.Mod(laneIndex, 2) == 0)
-				stagger = -2;
+			goal = m_vTarget + LaneOffset(laneIndex, right);
 
-			goal = m_vTarget + (right * stagger);
-		}
-		else
-		{
-			goal = m_vOrigin + (axis * next) + LaneOffset(laneIndex, right);
-		}
-
+		m_bLastPlanFinal = finalStep;
 		goal[1] = from[1];
-		goal = PreferCover(goal, axis, right, finalStep);
+		goal = PreferCover(goal, axis, right);
 		return KeepForward(body, goal, axis);
 	}
 
@@ -1135,11 +1144,29 @@ class KK_AttackActivity : SCR_AIActivityBase
 		return right * (LaneSpacing() * band * sign);
 	}
 
+	// Where this man stands when the push is over. The pair lane, then his
+	// own side of that pair, so two men do not share the point.
+	protected vector LaneDestination(notnull KK_AttackPair pair, AIAgent agent)
+	{
+		vector axis;
+		vector right;
+		if (!BuildAxis(axis, right))
+			return OnNavmesh(m_vTarget);
+
+		vector goal = m_vTarget + LaneOffset(pair.m_iIndex, right);
+		if (agent)
+			goal = goal + (right * MemberSide(pair, agent));
+
+		goal[1] = m_vTarget[1];
+		return OnNavmesh(goal);
+	}
+
+	// A wall within a step of this lane. The search stays on the lane.
+	// Pulling a far lane back onto the point is what stacked the squad.
 	protected vector PreferCover(
 		vector goal,
 		vector axis,
-		vector right,
-		bool finalStep)
+		vector right)
 	{
 		vector best = OnNavmesh(goal);
 		float bestHit = 99;
@@ -1154,9 +1181,6 @@ class KK_AttackActivity : SCR_AIActivityBase
 		foreach (vector candidate : candidates)
 		{
 			vector place = OnNavmesh(candidate);
-			if (finalStep && FlatDistance(place, m_vTarget) > Arrival() - 1)
-				continue;
-
 			float hit = CoverDistance(place, right);
 			if (hit < 0)
 				continue;
@@ -1168,9 +1192,6 @@ class KK_AttackActivity : SCR_AIActivityBase
 			bestHit = hit;
 			best = place;
 		}
-
-		if (finalStep && FlatDistance(best, m_vTarget) > Arrival() - 1)
-			return OnNavmesh(m_vTarget);
 
 		return best;
 	}
@@ -1659,14 +1680,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 		return worst <= STEP_REACH;
 	}
 
-	protected bool GoalIsFinal(vector goal)
-	{
-		return FlatDistance(goal, m_vTarget) <= 2.5;
-	}
-
 	protected bool PairAtTarget(notnull KK_AttackPair pair)
 	{
-		float worst = 0;
 		bool any = false;
 
 		foreach (AIAgent agent : pair.m_aAgents)
@@ -1674,21 +1689,12 @@ class KK_AttackActivity : SCR_AIActivityBase
 			if (!agent || !agent.GetControlledEntity())
 				continue;
 
-			float distance = FlatDistance(
-				agent.GetControlledEntity().GetOrigin(),
-				m_vTarget
-			);
-
-			if (!any || distance > worst)
-				worst = distance;
-
 			any = true;
+			if (!ReachedDestination(agent.GetControlledEntity().GetOrigin()))
+				return false;
 		}
 
-		if (!any)
-			return false;
-
-		return worst <= Arrival();
+		return any;
 	}
 
 	protected bool AllNearTarget()
@@ -1769,8 +1775,14 @@ class KK_AttackActivity : SCR_AIActivityBase
 			vector origin = agent.GetControlledEntity().GetOrigin();
 			vector goal = AgentStepGoal(agent, pair);
 			vector slot = goal + (right * MemberSide(pair, agent));
-			bool nearSlot = FlatDistance(origin, slot) <= STEP_REACH;
-			bool nearGoal = FlatDistance(origin, goal) <= STEP_REACH;
+			float reach = STEP_REACH;
+			if (mover.m_bFinal)
+				reach = COVER_REACH;
+
+			bool nearSlot = FlatDistance(origin, slot) <= reach;
+			// A final step is his own side of the lane. The pair center is
+			// inside the old reach, and stopping there put both men together.
+			bool nearGoal = !mover.m_bFinal && FlatDistance(origin, goal) <= STEP_REACH;
 			bool stopped = FlatSpeed(agent) <= MEMBER_STOP;
 
 			if ((!nearSlot && !nearGoal) || !stopped)
@@ -1858,11 +1870,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 			if (KK_AgentMove.CrossingObstacle(agent))
 				continue;
 
-			float distance = FlatDistance(
-				agent.GetControlledEntity().GetOrigin(),
-				AgentStepGoal(agent, pair)
-			);
-			if (distance <= STEP_REACH)
+			if (CloseToOwnSlot(agent, pair))
 				arrived++;
 
 			if (FlatSpeed(agent) <= MEMBER_STOP)
@@ -1898,11 +1906,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 			if (KK_AgentMove.CrossingObstacle(agent))
 				return false;
 
-			float distance = FlatDistance(
-				agent.GetControlledEntity().GetOrigin(),
-				AgentStepGoal(agent, pair)
-			);
-			if (distance > STEP_REACH)
+			if (!CloseToOwnSlot(agent, pair))
 				return false;
 		}
 
@@ -1923,7 +1927,44 @@ class KK_AttackActivity : SCR_AIActivityBase
 		return pair.m_vGoal;
 	}
 
-	// Every fighter's own step is the last one, on the order point.
+	// The point he was ordered to, including his side of the pair. On the
+	// last step that side is the only place that counts, or both men stop
+	// on the center.
+	protected bool CloseToOwnSlot(AIAgent agent, notnull KK_AttackPair pair)
+	{
+		if (!agent || !agent.GetControlledEntity())
+			return false;
+
+		vector goal = AgentStepGoal(agent, pair);
+		vector slot = goal;
+		float reach = STEP_REACH;
+
+		if (m_mMovers.Contains(agent))
+		{
+			KK_AttackMover mover = m_mMovers.Get(agent);
+			if (mover && mover.m_bHasGoal)
+			{
+				vector axis;
+				vector right;
+				BuildAxis(axis, right);
+				slot = mover.m_vGoal + (right * MemberSide(pair, agent));
+				if (mover.m_bFinal)
+					reach = COVER_REACH;
+			}
+		}
+
+		return FlatDistance(agent.GetControlledEntity().GetOrigin(), slot) <= reach;
+	}
+
+	protected KK_AttackPair PairOf(AIAgent agent)
+	{
+		if (!agent || !m_mPairOf.Contains(agent))
+			return null;
+
+		return PairAt(m_mPairOf.Get(agent));
+	}
+
+	// Every fighter's own step is the last one, on his lane at the point.
 	protected bool MembersFinished(notnull KK_AttackPair pair)
 	{
 		bool any = false;
@@ -1934,7 +1975,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 				continue;
 
 			any = true;
-			if (!GoalIsFinal(AgentStepGoal(agent, pair)))
+			KK_AttackMover mover = MoverFor(agent);
+			if (!mover.m_bHasGoal || !mover.m_bFinal)
 				return false;
 		}
 
@@ -2250,7 +2292,10 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 					if (m_mReturnAt.Contains(agent))
 					{
-						if (distance > Arrival())
+						if (
+							distance > Arrival() &&
+							!ReachedDestination(agent.GetControlledEntity().GetOrigin())
+						)
 							continue;
 
 						m_mReturnAt.Remove(agent);
@@ -2279,10 +2324,13 @@ class KK_AttackActivity : SCR_AIActivityBase
 				if (IsReleased(agent))
 					continue;
 
-				// Inside the finish distance he starts. Once he has a spot
-				// he keeps running to it, even when that spot is farther
-				// out than the finish distance.
-				if (distance > Arrival() && !m_mCoverSlot.Contains(agent))
+				// Inside the finish distance he starts. A man already on his
+				// lane is there too, even when that lane sits outside the
+				// flat radius. Once he has a spot he keeps running to it.
+				if (
+					!ReachedDestination(agent.GetControlledEntity().GetOrigin()) &&
+					!m_mCoverSlot.Contains(agent)
+				)
 					continue;
 
 				// A fight at the point belongs to the attack, including men
@@ -2418,7 +2466,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (m_mCoverSlot.Contains(agent))
 			return true;
 
-		return FlatDistance(agent.GetControlledEntity().GetOrigin(), m_vTarget) <= Arrival();
+		return ReachedDestination(agent.GetControlledEntity().GetOrigin());
 	}
 
 	// The attack has not taken him. Run to a covered spot around the point,
@@ -2545,7 +2593,14 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 		int count = m_aPointCovers.Count();
 		vector spot = m_aPointCovers[Math.Mod(index, count)];
-		return SpreadCover(spot, index / count);
+		int lap = index / count;
+		vector spread = SpreadCover(spot, lap);
+		// The navmesh pulled the next man back onto someone. His lane is
+		// still empty, so he stands there instead of on that man.
+		if (lap > 0 && FlatDistance(spread, spot) < COVER_SPACING * 0.75)
+			return LaneDestination(pair, agent);
+
+		return spread;
 	}
 
 	// At the point, and the shot from here has failed long enough. He takes
@@ -2560,7 +2615,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 			return false;
 
 		float distance = FlatDistance(agent.GetControlledEntity().GetOrigin(), m_vTarget);
-		bool atPoint = distance <= Arrival() ||
+		bool atPoint = ReachedDestination(agent.GetControlledEntity().GetOrigin()) ||
 			(m_mCoverSlot.Contains(agent) && distance <= CoverRadius());
 		if (!atPoint)
 			return false;
@@ -3291,6 +3346,29 @@ class KK_AttackActivity : SCR_AIActivityBase
 		return m_AttackWaypoint.GetArrivalRadius();
 	}
 
+	// On the destination line, including a man out on his lane. The flat
+	// radius treated that lane as short and the recall walked him onto
+	// the point with everyone else. Well past the line is not a hold.
+	protected bool ReachedDestination(vector origin)
+	{
+		if (FlatDistance(origin, m_vTarget) <= Arrival())
+			return true;
+
+		vector axis;
+		vector right;
+		if (!BuildAxis(axis, right))
+			return false;
+
+		float remaining = vector.Dot(m_vTarget - origin, axis);
+		if (remaining > Arrival())
+			return false;
+
+		if (remaining < -Arrival())
+			return false;
+
+		return true;
+	}
+
 	protected float FlatDistance(vector a, vector b)
 	{
 		vector flatA = a;
@@ -3524,8 +3602,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 				if (!agent.GetControlledEntity())
 					continue;
 
-				float distance = FlatDistance(agent.GetControlledEntity().GetOrigin(), m_vTarget);
-				if (distance > Arrival())
+				if (!ReachedDestination(agent.GetControlledEntity().GetOrigin()))
 					return false;
 
 				any = true;
@@ -3553,8 +3630,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 				if (!agent.GetControlledEntity())
 					continue;
 
-				float distance = FlatDistance(agent.GetControlledEntity().GetOrigin(), m_vTarget);
-				if (distance > Arrival())
+				if (!ReachedDestination(agent.GetControlledEntity().GetOrigin()))
 					return false;
 
 				any = true;
@@ -3937,8 +4013,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 				if (!agent.GetControlledEntity())
 					continue;
 
-				float distance = FlatDistance(agent.GetControlledEntity().GetOrigin(), m_vTarget);
-				if (distance <= Arrival())
+				if (ReachedDestination(agent.GetControlledEntity().GetOrigin()))
 					continue;
 
 				if (
@@ -3953,7 +4028,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 					this,
 					m_Group,
 					agent,
-					m_vTarget,
+					LaneDestination(pair, agent),
 					m_mSoloHandlers,
 					KK_AgentMove.PRIORITY_LEVEL,
 					EMovementType.RUN
