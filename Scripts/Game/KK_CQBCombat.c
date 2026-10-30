@@ -920,8 +920,15 @@ class KK_GarrisonHold
 	// of those.
 	protected static ref map<IEntity, IEntity> s_HitBy =
 		new map<IEntity, IEntity>();
+	protected static ref map<IEntity, int> s_HitByKind =
+		new map<IEntity, int>();
 	protected static ref map<IEntity, float> s_HitByAt =
 		new map<IEntity, float>();
+	// Why a hidden man may still be shot. A landed hit, a nearby strike,
+	// and an open path from his muzzle are recorded separately.
+	protected static const int THREAT_LANDED = 1;
+	protected static const int THREAT_IMPACT = 2;
+	protected static const int THREAT_PATH = 4;
 	protected static const float THREAT_CONTACT_S = 8;
 	protected static const float ATTACK_CONTACT_RANGE = 180;
 	// Times the alerted rate. 2.5 alone still leaves a man in the open
@@ -5365,6 +5372,7 @@ class KK_GarrisonHold
 		s_CoverShift.RemoveItem(body);
 		s_LaneBlockedAt.Remove(body);
 		s_HitBy.Remove(body);
+		s_HitByKind.Remove(body);
 		s_HitByAt.Remove(body);
 		EndEngageEpisode(body, false);
 		ReleasePerceivedEnemy(body);
@@ -6660,6 +6668,42 @@ class KK_GarrisonHold
 		return mode.KK_GetAttackEngageThreatening();
 	}
 
+	protected static bool AttackEngageReturnHit()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return true;
+
+		return mode.KK_GetAttackEngageReturnHit();
+	}
+
+	protected static bool AttackEngageHitMate()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return true;
+
+		return mode.KK_GetAttackEngageHitMate();
+	}
+
+	protected static bool AttackEngageShotImpact()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return true;
+
+		return mode.KK_GetAttackEngageShotImpact();
+	}
+
+	protected static bool AttackEngageHeardPath()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return true;
+
+		return mode.KK_GetAttackEngageHeardPath();
+	}
+
 	// Heard a shot. The vanilla reaction drops it when his side has not
 	// been seen yet, which is a man firing from a bush. The real faction
 	// is enough. The muzzle place is kept when the body is not on the event.
@@ -6792,7 +6836,7 @@ class KK_GarrisonHold
 		if (!near)
 			return;
 
-		NoteBulletThreat(body, shooter);
+		NoteBulletThreat(body, shooter, THREAT_IMPACT);
 	}
 
 	// The hidden man is the one engage is deciding on, and his own shot
@@ -11196,28 +11240,36 @@ class KK_GarrisonHold
 			victim,
 			string.Format("hit shooter=%1", ThreatWho(shooter))
 		);
-		NoteBulletThreat(victim, shooter);
+		NoteBulletThreat(victim, shooter, THREAT_LANDED);
 	}
 
-	protected static void NoteBulletThreat(IEntity victim, IEntity shooter)
+	protected static void NoteBulletThreat(IEntity victim, IEntity shooter, int kind)
 	{
-		if (!victim || !shooter)
+		if (!victim || !shooter || kind == 0)
 			return;
 
+		int kept = kind;
+		if (s_HitBy.Contains(victim) && SameCharacter(s_HitBy.Get(victim), shooter) && s_HitByKind.Contains(victim))
+			kept = kind | s_HitByKind.Get(victim);
+
 		s_HitBy.Set(victim, shooter);
+		s_HitByKind.Set(victim, kept);
 		s_HitByAt.Set(victim, WorldTime());
 	}
 
-	// He, or a squadmate near him, has already had a bullet from this man
-	// land on him, strike within the impact radius, or reach him along
-	// an open path from a shot he heard.
-	protected static bool ShooterHitSquad(IEntity shooter, IEntity body)
+	// A bullet record of this kind from this man. Self and a nearby
+	// squadmate are chosen separately. Landed hits, nearby strikes, and
+	// open muzzle paths are separate bits.
+	protected static bool ShooterHitSquad(IEntity shooter, IEntity body, int kind, bool self, bool mates)
 	{
-		if (!shooter || !body)
+		if (!shooter || !body || kind == 0)
 			return false;
 
-		if (HitByShooter(body, shooter))
+		if (self && HitByShooter(body, shooter, kind))
 			return true;
+
+		if (!mates)
+			return false;
 
 		SCR_AIGroup group = GroupOf(body);
 		if (!group)
@@ -11237,19 +11289,22 @@ class KK_GarrisonHold
 			if (vector.Distance(body.GetOrigin(), mate.GetOrigin()) > SQUAD_RETURN_M)
 				continue;
 
-			if (HitByShooter(mate, shooter))
+			if (HitByShooter(mate, shooter, kind))
 				return true;
 		}
 
 		return false;
 	}
 
-	protected static bool HitByShooter(IEntity victim, IEntity shooter)
+	protected static bool HitByShooter(IEntity victim, IEntity shooter, int kind)
 	{
-		if (!victim || !shooter || !s_HitBy.Contains(victim) || !s_HitByAt.Contains(victim))
+		if (!victim || !shooter || kind == 0 || !s_HitBy.Contains(victim) || !s_HitByAt.Contains(victim) || !s_HitByKind.Contains(victim))
 			return false;
 
 		if (WorldTime() - s_HitByAt.Get(victim) > HeardShotMs())
+			return false;
+
+		if ((s_HitByKind.Get(victim) & kind) == 0)
 			return false;
 
 		return SameCharacter(s_HitBy.Get(victim), shooter);
@@ -12549,15 +12604,27 @@ class KK_GarrisonHold
 		if (!shooter && s_HeardShooter.Contains(body))
 			shooter = s_HeardShooter.Get(body);
 
-		if (shooter && ShooterHitSquad(shooter, body))
+		if (shooter && AttackEngageReturnHit() && ShooterHitSquad(shooter, body, THREAT_LANDED, true, false))
 		{
 			LogEngage(body, "return");
 			return false;
 		}
 
-		if (shooter && HeardPathOpen(body, shooter))
+		if (shooter && AttackEngageHitMate() && ShooterHitSquad(shooter, body, THREAT_LANDED, false, true))
 		{
-			NoteBulletThreat(body, shooter);
+			LogEngage(body, "return");
+			return false;
+		}
+
+		if (shooter && AttackEngageShotImpact() && ShooterHitSquad(shooter, body, THREAT_IMPACT, true, true))
+		{
+			LogEngage(body, "return");
+			return false;
+		}
+
+		if (shooter && AttackEngageHeardPath() && HeardPathOpen(body, shooter))
+		{
+			NoteBulletThreat(body, shooter, THREAT_PATH);
 			LogEngage(body, "return");
 			return false;
 		}

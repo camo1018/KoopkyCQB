@@ -223,6 +223,10 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 55: return mode.KK_GetAttackEngageHeardShot();
 			case 56: return mode.KK_GetAttackEngageSuspected();
 			case 57: return mode.KK_GetAttackEngageThreatening();
+			case 58: return mode.KK_GetAttackEngageReturnHit();
+			case 61: return mode.KK_GetAttackEngageHitMate();
+			case 59: return mode.KK_GetAttackEngageShotImpact();
+			case 60: return mode.KK_GetAttackEngageHeardPath();
 		}
 
 		return mode.KK_GetGarrisonAfterClear();
@@ -260,6 +264,10 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 55: mode.KK_SetAttackEngageHeardShot(value); break;
 			case 56: mode.KK_SetAttackEngageSuspected(value); break;
 			case 57: mode.KK_SetAttackEngageThreatening(value); break;
+			case 58: mode.KK_SetAttackEngageReturnHit(value); break;
+			case 61: mode.KK_SetAttackEngageHitMate(value); break;
+			case 59: mode.KK_SetAttackEngageShotImpact(value); break;
+			case 60: mode.KK_SetAttackEngageHeardPath(value); break;
 			default: mode.KK_SetGarrisonAfterClear(value); break;
 		}
 	}
@@ -557,6 +565,14 @@ class KK_CQBAttrAttackEngageHeardShot : KK_CQBBoolEditorAttribute {}
 class KK_CQBAttrAttackEngageSuspected : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrAttackEngageThreatening : KK_CQBBoolEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrAttackEngageReturnHit : KK_CQBBoolEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrAttackEngageHitMate : KK_CQBBoolEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrAttackEngageShotImpact : KK_CQBBoolEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrAttackEngageHeardPath : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrHeardShot : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]

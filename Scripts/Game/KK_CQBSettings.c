@@ -152,14 +152,26 @@ modded class SCR_BaseGameMode
 	[Attribute("2", UIWidgets.EditBox, "Seconds the engaging unit will stop to engage the target before handing off the movement to base AI.", category: "Koopky CQB/Attack")]
 	protected float m_fKK_AttackEngageRepeat;
 
-	[Attribute("1", UIWidgets.CheckBox, "Attack engage fires at a man he heard shoot, or at the place the shot came from, when he cannot see the shooter.", category: "Koopky CQB/Attack")]
+	[Attribute("1", UIWidgets.CheckBox, "Attack engage - trigger - heard shot. Fire at a man he heard shoot, or at the place the shot came from, when he cannot see the shooter.", category: "Koopky CQB/Attack")]
 	protected bool m_bKK_AttackEngageHeardShot;
 
-	[Attribute("1", UIWidgets.CheckBox, "Attack engage fires at a contact that is not yet confirmed: an enemy or detection he is not sure of.", category: "Koopky CQB/Attack")]
+	[Attribute("1", UIWidgets.CheckBox, "Attack engage - trigger - suspected. Fire at a contact that is not yet confirmed: an enemy or detection he is not sure of.", category: "Koopky CQB/Attack")]
 	protected bool m_bKK_AttackEngageSuspected;
 
-	[Attribute("1", UIWidgets.CheckBox, "Attack engage fires at an unknown shape that is shooting or just was. A quiet unknown shape is ignored either way.", category: "Koopky CQB/Attack")]
+	[Attribute("1", UIWidgets.CheckBox, "Attack engage - trigger - threatening. Fire at an unknown shape that is shooting or just was. A quiet unknown shape is ignored either way.", category: "Koopky CQB/Attack")]
 	protected bool m_bKK_AttackEngageThreatening;
+
+	[Attribute("1", UIWidgets.CheckBox, "Attack engage - trigger - hit me. A hidden man can still be shot when one of his bullets has already hit this soldier.", category: "Koopky CQB/Attack")]
+	protected bool m_bKK_AttackEngageReturnHit;
+
+	[Attribute("1", UIWidgets.CheckBox, "Attack engage - trigger - hit squadmate. A hidden man can still be shot when one of his bullets has already hit a squadmate near this soldier.", category: "Koopky CQB/Attack")]
+	protected bool m_bKK_AttackEngageHitMate;
+
+	[Attribute("1", UIWidgets.CheckBox, "Attack engage - trigger - shot impact. A hidden man can still be shot when one of his rounds strikes within the impact radius of this soldier.", category: "Koopky CQB/Attack")]
+	protected bool m_bKK_AttackEngageShotImpact;
+
+	[Attribute("1", UIWidgets.CheckBox, "Attack engage - trigger - heard path. A hidden man can still be shot when one of five rays from the muzzle of a shot he was heard firing reaches this soldier.", category: "Koopky CQB/Attack")]
+	protected bool m_bKK_AttackEngageHeardPath;
 
 	[Attribute("8", UIWidgets.EditBox, "Seconds an attack soldier keeps firing at a place he heard a shot and cannot see. Another shot starts the time over. 0 forgets the shot immediately.", category: "Koopky CQB/Attack")]
 	protected float m_fKK_HeardShot;
@@ -423,6 +435,10 @@ modded class SCR_BaseGameMode
 			KK_ReadBool(context, "AttackEngageHeardShot", m_bKK_AttackEngageHeardShot);
 			KK_ReadBool(context, "AttackEngageSuspected", m_bKK_AttackEngageSuspected);
 			KK_ReadBool(context, "AttackEngageThreatening", m_bKK_AttackEngageThreatening);
+			KK_ReadBool(context, "AttackEngageReturnHit", m_bKK_AttackEngageReturnHit);
+			KK_ReadBool(context, "AttackEngageHitMate", m_bKK_AttackEngageHitMate);
+			KK_ReadBool(context, "AttackEngageShotImpact", m_bKK_AttackEngageShotImpact);
+			KK_ReadBool(context, "AttackEngageHeardPath", m_bKK_AttackEngageHeardPath);
 			KK_ReadFloat(context, "HeardShot", m_fKK_HeardShot);
 			KK_ReadFloat(context, "ArrivalRadius", m_fKK_AttackArrivalRadius);
 			KK_ReadFloat(context, "TakeCoverReturn", m_fKK_TakeCoverReturn);
@@ -636,6 +652,10 @@ modded class SCR_BaseGameMode
 		context.WriteValue("AttackEngageHeardShot", m_bKK_AttackEngageHeardShot);
 		context.WriteValue("AttackEngageSuspected", m_bKK_AttackEngageSuspected);
 		context.WriteValue("AttackEngageThreatening", m_bKK_AttackEngageThreatening);
+		context.WriteValue("AttackEngageReturnHit", m_bKK_AttackEngageReturnHit);
+		context.WriteValue("AttackEngageHitMate", m_bKK_AttackEngageHitMate);
+		context.WriteValue("AttackEngageShotImpact", m_bKK_AttackEngageShotImpact);
+		context.WriteValue("AttackEngageHeardPath", m_bKK_AttackEngageHeardPath);
 		context.WriteValue("HeardShot", m_fKK_HeardShot);
 		context.WriteValue("ArrivalRadius", m_fKK_AttackArrivalRadius);
 		context.WriteValue("TakeCoverReturn", m_fKK_TakeCoverReturn);
@@ -844,6 +864,26 @@ modded class SCR_BaseGameMode
 	bool KK_GetAttackEngageThreatening()
 	{
 		return m_bKK_AttackEngageThreatening;
+	}
+
+	bool KK_GetAttackEngageReturnHit()
+	{
+		return m_bKK_AttackEngageReturnHit;
+	}
+
+	bool KK_GetAttackEngageHitMate()
+	{
+		return m_bKK_AttackEngageHitMate;
+	}
+
+	bool KK_GetAttackEngageShotImpact()
+	{
+		return m_bKK_AttackEngageShotImpact;
+	}
+
+	bool KK_GetAttackEngageHeardPath()
+	{
+		return m_bKK_AttackEngageHeardPath;
 	}
 
 	float KK_GetHeardShot()
@@ -1165,6 +1205,10 @@ modded class SCR_BaseGameMode
 	void KK_SetAttackEngageHeardShot(bool value) { m_bKK_AttackEngageHeardShot = value; }
 	void KK_SetAttackEngageSuspected(bool value) { m_bKK_AttackEngageSuspected = value; }
 	void KK_SetAttackEngageThreatening(bool value) { m_bKK_AttackEngageThreatening = value; }
+	void KK_SetAttackEngageReturnHit(bool value) { m_bKK_AttackEngageReturnHit = value; }
+	void KK_SetAttackEngageHitMate(bool value) { m_bKK_AttackEngageHitMate = value; }
+	void KK_SetAttackEngageShotImpact(bool value) { m_bKK_AttackEngageShotImpact = value; }
+	void KK_SetAttackEngageHeardPath(bool value) { m_bKK_AttackEngageHeardPath = value; }
 	void KK_SetHeardShot(float value) { m_fKK_HeardShot = value; }
 	void KK_SetAttackArrivalRadius(float value) { m_fKK_AttackArrivalRadius = value; }
 	void KK_SetTakeCoverReturn(float value) { m_fKK_TakeCoverReturn = value; }
