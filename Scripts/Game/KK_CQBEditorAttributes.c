@@ -220,6 +220,9 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 45: return mode.KK_GetPerformanceLog();
 			case 49: return mode.KK_GetAttackEngage();
 			case 54: return mode.KK_GetAttackMedic();
+			case 55: return mode.KK_GetAttackEngageHeardShot();
+			case 56: return mode.KK_GetAttackEngageSuspected();
+			case 57: return mode.KK_GetAttackEngageThreatening();
 		}
 
 		return mode.KK_GetGarrisonAfterClear();
@@ -254,6 +257,9 @@ class KK_CQBBoolEditorAttribute : SCR_BaseEditorAttribute
 			case 45: mode.KK_SetPerformanceLog(value); break;
 			case 49: mode.KK_SetAttackEngage(value); break;
 			case 54: mode.KK_SetAttackMedic(value); break;
+			case 55: mode.KK_SetAttackEngageHeardShot(value); break;
+			case 56: mode.KK_SetAttackEngageSuspected(value); break;
+			case 57: mode.KK_SetAttackEngageThreatening(value); break;
 			default: mode.KK_SetGarrisonAfterClear(value); break;
 		}
 	}
@@ -545,6 +551,12 @@ class KK_CQBAttrAttackEngageInitial : KK_CQBFloatEditorAttribute {}
 class KK_CQBAttrAttackEngageInterval : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrAttackEngageRepeat : KK_CQBFloatEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrAttackEngageHeardShot : KK_CQBBoolEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrAttackEngageSuspected : KK_CQBBoolEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrAttackEngageThreatening : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrHeardShot : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]

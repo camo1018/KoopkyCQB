@@ -1136,6 +1136,7 @@ class KK_GarrisonHold
 	protected static ref map<IEntity, float> s_AutoBurstGap = new map<IEntity, float>();
 	protected static ref map<IEntity, float> s_AutoBurstResume = new map<IEntity, float>();
 	protected static ref map<IEntity, float> s_FireModeTryAt = new map<IEntity, float>();
+	protected static ref map<IEntity, vector> s_RateAim = new map<IEntity, vector>();
 	protected static const float TRIGGER_REPULL_MS = 400;
 	protected static const float TRIGGER_RELEASE_MS = 150;
 	// A rifle may stay on automatic inside this. Farther, it uses a burst
@@ -1802,7 +1803,12 @@ class KK_GarrisonHold
 
 		RememberLean(body, command);
 		if (canShoot && lookAt)
+		{
 			NoteNoDamage(body, lookAt);
+			vector ratePoint = ShotAimPoint(body, lookAt);
+			if (ratePoint != vector.Zero)
+				ApplyEngageDiscipline(body, ratePoint);
+		}
 
 		// The plant keeps his feet. It also refuses the combat-move turn,
 		// so the burst has to put the body on the man itself. The trigger
@@ -4080,14 +4086,17 @@ class KK_GarrisonHold
 		if (!holdReload)
 			RequestWeaponStance(body, raised);
 
-		// A lowered rifle does not fire. The trigger has to wait until the
-		// raise reports up, or the request is logged and no round leaves.
-		// Low ready, the safety, and an empty chamber report the same way.
-		if (fire)
-			MakeWeaponReady(body);
+		// Attack engage waits until the rifle reports up. A clear or a
+		// garrison already decided this shot, and holding the trigger off
+		// for that report is what kept snap fire from leaving the barrel.
+		if (IsAttackSearch(body))
+		{
+			if (fire)
+				MakeWeaponReady(body);
 
-		if (fire && (!WeaponIsRaised(body) || !WeaponCanAcceptFire(body)))
-			fire = false;
+			if (fire && (!WeaponIsRaised(body) || !WeaponCanAcceptFire(body)))
+				fire = false;
+		}
 
 		bool wasFiring = s_MoveFiring.Contains(body);
 		if (fire)
@@ -5241,7 +5250,12 @@ class KK_GarrisonHold
 
 		RememberLean(body, command);
 		if (canShoot && enemy)
+		{
 			NoteNoDamage(body, enemy);
+			vector ratePoint = ShotAimPoint(body, enemy);
+			if (ratePoint != vector.Zero)
+				ApplyEngageDiscipline(body, ratePoint);
+		}
 
 		bool fire = AimReady(body, enemy, canShoot);
 		bool raised = canShoot || FeelsThreatened(utility);
@@ -6576,13 +6590,7 @@ class KK_GarrisonHold
 
 		float window = Math.Max(0.5, perception.GetUpdateInterval()) + 0.02;
 		BaseTarget selected = combat.GetCurrentTarget();
-		if (
-			selected &&
-			(
-				selected.GetTargetCategory() != ETargetCategory.UNKNOWN ||
-				ContactThreatening(selected)
-			)
-		)
+		if (selected && SelectedEngageTarget(selected))
 		{
 			if (TakeContact(body, selected, combat, window, false, false, enemy, aim))
 				return true;
@@ -6594,16 +6602,62 @@ class KK_GarrisonHold
 		if (ClosestContact(body, perception, combat, ETargetCategory.DETECTED, window, true, true, enemy, aim))
 			return true;
 
-		if (HeardShooter(body, enemy, aim))
+		if (AttackEngageHeardShot() && HeardShooter(body, enemy, aim))
 			return true;
 
-		if (ClosestContact(body, perception, combat, ETargetCategory.ENEMY, window, false, false, enemy, aim))
-			return true;
+		if (AttackEngageSuspected())
+		{
+			if (ClosestContact(body, perception, combat, ETargetCategory.ENEMY, window, false, false, enemy, aim))
+				return true;
 
-		if (ClosestContact(body, perception, combat, ETargetCategory.DETECTED, window, false, false, enemy, aim))
-			return true;
+			if (ClosestContact(body, perception, combat, ETargetCategory.DETECTED, window, false, false, enemy, aim))
+				return true;
+		}
+
+		if (!AttackEngageThreatening())
+			return false;
 
 		return ClosestThreatening(body, perception, combat, window, enemy, aim);
+	}
+
+	// A known man is always a shot. An unknown one is only when he is
+	// shooting, and only while that criterion is on.
+	protected static bool SelectedEngageTarget(BaseTarget selected)
+	{
+		if (!selected)
+			return false;
+
+		if (selected.GetTargetCategory() != ETargetCategory.UNKNOWN)
+			return true;
+
+		return AttackEngageThreatening() && ContactThreatening(selected);
+	}
+
+	protected static bool AttackEngageHeardShot()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return true;
+
+		return mode.KK_GetAttackEngageHeardShot();
+	}
+
+	protected static bool AttackEngageSuspected()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return true;
+
+		return mode.KK_GetAttackEngageSuspected();
+	}
+
+	protected static bool AttackEngageThreatening()
+	{
+		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
+		if (!mode)
+			return true;
+
+		return mode.KK_GetAttackEngageThreatening();
 	}
 
 	// Heard a shot. The vanilla reaction drops it when his side has not
@@ -7184,7 +7238,10 @@ class KK_GarrisonHold
 			return point;
 
 		flat.Normalize();
-		SnapFacing(body, controller, flat.ToYaw());
+		float heading = flat.ToYaw();
+		SnapFacing(body, controller, heading);
+		// Snap facing no longer forces the controller. This plant still does.
+		controller.SetHeadingAngle(heading * Math.DEG2RAD, true);
 		return point;
 	}
 
@@ -8052,20 +8109,27 @@ class KK_GarrisonHold
 			return false;
 		}
 
-		// It was up and something else put it down. Ask again. Waiting
-		// out the raise timer left the rifle down for the rest of the move.
-		if (raised && !liveRaised && s_RaiseSettled.Contains(body))
+		// Attack engage asks again the moment a settled rifle drops. A clear
+		// or garrison does not: snap aim flickers that flag, and another
+		// raise restarts the animation so the shot never leaves.
+		if (IsAttackSearch(body) && raised && !liveRaised && s_RaiseSettled.Contains(body))
 		{
 			s_RaiseSettled.RemoveItem(body);
 			s_MoveWeaponUp.RemoveItem(body);
 			return true;
 		}
 
+		if (!IsAttackSearch(body) && raised && !liveRaised && s_RaiseSentAt.Contains(body))
+		{
+			if (WorldTime() - s_RaiseSentAt.Get(body) < 500)
+				return false;
+		}
+
 		// The raise is still playing while the flag is down. Sending it
 		// again restarts that animation, so the rifle never finishes and
 		// the trigger never gets a round out. A lower that landed after
 		// the raise is the reason to ask again.
-		if (raised && !liveRaised && known && wasRaised && s_RaiseSentAt.Contains(body))
+		if (IsAttackSearch(body) && raised && !liveRaised && known && wasRaised && s_RaiseSentAt.Contains(body))
 		{
 			float raiseAt = s_RaiseSentAt.Get(body);
 			float lowerAt = -1;
@@ -8088,6 +8152,11 @@ class KK_GarrisonHold
 
 		if (liveRaised == raised)
 			return false;
+
+		// The 500 ms above has passed. A later node put the rifle down, or
+		// the first raise never settled. Attack engage uses its own wait.
+		if (raised && !IsAttackSearch(body))
+			return true;
 
 		// Already asked for it down. Another lower restarts the pose.
 		// A raise that went out after that ask is the reason to send one more.
@@ -10061,14 +10130,22 @@ class KK_GarrisonHold
 		angles[0] = headingDeg;
 		body.SetYawPitchRoll(angles);
 
-		// ToYaw is already -180..180, the same range as the heading he is
-		// standing on. Folding a westward aim into 0..360 makes the first
-		// snap turn the long way, and the heading whips until the next write.
-		float radians = headingDeg * Math.DEG2RAD;
-		controller.SetHeadingAngle(radians, true);
 		CharacterInputContext input = controller.GetInputContext();
 		if (input)
-			input.SetHeadingAngle(radians);
+			input.SetHeadingAngle(HeadingRadians(headingDeg));
+	}
+
+	// The input heading is 0..360. Snap aim only writes that. Forcing the
+	// controller heading is the attack plant, and it fights this turn.
+	protected static float HeadingRadians(float headingDeg)
+	{
+		float radians = headingDeg * Math.DEG2RAD;
+		while (radians < 0)
+			radians = radians + Math.PI2;
+		while (radians >= Math.PI2)
+			radians = radians - Math.PI2;
+
+		return radians;
 	}
 
 	// Shortest signed gap, in degrees. Positive is toDeg to the right of fromDeg.
@@ -12107,6 +12184,7 @@ class KK_GarrisonHold
 		s_TriggerRounds.Remove(body);
 		s_TriggerRoundAt.Remove(body);
 		s_TriggerRearm.RemoveItem(body);
+		s_RateAim.Remove(body);
 		s_AutoBurstCap.Remove(body);
 		s_AutoBurstFrom.Remove(body);
 		s_AutoBurstGap.Remove(body);
@@ -12134,14 +12212,14 @@ class KK_GarrisonHold
 		return mode == EWeaponFiremodeType.Semiauto || mode == EWeaponFiremodeType.Burst;
 	}
 
-	// Single shots at long range wait longer between pulls. A room fight
-	// keeps the short gap.
+	// Single shots at long range wait longer between pulls. The same
+	// steps apply once a clear or a garrison has already decided to fire.
 	protected static float TriggerRepullMs(IEntity body)
 	{
-		if (!body || !IsAttackSearch(body) || !s_EngageAimPoint.Contains(body))
+		if (!body || !s_RateAim.Contains(body))
 			return TRIGGER_REPULL_MS;
 
-		float distance = vector.Distance(body.GetOrigin(), s_EngageAimPoint.Get(body));
+		float distance = vector.Distance(body.GetOrigin(), s_RateAim.Get(body));
 		BaseWeaponComponent weapon = CurrentWeapon(body);
 		if (weapon && MachineGun(weapon))
 			return 450;
@@ -12171,6 +12249,7 @@ class KK_GarrisonHold
 			return;
 
 		float distance = vector.Distance(AimLineOrigin(body, point), point);
+		s_RateAim.Set(body, point);
 		EWeaponType type = weapon.GetWeaponType();
 		bool belt = MachineGun(weapon);
 		int want = PreferredEngageMode(muzzle, type, belt, distance);
@@ -12691,6 +12770,7 @@ class KK_GarrisonHold
 				if (IsAttackSearch(body))
 					LogFire(body, "drop");
 				s_TriggerHeld.RemoveItem(body);
+				s_RateAim.Remove(body);
 				s_AutoBurstCap.Remove(body);
 				s_AutoBurstFrom.Remove(body);
 				s_AutoBurstGap.Remove(body);
@@ -12706,13 +12786,17 @@ class KK_GarrisonHold
 				continue;
 			}
 
-			// Held across a reload, the input never rises again and the
-			// gun does not start. Leave it off until the controller can fire.
-			MakeWeaponReady(body);
-			if (!WeaponCanAcceptFire(body))
+			// Attack engage will not press until the rifle can accept it.
+			// A room shot already chose this moment. The pump only spaces
+			// the rounds from here.
+			if (IsAttackSearch(body))
 			{
-				WriteFireWanted(body, false);
-				continue;
+				MakeWeaponReady(body);
+				if (!WeaponCanAcceptFire(body))
+				{
+					WriteFireWanted(body, false);
+					continue;
+				}
 			}
 
 			// Full auto keeps the button down. Attack engage caps that hold.
