@@ -2181,8 +2181,21 @@ class KK_CQBOrders
 	}
 
 	protected static int s_iRetiring;
+	protected static bool s_bEditorQueuePlace;
 	protected static ref map<SCR_AIGroup, int> s_mAttackPace =
 		new map<SCR_AIGroup, int>();
+
+	// Game Master sets this around the add. Left Ctrl+click passes queue,
+	// and that add has to leave the orders already on the group alone.
+	static void SetEditorQueuePlace(bool queue)
+	{
+		s_bEditorQueuePlace = queue;
+	}
+
+	static bool IsEditorQueuePlace()
+	{
+		return s_bEditorQueuePlace;
+	}
 
 	static bool IsRetiringOrder()
 	{
@@ -2284,9 +2297,10 @@ modded class SCR_AIGroup
 		super.OnWaypointAdded(wp);
 
 		// Waypoints already on the group when it comes up are one queue.
-		// A waypoint added after that, from the radial or the editor, is
-		// a new order and replaces the attack, clear, or garrison
-		// already running.
+		// A waypoint added after that, from the radial or a plain editor
+		// click, is a new order and replaces the attack, clear, or
+		// garrison already running. Left Ctrl+click is a queue add, and
+		// the orders already on the group stay.
 		if (!m_bKK_OrdersArmed)
 		{
 			if (!m_bKK_OrderFillScheduled && GetGame())
@@ -2297,11 +2311,36 @@ modded class SCR_AIGroup
 			return;
 		}
 
+		if (KK_CQBOrders.IsEditorQueuePlace())
+			return;
+
 		KK_CQBOrders.RetirePreviousBuildingOrders(this, wp);
 	}
 
 	protected void ArmBuildingOrders()
 	{
 		m_bKK_OrdersArmed = true;
+	}
+}
+
+modded class SCR_EditableWaypointComponent
+{
+	override SCR_EditableEntityComponent EOnEditorPlace(
+		out SCR_EditableEntityComponent parent,
+		SCR_EditableEntityComponent recipient,
+		EEditorPlacingFlags flags,
+		bool isQueue,
+		int playerID = 0)
+	{
+		KK_CQBOrders.SetEditorQueuePlace(isQueue);
+		SCR_EditableEntityComponent placed = super.EOnEditorPlace(
+			parent,
+			recipient,
+			flags,
+			isQueue,
+			playerID
+		);
+		KK_CQBOrders.SetEditorQueuePlace(false);
+		return placed;
 	}
 }
