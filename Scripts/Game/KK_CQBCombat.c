@@ -6569,12 +6569,11 @@ class KK_GarrisonHold
 	}
 
 	// The man the normal attack is already on, then a sure contact, then
-	// an unknown shape that is shooting, then a suspected contact, then
-	// the man who just fired. Sure means seen, exposed, or just detected.
-	// A bush can keep the shooter unknown because no aim point is exposed,
-	// so the shot he fired is what makes him a target. A quiet unknown
-	// track is not. None of those uncertain contacts pull the rifle off
-	// someone already in the open.
+	// the man who just fired, then a suspected one. Sure means seen,
+	// exposed, or just detected. A bush can keep the shooter unknown
+	// because no aim point is exposed, so the shot he fired is what makes
+	// him a target. A quiet unknown track is not. A suspected man does
+	// not pull the rifle off someone already in the open.
 	protected static bool PerceivedEnemy(IEntity body, out IEntity enemy, out vector aim)
 	{
 		enemy = null;
@@ -6603,7 +6602,7 @@ class KK_GarrisonHold
 		if (ClosestContact(body, perception, combat, ETargetCategory.DETECTED, window, true, true, enemy, aim))
 			return true;
 
-		if (AttackEngageThreatening() && ClosestThreatening(body, perception, combat, window, enemy, aim))
+		if (AttackEngageHeardShot() && HeardShooter(body, enemy, aim))
 			return true;
 
 		if (AttackEngageSuspected())
@@ -6615,10 +6614,10 @@ class KK_GarrisonHold
 				return true;
 		}
 
-		if (!AttackEngageHeardShot())
+		if (!AttackEngageThreatening())
 			return false;
 
-		return HeardShooter(body, enemy, aim);
+		return ClosestThreatening(body, perception, combat, window, enemy, aim);
 	}
 
 	// A known man is always a shot. An unknown one is only when he is
