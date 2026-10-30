@@ -1209,6 +1209,7 @@ class KK_GarrisonHold
 		new map<IEntity, float>();
 	protected static ref set<IEntity> s_ToppingOff = new set<IEntity>();
 	protected static ref set<IEntity> s_EmptyReload = new set<IEntity>();
+	protected static ref set<IEntity> s_DidReload = new set<IEntity>();
 	// Reload was in progress last check. The frame it ends, the rifle is
 	// already up and the aiming component is still on the reload pose.
 	protected static ref set<IEntity> s_ReloadWasActive = new set<IEntity>();
@@ -2398,6 +2399,7 @@ class KK_GarrisonHold
 		if (controller.ReloadWeaponWith(spare, forceDetach))
 		{
 			s_ReloadAt.Set(body, now);
+			s_DidReload.Insert(body);
 			LogReload(body, "start-reload");
 			if (dry)
 				s_EmptyReload.Insert(body);
@@ -3983,7 +3985,7 @@ class KK_GarrisonHold
 		}
 
 		muzzle = weapon.GetCurrentMuzzle();
-		if (!NeedsChamber(muzzle))
+		if (!NeedsChamber(muzzle) || s_DidReload.Contains(body))
 			return;
 
 		float now = WorldTime();
@@ -6343,6 +6345,7 @@ class KK_GarrisonHold
 			if (GunIsDry(body) && controller.ReloadWeapon())
 			{
 				s_ReloadAt.Set(body, now);
+				s_DidReload.Insert(body);
 				s_EmptyReload.Insert(body);
 				return;
 			}
@@ -6375,6 +6378,7 @@ class KK_GarrisonHold
 		}
 
 		s_ReloadAt.Set(body, now);
+		s_DidReload.Insert(body);
 		if (dry)
 			s_EmptyReload.Insert(body);
 	}
@@ -8274,6 +8278,7 @@ class KK_GarrisonHold
 			s_ReloadAt.Remove(body);
 			s_ToppingOff.RemoveItem(body);
 			s_EmptyReload.RemoveItem(body);
+			s_DidReload.RemoveItem(body);
 			s_SeenEnemyAt.Remove(body);
 			s_PressureFrom.Remove(body);
 			s_PressureAt.Remove(body);
