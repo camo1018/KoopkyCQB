@@ -12216,10 +12216,63 @@ class KK_GarrisonHold
 			controller.SetWeaponRaised(raised);
 	}
 
+	// Hold fire never shoots. Return fire shoots once the group already
+	// counts itself under attack, or a round has reached this man, or the
+	// man he is on is endangering him. Fire at will is unchanged.
+	protected static bool DisciplineAllowsShot(IEntity body)
+	{
+		if (!body)
+			return false;
+
+		SCR_AIGroup group = GroupOf(body);
+		if (!group)
+			return true;
+
+		SCR_AIGroupUtilityComponent utility = SCR_AIGroupUtilityComponent.Cast(
+			group.FindComponent(SCR_AIGroupUtilityComponent)
+		);
+		if (!utility)
+			return true;
+
+		EAIGroupCombatMode mode = utility.GetCombatModeExternal();
+		if (mode == EAIGroupCombatMode.FIRE_AT_WILL)
+			return true;
+
+		if (mode == EAIGroupCombatMode.HOLD_FIRE)
+			return false;
+
+		if (utility.GetCombatModeActual() == EAIGroupCombatMode.FIRE_AT_WILL)
+			return true;
+
+		if (s_HitByAt.Contains(body) && WorldTime() - s_HitByAt.Get(body) <= HeardShotMs())
+			return true;
+
+		SCR_AIUtilityComponent soldier = UtilityOf(body);
+		if (soldier && soldier.m_CombatComponent && TargetEndangers(soldier.m_CombatComponent.GetCurrentTarget()))
+			return true;
+
+		return false;
+	}
+
+	protected static bool TargetEndangers(BaseTarget target)
+	{
+		if (!target)
+			return false;
+
+		if (target.IsEndangering())
+			return true;
+
+		float since = target.GetTimeSinceEndangered();
+		return since > 0 && since < THREAT_CONTACT_S;
+	}
+
 	protected static void SetFireWanted(IEntity body, bool wanted)
 	{
 		if (!body)
 			return;
+
+		if (wanted && !DisciplineAllowsShot(body))
+			wanted = false;
 
 		if (wanted)
 		{
