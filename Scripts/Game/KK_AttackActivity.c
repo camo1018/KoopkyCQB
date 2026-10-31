@@ -16,6 +16,8 @@ class KK_AttackPair
 	vector m_vStillPosition;
 	int m_iNudges;
 	float m_fProgressBoost;
+	// Contact ended. The lead waits. The pair forms on him before the next step.
+	bool m_bRegroup;
 
 	void KK_AttackPair()
 	{
@@ -76,6 +78,14 @@ class KK_AttackActivity : SCR_AIActivityBase
 	// who arrives takes the next one.
 	protected ref array<vector> m_aPointCovers = {};
 	protected bool m_bPointCovers;
+	// Advance and bound. A man in contact walks here and fights, instead
+	// of keeping the step toward the waypoint. Take cover does not use it.
+	protected ref map<AIAgent, vector> m_mContactCover = new map<AIAgent, vector>();
+	// Flat direction from the man toward the wall he took. The lean uses it.
+	protected ref map<AIAgent, vector> m_mContactWall = new map<AIAgent, vector>();
+	protected ref map<AIAgent, float> m_mContactOrder = new map<AIAgent, float>();
+	protected ref set<AIAgent> m_WasContact = new set<AIAgent>();
+	protected ref map<AIAgent, float> m_mRegroupAt = new map<AIAgent, float>();
 	protected ref map<AIAgent, int> m_mCoverSlot = new map<AIAgent, int>();
 	protected ref map<AIAgent, float> m_mCoverHold = new map<AIAgent, float>();
 	protected int m_iCoverAssign;
@@ -314,6 +324,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 		// This path moves every soldier, so that pin has to come off.
 		ReleaseSettled();
 
+		foreach (KK_AttackPair forming : m_aPairs)
+			FormPair(forming, now);
+
 		EMovementType speed = EMovementType.RUN;
 
 		foreach (KK_AttackPair pair : m_aPairs)
@@ -339,6 +352,12 @@ class KK_AttackActivity : SCR_AIActivityBase
 		float now)
 	{
 		if (ServingTreatment(agent))
+			return;
+
+		if (HoldContactCover(agent, now))
+			return;
+
+		if (pair.m_bRegroup)
 			return;
 
 		if (mover.m_bArrived)
@@ -720,6 +739,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 			if (pair.m_iIndex == m_iRunner)
 				continue;
 
+			if (FormPair(pair, now))
+				continue;
+
 			if (IsTakeCover())
 			{
 				CoverHold(pair, now);
@@ -732,6 +754,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 		KK_AttackPair runner = PairAt(m_iRunner);
 		if (!runner)
+			return;
+
+		if (FormPair(runner, now))
 			return;
 
 		// Same hold a lone pair uses. Several pairs wait it out together,
@@ -1340,6 +1365,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 			if (ServingTreatment(agent))
 				continue;
 
+			if (HoldContactCover(agent, now))
+				continue;
+
 			// A new order, a stance change, or a look snap drops him off
 			// the wall onto the side he climbed from.
 			if (KK_AgentMove.CrossingObstacle(agent))
@@ -1510,6 +1538,85 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 		controller.SetStanceChange(ECharacterStanceChange.STANCECHANGE_TOERECTED);
 		m_Crouched.RemoveItem(agent);
+	}
+
+	// Crouch, prone, or stand. SetCrouch only tracks crouch against stand,
+	// so a man already prone would never be told to rise.
+	protected void SetContactStance(AIAgent agent, ECharacterStance stance)
+	{
+		if (!agent || KK_AgentMove.CrossingObstacle(agent))
+			return;
+
+		IEntity body = agent.GetControlledEntity();
+		if (!body)
+			return;
+
+		CharacterControllerComponent controller =
+			CharacterControllerComponent.Cast(
+				body.FindComponent(CharacterControllerComponent)
+			);
+		if (!controller || controller.GetStance() == stance)
+			return;
+
+		if (stance == ECharacterStance.PRONE)
+			controller.SetStanceChange(ECharacterStanceChange.STANCECHANGE_TOPRONE);
+		else if (stance == ECharacterStance.CROUCH)
+			controller.SetStanceChange(ECharacterStanceChange.STANCECHANGE_TOCROUCH);
+		else
+			controller.SetStanceChange(ECharacterStanceChange.STANCECHANGE_TOERECTED);
+
+		if (stance == ECharacterStance.CROUCH)
+			m_Crouched.Insert(agent);
+		else
+			m_Crouched.RemoveItem(agent);
+	}
+
+	// Where a corner lean should look. A known threat, otherwise down the lane.
+	protected vector CoverInterest(IEntity body)
+	{
+		vector threat;
+		if (ContactThreat(body, threat))
+			return threat;
+
+		return body.GetOrigin() + (AdvanceAxis() * 30);
+	}
+
+	// Prone eye is blocked and a standing eye is not. He rises for that shot.
+	protected bool MustStandForShot(IEntity body)
+	{
+		vector threat;
+		if (!body || !ContactThreat(body, threat))
+			return false;
+
+		vector low = body.GetOrigin() + Vector(0, 0.45, 0);
+		vector high = body.GetOrigin() + Vector(0, 1.6, 0);
+		return !StanceSees(body, low, threat) && StanceSees(body, high, threat);
+	}
+
+	protected bool StanceSees(IEntity body, vector from, vector threat)
+	{
+		BaseWorld world;
+		if (GetGame())
+			world = GetGame().GetWorld();
+		if (!world)
+			return true;
+
+		vector flat = threat - from;
+		flat[1] = 0;
+		if (flat.Length() < 0.5)
+			return true;
+
+		if (!m_CoverTrace)
+			m_CoverTrace = new TraceParam();
+
+		m_CoverTrace.Flags = TraceFlags.ENTS | TraceFlags.WORLD;
+		m_CoverTrace.Start = from;
+		m_CoverTrace.End = threat + Vector(0, 1.2, 0);
+		m_CoverTrace.Exclude = body;
+		m_CoverTrace.TraceEnt = null;
+
+		float fraction = world.TraceMove(m_CoverTrace, FilterCover);
+		return fraction >= 0.98;
 	}
 
 	protected void Scan(notnull KK_AttackPair pair, float now)
@@ -1891,6 +1998,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 	// not stall the pair that is waiting.
 	protected bool CoverReady(notnull KK_AttackPair pair, float now)
 	{
+		if (pair.m_bRegroup)
+			return false;
+
 		int fighters = 0;
 		int arrived = 0;
 		bool stopped = false;
@@ -1928,6 +2038,17 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 		if (arrived == fighters)
 			return true;
+
+		// Advance and bound stop the leapfrog while someone is in contact.
+		// He is walking to cover or fighting from it, not finishing the step.
+		if (!IsTakeCover())
+		{
+			foreach (AIAgent agent : pair.m_aAgents)
+			{
+				if (SoldierContact(agent))
+					return false;
+			}
+		}
 
 		// An engage plant is not a bound arrival. Hold the handoff clock
 		// until that plant ends, then keep waiting out the rest.
@@ -2081,6 +2202,418 @@ class KK_AttackActivity : SCR_AIActivityBase
 		vector velocity = physics.GetVelocity();
 		velocity[1] = 0;
 		return velocity.Length();
+	}
+
+	// The pair's contact is over. The lead is the rally, and the push waits.
+	protected void MarkRegroup(AIAgent agent)
+	{
+		if (!agent || IsTakeCover() || !m_mPairOf.Contains(agent))
+			return;
+
+		int index = m_mPairOf.Get(agent);
+		if (index < 0 || index >= m_aPairs.Count())
+			return;
+
+		KK_AttackPair pair = m_aPairs[index];
+		if (!pair)
+			return;
+
+		pair.m_bRegroup = true;
+		pair.m_fFirstStopAt = 0;
+	}
+
+	// True while this pair is still forming on its lead. A man still in
+	// contact keeps the fight. Everyone else runs to a side slot beside
+	// the man farthest along the push, and he waits there.
+	protected bool FormPair(KK_AttackPair pair, float now)
+	{
+		if (!pair || !pair.m_bRegroup || IsTakeCover())
+			return false;
+
+		foreach (AIAgent agent : pair.m_aAgents)
+		{
+			if (SoldierContact(agent))
+				return true;
+		}
+
+		AIAgent lead = PairLead(pair);
+		if (!lead || !lead.GetControlledEntity())
+		{
+			FinishRegroup(pair);
+			return false;
+		}
+
+		vector axis;
+		vector right;
+		BuildAxis(axis, right);
+		vector leadPos = lead.GetControlledEntity().GetOrigin();
+		float leadSide = MemberSide(pair, lead);
+		bool waiting = false;
+
+		foreach (AIAgent agent : pair.m_aAgents)
+		{
+			if (!CanFight(agent) || ServingTreatment(agent) || IsReleased(agent))
+				continue;
+
+			IEntity body = agent.GetControlledEntity();
+			if (!body)
+				continue;
+
+			vector slot = leadPos;
+			if (agent != lead)
+				slot = leadPos + (right * (MemberSide(pair, agent) - leadSide));
+
+			slot[1] = body.GetOrigin()[1];
+			slot = OnNavmesh(slot);
+
+			if (FlatDistance(body.GetOrigin(), slot) > STEP_REACH)
+			{
+				waiting = true;
+				bool due = !m_mRegroupAt.Contains(agent) ||
+					now - m_mRegroupAt.Get(agent) >= KK_AgentMove.REISSUE_INTERVAL_MS;
+				if (!due)
+					continue;
+
+				KK_GarrisonHold.ReleaseEngageFeet(agent);
+				KK_GarrisonHold.SetPinned(body, false);
+				KK_GarrisonHold.LeanToward(agent, vector.Zero);
+				SetCrouch(agent, false);
+				KK_AgentMove.Issue(
+					this,
+					m_Group,
+					agent,
+					slot,
+					m_mSoloHandlers,
+					KK_AgentMove.PRIORITY_LEVEL,
+					EMovementType.RUN
+				);
+				ApplyWeaponForSpeed(agent, EMovementType.RUN);
+				m_mRegroupAt.Set(agent, now);
+				continue;
+			}
+
+			if (!m_mRegroupAt.Contains(agent) || m_mRegroupAt.Get(agent) >= 0)
+			{
+				KK_AgentMove.SetWantedSpeed(agent, EMovementType.IDLE);
+				SetCrouch(agent, false);
+				m_mRegroupAt.Set(agent, -1);
+			}
+		}
+
+		if (waiting)
+			return true;
+
+		FinishRegroup(pair);
+		return false;
+	}
+
+	protected void FinishRegroup(notnull KK_AttackPair pair)
+	{
+		pair.m_bRegroup = false;
+		pair.m_bHasGoal = false;
+		pair.m_bPaused = false;
+		pair.m_fFirstStopAt = 0;
+
+		foreach (AIAgent agent : pair.m_aAgents)
+		{
+			if (!agent)
+				continue;
+
+			m_mRegroupAt.Remove(agent);
+			KK_AttackMover mover = MoverFor(agent);
+			mover.m_bHasGoal = false;
+			mover.m_bPaused = false;
+		}
+	}
+
+	// Farthest along the push. Men who are down or in treatment are not the lead.
+	protected AIAgent PairLead(notnull KK_AttackPair pair)
+	{
+		vector axis = AdvanceAxis();
+		AIAgent lead = null;
+		float best = 0;
+
+		foreach (AIAgent agent : pair.m_aAgents)
+		{
+			if (!CanFight(agent) || ServingTreatment(agent) || !agent.GetControlledEntity())
+				continue;
+
+			float along = vector.Dot(agent.GetControlledEntity().GetOrigin() - m_vOrigin, axis);
+			if (!lead || along > best)
+			{
+				lead = agent;
+				best = along;
+			}
+		}
+
+		return lead;
+	}
+
+	// A living target, a heard shot, or an engage contact. Take cover
+	// keeps its own plant and does not come through here.
+	protected bool SoldierContact(AIAgent agent)
+	{
+		if (!agent || IsTakeCover())
+			return false;
+
+		if (HasCombatTarget(agent))
+			return true;
+
+		if (KK_GarrisonHold.PerceivedFireActive(agent))
+			return true;
+
+		return KK_GarrisonHold.EngageContactOpen(agent);
+	}
+
+	// Advance and bound. While he has contact, the waypoint step waits.
+	// He runs to the nearest cover toward the threat and shoots from it.
+	// True when that hold is his move this pass.
+	protected bool HoldContactCover(AIAgent agent, float now)
+	{
+		if (!SoldierContact(agent))
+		{
+			if (agent && m_WasContact.Contains(agent))
+			{
+				m_WasContact.RemoveItem(agent);
+				m_mContactCover.Remove(agent);
+				m_mContactWall.Remove(agent);
+				m_mContactOrder.Remove(agent);
+				KK_GarrisonHold.LeanToward(agent, vector.Zero);
+				KK_AttackMover mover = MoverFor(agent);
+				mover.m_bHasGoal = false;
+				mover.m_bPaused = false;
+				MarkRegroup(agent);
+			}
+
+			return false;
+		}
+
+		if (agent)
+			m_WasContact.Insert(agent);
+
+		IEntity body = agent.GetControlledEntity();
+		if (!body)
+			return true;
+
+		vector spot;
+		bool have = m_mContactCover.Contains(agent);
+		if (have && KK_GarrisonHold.EngageLaneBlocked(agent, COVER_LANE_STUCK_MS))
+		{
+			m_mContactCover.Remove(agent);
+			m_mContactWall.Remove(agent);
+			m_mContactOrder.Remove(agent);
+			KK_GarrisonHold.ClearEngageLaneBlock(agent);
+			have = false;
+		}
+
+		vector wall;
+		if (have)
+		{
+			spot = m_mContactCover.Get(agent);
+			if (m_mContactWall.Contains(agent))
+				wall = m_mContactWall.Get(agent);
+		}
+		else if (PickContactCover(body, spot, wall))
+		{
+			m_mContactCover.Set(agent, spot);
+			m_mContactWall.Set(agent, wall);
+			have = true;
+		}
+
+		bool planted = !have || FlatDistance(body.GetOrigin(), spot) <= COVER_REACH;
+		bool ordered = m_mContactOrder.Contains(agent);
+		if (planted)
+		{
+			if (!ordered || m_mContactOrder.Get(agent) >= 0)
+			{
+				StopAdvanceAgent(agent);
+				m_mContactOrder.Set(agent, -1);
+			}
+
+			// A wall gets a crouch. Open ground gets prone, unless that
+			// low line cannot reach the threat and a standing one can.
+			if (have)
+			{
+				SetContactStance(agent, ECharacterStance.CROUCH);
+				KK_GarrisonHold.LeanAlongWall(body, wall, CoverInterest(body));
+			}
+			else if (MustStandForShot(body))
+			{
+				SetContactStance(agent, ECharacterStance.STAND);
+				KK_GarrisonHold.LeanToward(body, vector.Zero);
+			}
+			else
+			{
+				SetContactStance(agent, ECharacterStance.PRONE);
+				KK_GarrisonHold.LeanToward(body, vector.Zero);
+			}
+
+			return true;
+		}
+
+		KK_GarrisonHold.LeanToward(body, vector.Zero);
+		KK_GarrisonHold.ReleaseEngageFeet(agent);
+		KK_GarrisonHold.SetPinned(body, false);
+		SetCrouch(agent, false);
+
+		bool due = !ordered ||
+			now - m_mContactOrder.Get(agent) >= KK_AgentMove.REISSUE_INTERVAL_MS;
+		if (!due)
+			return true;
+
+		KK_AgentMove.Issue(
+			this,
+			m_Group,
+			agent,
+			spot,
+			m_mSoloHandlers,
+			KK_AgentMove.PRIORITY_LEVEL,
+			EMovementType.RUN
+		);
+		ApplyWeaponForSpeed(agent, EMovementType.RUN);
+		m_mContactOrder.Set(agent, now);
+		return true;
+	}
+
+	// Nearest solid cover inside the take-cover radius, on the threat
+	// side when he has one. A wall he is already against is this spot.
+	protected bool PickContactCover(IEntity body, out vector spot, out vector wallDir)
+	{
+		spot = body.GetOrigin();
+		wallDir = vector.Zero;
+		vector threat;
+		bool known = ContactThreat(body, threat);
+		float reach = CoverRadius();
+
+		float best = -1;
+		bool found = false;
+		vector bestDir;
+		vector origin = body.GetOrigin();
+
+		for (int step = 0; step < 12; step++)
+		{
+			float angle = (Math.PI2 * step) / 12;
+			vector dir = Vector(Math.Sin(angle), 0, Math.Cos(angle));
+			if (known)
+			{
+				vector toThreat = threat - origin;
+				toThreat[1] = 0;
+				if (toThreat.Length() > 0.5)
+				{
+					toThreat.Normalize();
+					if (vector.Dot(dir, toThreat) < 0.35)
+						continue;
+				}
+			}
+
+			float distance = RayCoverDistance(origin, dir, reach);
+			if (distance < 0)
+				continue;
+
+			if (distance < 1.6)
+			{
+				spot = OnNavmesh(origin);
+				wallDir = dir;
+				return true;
+			}
+
+			if (best >= 0 && distance >= best)
+				continue;
+
+			best = distance;
+			bestDir = dir;
+			spot = OnNavmesh(origin + (dir * (distance - 1.1)));
+			found = true;
+		}
+
+		if (found)
+			wallDir = bestDir;
+
+		if (found || known)
+			return found;
+
+		for (int step = 0; step < 12; step++)
+		{
+			float angle = (Math.PI2 * step) / 12;
+			vector dir = Vector(Math.Sin(angle), 0, Math.Cos(angle));
+			float distance = RayCoverDistance(origin, dir, reach);
+			if (distance < 1.6)
+				continue;
+
+			if (best >= 0 && distance >= best)
+				continue;
+
+			best = distance;
+			bestDir = dir;
+			spot = OnNavmesh(origin + (dir * (distance - 1.1)));
+			found = true;
+		}
+
+		if (found)
+			wallDir = bestDir;
+
+		return found;
+	}
+
+	protected bool ContactThreat(IEntity body, out vector threat)
+	{
+		threat = vector.Zero;
+		if (!body)
+			return false;
+
+		AIControlComponent control = AIControlComponent.Cast(
+			body.FindComponent(AIControlComponent)
+		);
+		if (!control)
+			return false;
+
+		SCR_ChimeraAIAgent soldier = SCR_ChimeraAIAgent.Cast(control.GetAIAgent());
+		if (!soldier || !soldier.m_UtilityComponent || !soldier.m_UtilityComponent.m_CombatComponent)
+			return false;
+
+		BaseTarget target = soldier.m_UtilityComponent.m_CombatComponent.GetCurrentTarget();
+		if (!KK_GarrisonHold.IsLivingTarget(target))
+			return false;
+
+		IEntity enemy = target.GetTargetEntity();
+		if (enemy)
+			threat = enemy.GetOrigin();
+		else
+			threat = target.GetLastSeenPosition();
+
+		return threat != vector.Zero;
+	}
+
+	protected float RayCoverDistance(vector feet, vector direction, float reach)
+	{
+		BaseWorld world;
+		if (GetGame())
+			world = GetGame().GetWorld();
+
+		if (!world || reach <= 0)
+			return -1;
+
+		direction[1] = 0;
+		if (direction.Length() < 0.01)
+			return -1;
+
+		direction.Normalize();
+		vector start = feet + Vector(0, 1.2, 0) + (direction * 0.35);
+
+		if (!m_CoverTrace)
+			m_CoverTrace = new TraceParam();
+
+		m_CoverTrace.Flags = TraceFlags.ENTS | TraceFlags.WORLD;
+		m_CoverTrace.Start = start;
+		m_CoverTrace.End = start + (direction * reach);
+		m_CoverTrace.Exclude = null;
+		m_CoverTrace.TraceEnt = null;
+
+		float fraction = world.TraceMove(m_CoverTrace, FilterCover);
+		if (fraction >= 0.98)
+			return -1;
+
+		return fraction * reach;
 	}
 
 	// Attack engage has locked his feet for a plant. The advance step,
@@ -2462,6 +2995,13 @@ class KK_AttackActivity : SCR_AIActivityBase
 						m_mReturnAt.Remove(agent);
 						if (fight)
 						{
+							if (!IsTakeCover())
+							{
+								m_Released.RemoveItem(agent);
+								HoldContactCover(agent, now);
+								continue;
+							}
+
 							YieldSoldier(agent);
 							continue;
 						}
@@ -2470,6 +3010,12 @@ class KK_AttackActivity : SCR_AIActivityBase
 					}
 					else if (fight)
 					{
+						if (!IsTakeCover())
+						{
+							m_Released.RemoveItem(agent);
+							HoldContactCover(agent, now);
+						}
+
 						continue;
 					}
 					else if (distance <= CoverRadius() || m_mCoverSlot.Contains(agent))
@@ -2499,6 +3045,15 @@ class KK_AttackActivity : SCR_AIActivityBase
 				// freeze them there.
 				if (fight)
 				{
+					if (!IsTakeCover() && HoldContactCover(agent, now))
+						continue;
+
+					if (IsTakeCover())
+					{
+						SeekPointCover(agent, pair, now);
+						continue;
+					}
+
 					YieldSoldier(agent);
 					m_Released.Insert(agent);
 					continue;
@@ -2646,10 +3201,11 @@ class KK_AttackActivity : SCR_AIActivityBase
 			return;
 
 		// Engage owns the plant. Leave cover walk, stay, and rotate where
-		// they were until that shot ends.
+		// they were until that shot ends. The corner lean still applies.
 		if (EngagePlantHolds(agent))
 		{
 			HoldEngageCover(agent, now);
+			LeanAtPoint(body);
 			return;
 		}
 
@@ -2682,6 +3238,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 				m_mCoverHold.Remove(agent);
 
 			KK_GarrisonHold.SetPinned(body, false);
+			KK_GarrisonHold.LeanToward(body, vector.Zero);
 			SetCrouch(agent, false);
 
 			if (due)
@@ -2717,10 +3274,12 @@ class KK_AttackActivity : SCR_AIActivityBase
 			ApplyWeaponForSpeed(agent, EMovementType.WALK);
 			m_mCoverHold.Set(agent, now);
 			m_mCoverAt.Remove(agent);
+			LeanAtPoint(body);
 			return;
 		}
 
 		SetCrouch(agent, true);
+		LeanAtPoint(body);
 		ApplyWeaponForSpeed(agent, EMovementType.WALK);
 		KK_GarrisonHold.SetPinned(body, false);
 
@@ -2739,6 +3298,24 @@ class KK_AttackActivity : SCR_AIActivityBase
 		}
 
 		LookAgentDownLane(agent, axis);
+	}
+
+	// The spot is against something solid. Lean toward the open side of it.
+	// An open ring slot has nothing to lean around.
+	protected void LeanAtPoint(IEntity body)
+	{
+		if (!body)
+			return;
+
+		vector toward;
+		float hit;
+		if (!CoverDirection(body.GetOrigin(), toward, hit))
+		{
+			KK_GarrisonHold.LeanToward(body, vector.Zero);
+			return;
+		}
+
+		KK_GarrisonHold.LeanAlongWall(body, toward, CoverInterest(body));
 	}
 
 	// Each man who reaches the point takes the next cover around it.
@@ -3463,6 +4040,11 @@ class KK_AttackActivity : SCR_AIActivityBase
 		m_bPointCovers = false;
 		m_mCoverSlot.Clear();
 		m_mCoverHold.Clear();
+		m_mContactCover.Clear();
+		m_mContactWall.Clear();
+		m_mContactOrder.Clear();
+		m_WasContact.Clear();
+		m_mRegroupAt.Clear();
 		m_iCoverAssign = 0;
 		m_bCoverFought = false;
 		m_fFightClearSince = 0;
@@ -3476,6 +4058,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 				KK_GarrisonHold.SetRecalled(agent, false);
 
 			pair.m_bHasGoal = false;
+			pair.m_bRegroup = false;
 			pair.m_bHolding = false;
 			pair.m_bPaused = false;
 			pair.m_bArrived = false;

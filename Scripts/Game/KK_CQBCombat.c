@@ -1221,6 +1221,12 @@ class KK_GarrisonHold
 		new map<IEntity, IEntity>();
 	protected static ref map<IEntity, vector> s_PressureAt =
 		new map<IEntity, vector>();
+	// Cover he is walking to while an attack reload plays.
+	protected static ref map<IEntity, vector> s_AttackReloadGoal =
+		new map<IEntity, vector>();
+	protected static ref map<IEntity, float> s_AttackReloadAt =
+		new map<IEntity, float>();
+	protected static ref TraceParam s_ReloadCoverTrace;
 	protected static ref map<IEntity, vector> s_ReloadDash =
 		new map<IEntity, vector>();
 	protected static ref map<IEntity, vector> s_ReloadThreat =
@@ -5369,6 +5375,8 @@ class KK_GarrisonHold
 		}
 
 		s_AttackSearch.RemoveItem(body);
+		s_AttackReloadGoal.Remove(body);
+		s_AttackReloadAt.Remove(body);
 		s_AttackGatherAt.Remove(body);
 		s_AttackGather.Remove(body);
 		s_CoverShift.RemoveItem(body);
@@ -5449,7 +5457,9 @@ class KK_GarrisonHold
 			ReleasePerceivedEnemy(body);
 			// The base attack keeps this behavior, so its reload never
 			// gets selected. Start the magazine change from here.
+			// He walks to cover while that animation plays.
 			StartEngageReload(body);
+			SteerAttackReload(body);
 			return;
 		}
 
@@ -6381,6 +6391,160 @@ class KK_GarrisonHold
 		s_DidReload.Insert(body);
 		if (dry)
 			s_EmptyReload.Insert(body);
+	}
+
+	// The magazine change has already started. Walk to the nearest solid
+	// cover, on the side away from the threat, instead of finishing the
+	// reload where he stopped.
+	protected static void SteerAttackReload(IEntity body)
+	{
+		if (!body || !IsAttackSearch(body) || !ReloadCoverEnabled())
+			return;
+
+		if (!CannotShoot(body))
+		{
+			s_AttackReloadGoal.Remove(body);
+			s_AttackReloadAt.Remove(body);
+			return;
+		}
+
+		vector goal;
+		if (!AttackReloadCover(body, goal))
+			return;
+
+		vector flat = goal - body.GetOrigin();
+		flat[1] = 0;
+		if (flat.Length() < 1.5)
+			return;
+
+		float now = WorldTime();
+		bool same =
+			s_AttackReloadGoal.Contains(body) &&
+			vector.Distance(s_AttackReloadGoal.Get(body), goal) < 1;
+		if (
+			same &&
+			s_AttackReloadAt.Contains(body) &&
+			now - s_AttackReloadAt.Get(body) < KK_AgentMove.REISSUE_INTERVAL_MS
+		)
+		{
+			return;
+		}
+
+		SCR_AIUtilityComponent utility = UtilityOf(body);
+		if (!utility)
+			return;
+
+		AIAgent agent = AIAgent.Cast(utility.GetOwner());
+		if (!agent)
+			return;
+
+		SCR_AIMessage_Move message = SCR_AIMessage_Move.Create(
+			null,
+			goal,
+			EMovementType.RUN,
+			false,
+			null
+		);
+		message.m_fPriorityLevel = KK_AgentMove.PRIORITY_LEVEL;
+		message.SetReceiver(agent);
+		utility.m_Mailbox.RequestBroadcast(message, agent);
+
+		AICharacterMovementComponent movement =
+			AICharacterMovementComponent.Cast(
+				body.FindComponent(AICharacterMovementComponent)
+			);
+		if (movement)
+			movement.SetMovementTypeWanted(EMovementType.RUN);
+
+		s_AttackReloadGoal.Set(body, goal);
+		s_AttackReloadAt.Set(body, now);
+	}
+
+	// A spot just short of a wall, with that wall between him and the
+	// threat. Without a threat, the nearest wall in a short radius.
+	protected static bool AttackReloadCover(IEntity body, out vector goal)
+	{
+		goal = vector.Zero;
+		if (!body || !GetGame())
+			return false;
+
+		BaseWorld world = GetGame().GetWorld();
+		if (!world)
+			return false;
+
+		RememberPressure(body);
+		vector threat = body.GetOrigin();
+		bool known = s_PressureAt.Contains(body);
+		if (known)
+			threat = s_PressureAt.Get(body);
+
+		if (!s_ReloadCoverTrace)
+			s_ReloadCoverTrace = new TraceParam();
+
+		vector origin = body.GetOrigin();
+		float best = -1;
+		bool found = false;
+
+		for (int step = 0; step < 12; step++)
+		{
+			float angle = (Math.PI2 * step) / 12;
+			vector dir = Vector(Math.Sin(angle), 0, Math.Cos(angle));
+			if (known)
+			{
+				vector toThreat = threat - origin;
+				toThreat[1] = 0;
+				if (toThreat.Length() > 0.5)
+				{
+					toThreat.Normalize();
+					if (vector.Dot(dir, toThreat) < 0.35)
+						continue;
+				}
+			}
+
+			vector start = origin + Vector(0, 1.2, 0) + (dir * 0.4);
+			s_ReloadCoverTrace.Flags = TraceFlags.ENTS | TraceFlags.WORLD;
+			s_ReloadCoverTrace.Start = start;
+			s_ReloadCoverTrace.End = start + (dir * 16);
+			s_ReloadCoverTrace.Exclude = body;
+			s_ReloadCoverTrace.TraceEnt = null;
+
+			float fraction = world.TraceMove(s_ReloadCoverTrace, FilterReloadCover);
+			if (fraction >= 0.98)
+				continue;
+
+			float distance = fraction * 16;
+			if (distance < 1.6)
+			{
+				if (known)
+					return false;
+
+				continue;
+			}
+
+			if (best >= 0 && distance >= best)
+				continue;
+
+			best = distance;
+			goal = origin + (dir * (distance - 1.1));
+			goal[1] = origin[1];
+			found = true;
+		}
+
+		return found;
+	}
+
+	protected static bool FilterReloadCover(
+		IEntity entity,
+		vector start = "0 0 0",
+		vector dir = "0 0 0")
+	{
+		if (!entity)
+			return true;
+
+		if (ChimeraCharacter.Cast(entity))
+			return false;
+
+		return true;
 	}
 
 	// Current gun cannot be fed. Another gun that still has rounds, primary
@@ -9599,6 +9763,92 @@ class KK_GarrisonHold
 			return;
 
 		utility.m_LookAction.Cancel();
+	}
+
+	// A zero point drops the lean. Cover peeks do not come through here.
+	static void LeanToward(IEntity soldier, vector interest)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		if (interest == vector.Zero)
+			RememberLean(body, 0);
+	}
+
+	// Along the wall, toward the side that is open one step away. towardWall
+	// points from him at the wall. A side that is still wall is not a corner.
+	// interest is only used when both sides are open, like a post.
+	// No trace toward the threat.
+	static void LeanAlongWall(IEntity soldier, vector towardWall, vector interest)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		towardWall[1] = 0;
+		if (towardWall.Length() < 0.01)
+		{
+			RememberLean(body, 0);
+			return;
+		}
+
+		towardWall.Normalize();
+		vector along = Vector(-towardWall[2], 0, towardWall[0]);
+		bool leftOpen = !WallBeside(body, towardWall, -along);
+		bool rightOpen = !WallBeside(body, towardWall, along);
+
+		if (!leftOpen && !rightOpen)
+		{
+			RememberLean(body, 0);
+			return;
+		}
+
+		if (leftOpen && rightOpen)
+		{
+			vector to = interest - body.GetOrigin();
+			to[1] = 0;
+			if (to.Length() > 0.5 && vector.Dot(along, to) < 0)
+				along = -along;
+		}
+		else if (leftOpen)
+		{
+			along = -along;
+		}
+
+		vector transform[4];
+		body.GetWorldTransform(transform);
+		float lean = 1;
+		if (vector.Dot(along, transform[0]) < 0)
+			lean = -1;
+
+		RememberLean(body, lean);
+	}
+
+	// The spot one step along the wall. A hit means the wall is still there,
+	// so that side is not a corner.
+	protected static bool WallBeside(IEntity body, vector towardWall, vector along)
+	{
+		BaseWorld world = GetGame().GetWorld();
+		if (!world)
+			world = body.GetWorld();
+		if (!world)
+			return true;
+
+		if (!s_ReloadCoverTrace)
+			s_ReloadCoverTrace = new TraceParam();
+
+		vector origin = body.GetOrigin();
+		vector sample = origin + (along * 0.75);
+		vector outside = sample - (towardWall * 0.35);
+		outside[1] = origin[1] + 1.05;
+		s_ReloadCoverTrace.Flags = TraceFlags.ENTS | TraceFlags.WORLD;
+		s_ReloadCoverTrace.Start = outside;
+		s_ReloadCoverTrace.End = outside + (towardWall * 1.1);
+		s_ReloadCoverTrace.Exclude = body;
+		s_ReloadCoverTrace.TraceEnt = null;
+		float fraction = world.TraceMove(s_ReloadCoverTrace, FilterReloadCover);
+		return fraction < 0.9;
 	}
 
 	protected static bool CanEngage(IEntity body, IEntity enemy, out float lean)
