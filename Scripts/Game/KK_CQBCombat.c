@@ -819,6 +819,8 @@ class KK_NearBubble
 class KK_GarrisonHold
 {
 	protected static ref set<IEntity> s_Pinned = new set<IEntity>();
+	// Walking to the cover hold. Not pinned, so he can still move.
+	protected static ref set<IEntity> s_CoverApproach = new set<IEntity>();
 	// Unlocked while unconscious. The speed override does not stick until he is up.
 	protected static ref array<IEntity> s_SpeedRelease = {};
 	protected static bool s_bSpeedReleaseTicking;
@@ -1285,6 +1287,25 @@ class KK_GarrisonHold
 	{
 		IEntity body = CharacterBody(soldier);
 		return body && s_Pinned.Contains(body);
+	}
+
+	// The run to a cover hold. Combat movement has to leave that run alone.
+	static void SetCoverApproach(IEntity soldier, bool approaching)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		if (approaching)
+			s_CoverApproach.Insert(body);
+		else
+			s_CoverApproach.RemoveItem(body);
+	}
+
+	static bool IsCoverApproach(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		return body && s_CoverApproach.Contains(body);
 	}
 
 	// Unconscious, still alive. Dead is handled by the caller that drops the hold.

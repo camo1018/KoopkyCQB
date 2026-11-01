@@ -348,6 +348,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 		EMovementType speed,
 		float now)
 	{
+		ReleaseCoverHold(agent);
+
 		if (ServingTreatment(agent))
 			return;
 
@@ -761,6 +763,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 					if (ServingTreatment(agent))
 						continue;
 
+					ReleaseCoverHold(agent);
+
 					if (HoldContactCover(agent, now))
 						continue;
 
@@ -1001,6 +1005,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 	// raise, and raise again if that crouch cancelled it.
 	protected void HoldForOverwatch(notnull KK_AttackPair pair, float now)
 	{
+		foreach (AIAgent agent : pair.m_aAgents)
+			KK_GarrisonHold.SetCoverApproach(agent, false);
+
 		if (!pair.m_bHolding)
 		{
 			BeginHold(pair);
@@ -1400,6 +1407,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 			// the wall onto the side he climbed from.
 			if (KK_AgentMove.CrossingObstacle(agent))
 				continue;
+
+			ReleaseCoverHold(agent);
 
 			vector goal = pair.m_vGoal + (right * side);
 			// Clear the enemy move before the sprint speed, or this step
@@ -2525,6 +2534,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 			// A wall gets a crouch. Open ground gets prone, unless that
 			// low line cannot reach the threat and a standing one can.
+			KK_GarrisonHold.SetCoverApproach(body, false);
+			KK_GarrisonHold.SetPinned(body, true);
 			if (have)
 			{
 				SetContactStance(agent, ECharacterStance.CROUCH);
@@ -2548,6 +2559,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 		m_mCoverHold.Remove(agent);
 		KK_GarrisonHold.ReleaseEngageFeet(agent);
 		KK_GarrisonHold.SetPinned(body, false);
+		KK_GarrisonHold.SetCoverApproach(body, true);
 		SetCrouch(agent, false);
 
 		bool due = !ordered ||
@@ -3120,6 +3132,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 				if (!agent || !agent.GetControlledEntity() || ServingTreatment(agent))
 					continue;
 
+				ReleaseCoverHold(agent);
+
 				float distance = FlatDistance(
 					agent.GetControlledEntity().GetOrigin(),
 					m_vTarget
@@ -3338,6 +3352,17 @@ class KK_AttackActivity : SCR_AIActivityBase
 			return true;
 
 		return ReachedDestination(agent.GetControlledEntity().GetOrigin());
+	}
+
+	// Last tick's cover hold. The hold sets it again when he is still there.
+	protected void ReleaseCoverHold(AIAgent agent)
+	{
+		if (!agent)
+			return;
+
+		IEntity body = agent.GetControlledEntity();
+		KK_GarrisonHold.SetCoverApproach(body, false);
+		KK_GarrisonHold.SetPinned(body, false);
 	}
 
 	// Cover hold for a man at the point. His own contact uses the contact
@@ -3727,6 +3752,14 @@ class KK_AttackActivity : SCR_AIActivityBase
 			return 8;
 
 		return m_AttackWaypoint.GetArrivalRadius();
+	}
+
+	protected float CoverRadius()
+	{
+		if (!m_AttackWaypoint)
+			return 5;
+
+		return m_AttackWaypoint.GetCoverRadius();
 	}
 
 	// On the destination line, including a man out on his lane. The flat
