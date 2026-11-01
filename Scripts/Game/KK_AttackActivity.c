@@ -76,8 +76,6 @@ class KK_AttackActivity : SCR_AIActivityBase
 	protected ref map<AIAgent, float> m_mCoverAt = new map<AIAgent, float>();
 	// Cover spots around the point, in order around the circle. Each man
 	// who arrives takes the next one.
-	protected ref array<vector> m_aPointCovers = {};
-	protected bool m_bPointCovers;
 	// Advance and bound. A man in contact walks here and fights, instead
 	// of keeping the step toward the waypoint. Take cover does not use it.
 	protected ref map<AIAgent, vector> m_mContactCover = new map<AIAgent, vector>();
@@ -86,9 +84,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 	protected ref map<AIAgent, float> m_mContactOrder = new map<AIAgent, float>();
 	protected ref set<AIAgent> m_WasContact = new set<AIAgent>();
 	protected ref map<AIAgent, float> m_mRegroupAt = new map<AIAgent, float>();
-	protected ref map<AIAgent, int> m_mCoverSlot = new map<AIAgent, int>();
 	protected ref map<AIAgent, float> m_mCoverHold = new map<AIAgent, float>();
-	protected int m_iCoverAssign;
+	protected bool m_bSkipCover;
+	protected vector m_vSkipCover;
 	protected bool m_bCoverFought;
 	protected float m_fFightClearSince;
 	protected ref map<AIAgent, float> m_mPerceptionFactors =
@@ -127,7 +125,6 @@ class KK_AttackActivity : SCR_AIActivityBase
 	protected static const float COVER_REACH = 1.25;
 	// Men at the point stand this far apart. Closer than this and the
 	// squad stacks on one corner.
-	protected static const float COVER_SPACING = 6;
 	// After the last target drops, keep the attack in charge this long
 	// so a flicker does not plant him back in the cover.
 	protected static const float FIGHT_CLEAR_MS = 4000;
@@ -356,6 +353,12 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 		if (HoldContactCover(agent, now))
 			return;
+
+		if (SquadHasContact())
+		{
+			UseCoverHold(agent, now);
+			return;
+		}
 
 		if (pair.m_bRegroup)
 			return;
@@ -745,6 +748,25 @@ class KK_AttackActivity : SCR_AIActivityBase
 			if (IsTakeCover())
 			{
 				CoverHold(pair, now);
+				continue;
+			}
+
+			if (SquadHasContact())
+			{
+				foreach (AIAgent agent : pair.m_aAgents)
+				{
+					if (!agent || !agent.GetControlledEntity() || IsReleased(agent))
+						continue;
+
+					if (ServingTreatment(agent))
+						continue;
+
+					if (HoldContactCover(agent, now))
+						continue;
+
+					UseCoverHold(agent, now);
+				}
+
 				continue;
 			}
 
@@ -1367,6 +1389,12 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 			if (HoldContactCover(agent, now))
 				continue;
+
+			if (SquadHasContact())
+			{
+				UseCoverHold(agent, now);
+				continue;
+			}
 
 			// A new order, a stance change, or a look snap drops him off
 			// the wall onto the side he climbed from.
@@ -2259,6 +2287,10 @@ class KK_AttackActivity : SCR_AIActivityBase
 			if (!body)
 				continue;
 
+			m_mContactCover.Remove(agent);
+			m_mContactWall.Remove(agent);
+			m_mContactOrder.Remove(agent);
+
 			vector slot = leadPos;
 			if (agent != lead)
 				slot = leadPos + (right * (MemberSide(pair, agent) - leadSide));
@@ -2365,6 +2397,28 @@ class KK_AttackActivity : SCR_AIActivityBase
 		return KK_GarrisonHold.EngageContactOpen(agent);
 	}
 
+	// Any advance or bound man in contact. Take cover never counts.
+	// The rest of the squad takes cover with him.
+	protected bool SquadHasContact()
+	{
+		if (IsTakeCover() || !KK_GarrisonHold.AttackEngageEnabled())
+			return false;
+
+		foreach (KK_AttackPair pair : m_aPairs)
+		{
+			if (!pair)
+				continue;
+
+			foreach (AIAgent agent : pair.m_aAgents)
+			{
+				if (SoldierContact(agent))
+					return true;
+			}
+		}
+
+		return false;
+	}
+
 	// Advance and bound. While he has contact, the waypoint step waits.
 	// He runs to the nearest cover toward the threat and shoots from it.
 	// True when that hold is his move this pass.
@@ -2391,6 +2445,13 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (agent)
 			m_WasContact.Insert(agent);
 
+		return UseCoverHold(agent, now);
+	}
+
+	// Nearest solid cover, then the crouch, prone, and corner lean.
+	// Contact on the way and the hold at the destination both use this.
+	protected bool UseCoverHold(AIAgent agent, float now)
+	{
 		IEntity body = agent.GetControlledEntity();
 		if (!body)
 			return true;
@@ -2421,6 +2482,36 @@ class KK_AttackActivity : SCR_AIActivityBase
 		}
 
 		bool planted = !have || FlatDistance(body.GetOrigin(), spot) <= COVER_REACH;
+		if (have && planted && CoverRotateDue(agent, now))
+		{
+			vector leftSpot = spot;
+			vector leftWall = wall;
+			m_mContactCover.Remove(agent);
+			m_mContactWall.Remove(agent);
+			m_mContactOrder.Remove(agent);
+			m_mCoverHold.Remove(agent);
+			m_bSkipCover = true;
+			m_vSkipCover = leftSpot;
+			bool shifted = PickContactCover(body, spot, wall);
+			m_bSkipCover = false;
+			if (!shifted)
+			{
+				spot = leftSpot;
+				wall = leftWall;
+				m_mContactCover.Set(agent, spot);
+				m_mContactWall.Set(agent, wall);
+				m_mContactOrder.Set(agent, -1);
+				m_mCoverHold.Set(agent, now);
+			}
+			else
+			{
+				m_mContactCover.Set(agent, spot);
+				m_mContactWall.Set(agent, wall);
+				have = true;
+				planted = FlatDistance(body.GetOrigin(), spot) <= COVER_REACH;
+			}
+		}
+
 		bool ordered = m_mContactOrder.Contains(agent);
 		if (planted)
 		{
@@ -2428,6 +2519,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 			{
 				StopAdvanceAgent(agent);
 				m_mContactOrder.Set(agent, -1);
+				if (!m_mCoverHold.Contains(agent))
+					m_mCoverHold.Set(agent, now);
 			}
 
 			// A wall gets a crouch. Open ground gets prone, unless that
@@ -2452,6 +2545,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 		}
 
 		KK_GarrisonHold.LeanToward(body, vector.Zero);
+		m_mCoverHold.Remove(agent);
 		KK_GarrisonHold.ReleaseEngageFeet(agent);
 		KK_GarrisonHold.SetPinned(body, false);
 		SetCrouch(agent, false);
@@ -2510,9 +2604,15 @@ class KK_AttackActivity : SCR_AIActivityBase
 			if (distance < 0)
 				continue;
 
+			vector candidate = OnNavmesh(origin + (dir * (distance - 1.1)));
+			if (distance < 1.6)
+				candidate = OnNavmesh(origin);
+			if (SkipsCover(candidate))
+				continue;
+
 			if (distance < 1.6)
 			{
-				spot = OnNavmesh(origin);
+				spot = candidate;
 				wallDir = dir;
 				return true;
 			}
@@ -2522,7 +2622,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 			best = distance;
 			bestDir = dir;
-			spot = OnNavmesh(origin + (dir * (distance - 1.1)));
+			spot = candidate;
 			found = true;
 		}
 
@@ -2540,12 +2640,16 @@ class KK_AttackActivity : SCR_AIActivityBase
 			if (distance < 1.6)
 				continue;
 
+			vector candidate = OnNavmesh(origin + (dir * (distance - 1.1)));
+			if (SkipsCover(candidate))
+				continue;
+
 			if (best >= 0 && distance >= best)
 				continue;
 
 			best = distance;
 			bestDir = dir;
-			spot = OnNavmesh(origin + (dir * (distance - 1.1)));
+			spot = candidate;
 			found = true;
 		}
 
@@ -2553,6 +2657,50 @@ class KK_AttackActivity : SCR_AIActivityBase
 			wallDir = bestDir;
 
 		return found;
+	}
+
+	// The cover he just left. A rotate will not pick it again.
+	protected bool SkipsCover(vector candidate)
+	{
+		if (!m_bSkipCover)
+			return false;
+
+		float gap = 6;
+		if (m_AttackWaypoint)
+			gap = m_AttackWaypoint.GetCoverRotateGap();
+
+		return FlatDistance(candidate, m_vSkipCover) < gap;
+	}
+
+	// Planted long enough. A target, or a shot he can still take, does not
+	// hold him. Later men wait a little longer so the squad does not step off together.
+	protected bool CoverRotateDue(AIAgent agent, float now)
+	{
+		if (!agent || !m_AttackWaypoint)
+			return false;
+
+		float seconds = m_AttackWaypoint.GetCoverRotate();
+		if (seconds <= 0 || !m_mCoverHold.Contains(agent))
+			return false;
+
+		int index = 0;
+		int seen = 0;
+		foreach (KK_AttackPair pair : m_aPairs)
+		{
+			if (!pair)
+				continue;
+
+			foreach (AIAgent other : pair.m_aAgents)
+			{
+				if (other == agent)
+					index = seen;
+
+				seen++;
+			}
+		}
+
+		float wait = seconds * 1000 * (1 + (Math.Mod(index, 4) * 0.25));
+		return now - m_mCoverHold.Get(agent) >= wait;
 	}
 
 	protected bool ContactThreat(IEntity body, out vector threat)
@@ -2929,11 +3077,21 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 		// The mod stays on for anyone still at the point. This run has to
 		// stay selected over that fight, or he stops and shoots instead.
+		vector backTo = m_vTarget;
+		vector backWall;
+		if (body && m_mContactCover.Contains(agent))
+			backTo = m_mContactCover.Get(agent);
+		else if (body && PickContactCover(body, backTo, backWall))
+		{
+			m_mContactCover.Set(agent, backTo);
+			m_mContactWall.Set(agent, backWall);
+		}
+
 		KK_AgentMove.Issue(
 			this,
 			m_Group,
 			agent,
-			CoverSlot(pair, agent),
+			backTo,
 			m_mSoloHandlers,
 			KK_AgentMove.SprintPriorityLevel(),
 			EMovementType.RUN
@@ -2960,9 +3118,6 @@ class KK_AttackActivity : SCR_AIActivityBase
 			foreach (AIAgent agent : pair.m_aAgents)
 			{
 				if (!agent || !agent.GetControlledEntity() || ServingTreatment(agent))
-					continue;
-
-				if (ShiftIfStuck(agent, pair, now))
 					continue;
 
 				float distance = FlatDistance(
@@ -2995,14 +3150,13 @@ class KK_AttackActivity : SCR_AIActivityBase
 						m_mReturnAt.Remove(agent);
 						if (fight)
 						{
-							if (!IsTakeCover() && KK_GarrisonHold.AttackEngageEnabled())
+							if (!KK_GarrisonHold.AttackEngageEnabled())
 							{
-								m_Released.RemoveItem(agent);
-								HoldContactCover(agent, now);
+								YieldSoldier(agent);
 								continue;
 							}
 
-							YieldSoldier(agent);
+							PlantFightCover(agent, now);
 							continue;
 						}
 
@@ -3010,15 +3164,16 @@ class KK_AttackActivity : SCR_AIActivityBase
 					}
 					else if (fight)
 					{
-						if (!IsTakeCover() && KK_GarrisonHold.AttackEngageEnabled())
+						if (!KK_GarrisonHold.AttackEngageEnabled())
 						{
-							m_Released.RemoveItem(agent);
-							HoldContactCover(agent, now);
+							YieldSoldier(agent);
+							continue;
 						}
 
+						PlantFightCover(agent, now);
 						continue;
 					}
-					else if (distance <= CoverRadius() || m_mCoverSlot.Contains(agent))
+					else if (distance <= CoverRadius() || m_mContactCover.Contains(agent))
 					{
 						m_Released.RemoveItem(agent);
 					}
@@ -3036,7 +3191,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 				// flat radius. Once he has a spot he keeps running to it.
 				if (
 					!ReachedDestination(agent.GetControlledEntity().GetOrigin()) &&
-					!m_mCoverSlot.Contains(agent)
+					!m_mContactCover.Contains(agent)
 				)
 					continue;
 
@@ -3045,22 +3200,17 @@ class KK_AttackActivity : SCR_AIActivityBase
 				// freeze them there.
 				if (fight)
 				{
-					// Engage off is the base attack. It owns the fight, including
-					// a man who has no contact of his own while the squad does.
-					if (KK_GarrisonHold.AttackEngageEnabled())
+					// Engage off hands the whole fight to the base attack.
+					// Engage on keeps every man on the cover hold, including
+					// one who has no contact of his own.
+					if (!KK_GarrisonHold.AttackEngageEnabled())
 					{
-						if (!IsTakeCover() && HoldContactCover(agent, now))
-							continue;
-
-						if (IsTakeCover())
-						{
-							SeekPointCover(agent, pair, now);
-							continue;
-						}
+						YieldSoldier(agent);
+						m_Released.Insert(agent);
+						continue;
 					}
 
-					YieldSoldier(agent);
-					m_Released.Insert(agent);
+					PlantFightCover(agent, now);
 					continue;
 				}
 
@@ -3184,566 +3334,41 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (!IsTakeCover() || IsReleased(agent) || !agent || !agent.GetControlledEntity())
 			return false;
 
-		if (m_mCoverSlot.Contains(agent))
+		if (m_mContactCover.Contains(agent))
 			return true;
 
 		return ReachedDestination(agent.GetControlledEntity().GetOrigin());
 	}
 
-	// The attack has not taken him. Run to a covered spot around the point,
-	// then plant. The run outranks the bound sprint, so he does not finish
-	// that step in the open. A target hands him to the attack instead.
+	// Cover hold for a man at the point. His own contact uses the contact
+	// bookkeeping. Anyone else still takes the same cover.
+	protected void PlantFightCover(AIAgent agent, float now)
+	{
+		if (!agent)
+			return;
+
+		m_Released.RemoveItem(agent);
+		if (!IsTakeCover() && HoldContactCover(agent, now))
+			return;
+
+		UseCoverHold(agent, now);
+	}
+
+	// At the destination. Same cover search as a man who is in contact.
 	protected void SeekPointCover(
 		AIAgent agent,
 		notnull KK_AttackPair pair,
 		float now)
 	{
-		if (!agent)
-			return;
-
-		IEntity body = agent.GetControlledEntity();
-		if (!body)
-			return;
-
-		// Engage owns the plant. Leave cover walk, stay, and rotate where
-		// they were until that shot ends. The corner lean still applies.
-		if (EngagePlantHolds(agent))
-		{
-			HoldEngageCover(agent, now);
-			LeanAtPoint(body);
-			return;
-		}
-
-		if (m_mSettledAt.Contains(agent))
-			m_mSettledAt.Remove(agent);
-
-		KK_GarrisonHold.SetReturnFire(agent, false);
-		KK_GarrisonHold.SetRecalled(agent, false);
-
-		vector axis;
-		vector right;
-		BuildAxis(axis, right);
-
-		vector slot = CoverSlot(pair, agent);
-		bool planted = FlatDistance(body.GetOrigin(), slot) <= COVER_REACH;
-		if (planted && CoverRotateDue(agent, now))
-		{
-			AdvanceCover(agent);
-			slot = CoverSlot(pair, agent);
-			planted = false;
-			m_mCoverAt.Remove(agent);
-		}
-
-		bool due = !m_mCoverAt.Contains(agent) ||
-			now - m_mCoverAt.Get(agent) >= KK_AgentMove.REISSUE_INTERVAL_MS;
-
-		if (!planted)
-		{
-			if (m_mCoverHold.Contains(agent))
-				m_mCoverHold.Remove(agent);
-
-			KK_GarrisonHold.SetPinned(body, false);
-			KK_GarrisonHold.LeanToward(body, vector.Zero);
-			SetCrouch(agent, false);
-
-			if (due)
-			{
-				KK_AgentMove.Issue(
-					this,
-					m_Group,
-					agent,
-					slot,
-					m_mSoloHandlers,
-					KK_AgentMove.SprintPriorityLevel(),
-					EMovementType.RUN
-				);
-				ApplyWeaponForSpeed(agent, EMovementType.RUN);
-				m_mCoverAt.Set(agent, now);
-			}
-			else
-			{
-				KK_AgentMove.SetWantedSpeed(agent, EMovementType.RUN);
-			}
-
-			return;
-		}
-
-		// The walk outranks the attack. Cancel it once, then hold with a
-		// stay the attack can beat. A pin here freezes the fight in place.
-		if (!m_mCoverHold.Contains(agent))
-		{
-			CancelAgent(agent);
-			KK_GarrisonHold.SetCoverShift(agent, false);
-			KK_GarrisonHold.SetPinned(body, false);
-			SetCrouch(agent, true);
-			ApplyWeaponForSpeed(agent, EMovementType.WALK);
-			m_mCoverHold.Set(agent, now);
-			m_mCoverAt.Remove(agent);
-			LeanAtPoint(body);
-			return;
-		}
-
-		SetCrouch(agent, true);
-		LeanAtPoint(body);
-		ApplyWeaponForSpeed(agent, EMovementType.WALK);
-		KK_GarrisonHold.SetPinned(body, false);
-
-		if (due)
-		{
-			KK_AgentMove.Issue(
-				this,
-				m_Group,
-				agent,
-				body.GetOrigin(),
-				m_mSoloHandlers,
-				KK_AgentMove.PRIORITY_LEVEL,
-				EMovementType.WALK
-			);
-			m_mCoverAt.Set(agent, now);
-		}
-
-		LookAgentDownLane(agent, axis);
-	}
-
-	// The spot is against something solid. Lean toward the open side of it.
-	// An open ring slot has nothing to lean around.
-	protected void LeanAtPoint(IEntity body)
-	{
-		if (!body || !KK_GarrisonHold.AttackEngageEnabled())
-			return;
-
-		vector toward;
-		float hit;
-		if (!CoverDirection(body.GetOrigin(), toward, hit))
-		{
-			KK_GarrisonHold.LeanToward(body, vector.Zero);
-			return;
-		}
-
-		KK_GarrisonHold.LeanAlongWall(body, toward, CoverInterest(body));
-	}
-
-	// Each man who reaches the point takes the next cover around it.
-	// He keeps that spot until the rotate time, including a walk back.
-	protected vector CoverSlot(notnull KK_AttackPair pair, AIAgent agent)
-	{
-		EnsurePointCovers();
-
-		if (!m_aPointCovers || m_aPointCovers.Count() == 0)
-			return OnNavmesh(m_vTarget);
-
-		if (!agent || !m_mCoverSlot.Contains(agent))
-		{
-			m_mCoverSlot.Set(agent, m_iCoverAssign);
-			m_iCoverAssign++;
-		}
-
-		int index = 0;
-		if (agent)
-			index = m_mCoverSlot.Get(agent);
-
-		int count = m_aPointCovers.Count();
-		vector spot = m_aPointCovers[Math.Mod(index, count)];
-		int lap = index / count;
-		vector spread = SpreadCover(spot, lap);
-		// The navmesh pulled the next man back onto someone. His lane is
-		// still empty, so he stands there instead of on that man.
-		if (lap > 0 && FlatDistance(spread, spot) < COVER_SPACING * 0.75)
-			return LaneDestination(pair, agent);
-
-		return spread;
-	}
-
-	// At the point, and the shot from here has failed long enough. He takes
-	// the next cover. One cover has nowhere to go, so he stays and keeps
-	// trying the return shot.
-	protected bool ShiftIfStuck(
-		AIAgent agent,
-		notnull KK_AttackPair pair,
-		float now)
-	{
 		if (!agent || !agent.GetControlledEntity())
-			return false;
-
-		// A cover shift already released the plant so he can walk. A new
-		// engage plant waits; do not start another shift from that stop.
-		if (EngagePlantHolds(agent) && !KK_GarrisonHold.IsCoverShift(agent))
-			return false;
-
-		float distance = FlatDistance(agent.GetControlledEntity().GetOrigin(), m_vTarget);
-		bool atPoint = ReachedDestination(agent.GetControlledEntity().GetOrigin()) ||
-			(m_mCoverSlot.Contains(agent) && distance <= CoverRadius());
-		if (!atPoint)
-			return false;
-
-		if (KK_GarrisonHold.IsCoverShift(agent))
-		{
-			vector slot = CoverSlot(pair, agent);
-			bool planted = FlatDistance(agent.GetControlledEntity().GetOrigin(), slot) <= COVER_REACH;
-			if (planted)
-			{
-				KK_GarrisonHold.SetCoverShift(agent, false);
-				return false;
-			}
-
-			m_Released.RemoveItem(agent);
-			KK_GarrisonHold.ReleaseEngageFeet(agent);
-			SeekPointCover(agent, pair, now);
-			return true;
-		}
-
-		if (KK_GarrisonHold.CannotShoot(agent))
-			return false;
-
-		if (!KK_GarrisonHold.EngageLaneBlocked(agent, COVER_LANE_STUCK_MS))
-			return false;
-
-		EnsurePointCovers();
-		if (!m_aPointCovers || m_aPointCovers.Count() < 2)
-			return false;
-
-		if (!m_mCoverSlot.Contains(agent))
-			CoverSlot(pair, agent);
-		else
-			AdvanceCover(agent);
-
-		m_Released.RemoveItem(agent);
-		m_mCoverHold.Remove(agent);
-		m_mCoverAt.Remove(agent);
-		KK_GarrisonHold.SetCoverShift(agent, true);
-		KK_GarrisonHold.ClearEngageLaneBlock(agent);
-		KK_GarrisonHold.ReleaseEngageFeet(agent);
-		SeekPointCover(agent, pair, now);
-		return true;
-	}
-
-	// Planted long enough, and not in a shot. One cover has nowhere to go.
-	protected bool CoverRotateDue(AIAgent agent, float now)
-	{
-		if (!agent || !m_aPointCovers || m_aPointCovers.Count() < 2)
-			return false;
-
-		if (CoverRotateMs() <= 0)
-			return false;
-
-		if (!m_mCoverHold.Contains(agent))
-			return false;
-
-		if (HasLivingTarget(agent) || KK_GarrisonHold.PerceivedFireActive(agent))
-			return false;
-
-		int index = 0;
-		if (m_mCoverSlot.Contains(agent))
-			index = m_mCoverSlot.Get(agent);
-
-		int count = m_aPointCovers.Count();
-		// Later men leave a little after the first, so the squad does not
-		// step off together. The setting is the first man's wait.
-		float wait = CoverRotateMs() * (1 + (Math.Mod(index, count) * 0.25));
-		return now - m_mCoverHold.Get(agent) >= wait;
-	}
-
-	protected float CoverRotateMs()
-	{
-		if (!m_AttackWaypoint)
-			return 12000;
-
-		return m_AttackWaypoint.GetCoverRotate() * 1000;
-	}
-
-	protected float CoverRadius()
-	{
-		if (!m_AttackWaypoint)
-			return 25;
-
-		return m_AttackWaypoint.GetCoverRadius();
-	}
-
-	protected void AdvanceCover(AIAgent agent)
-	{
-		if (!agent)
 			return;
 
-		int index = 0;
-		if (m_mCoverSlot.Contains(agent))
-			index = m_mCoverSlot.Get(agent);
+		if (EngagePlantHolds(agent))
+			HoldEngageCover(agent, now);
 
-		m_mCoverSlot.Set(agent, index + 1);
-		m_mCoverHold.Remove(agent);
+		UseCoverHold(agent, now);
 	}
 
-	// Spots in order around the point, far enough apart that the squad
-	// does not stack. One direction keeps the sample closest to something
-	// solid. A second sample of that same cover is dropped, then the
-	// wall is walked so one corner can hold a line of men.
-	protected void EnsurePointCovers()
-	{
-		if (m_bPointCovers)
-			return;
-
-		m_bPointCovers = true;
-		m_aPointCovers.Clear();
-
-		vector axis;
-		vector right;
-		if (!BuildAxis(axis, right))
-		{
-			m_aPointCovers.Insert(OnNavmesh(m_vTarget));
-			return;
-		}
-
-		float radius = CoverRadius();
-		float limit = radius;
-
-		for (int step = 0; step < 8; step++)
-		{
-			float angle = (Math.PI2 * step) / 8;
-			vector dir = (right * Math.Sin(angle)) + (axis * Math.Cos(angle));
-			vector place;
-			float hit;
-			// The outer sample first, so the ring uses the full radius.
-			bool found = ReadCover(m_vTarget + (dir * radius), limit, place, hit);
-			if (!found)
-				found = ReadCover(m_vTarget + (dir * (radius * 0.5)), limit, place, hit);
-
-			if (!found || NearPointCover(place))
-				continue;
-
-			m_aPointCovers.Insert(place);
-		}
-
-		ExtendPointCovers();
-		FillOpenCovers(axis, right);
-
-		if (m_aPointCovers.Count() == 0)
-			m_aPointCovers.Insert(OnNavmesh(m_vTarget));
-	}
-
-	// One wall can hold more than one man. Step along it at the same
-	// spacing, and stop when the next step leaves the cover or the radius.
-	protected void ExtendPointCovers()
-	{
-		array<vector> seeds = {};
-		foreach (vector kept : m_aPointCovers)
-			seeds.Insert(kept);
-
-		float limit = CoverRadius();
-
-		foreach (vector seed : seeds)
-		{
-			vector toward;
-			float hit;
-			if (!CoverDirection(seed, toward, hit))
-				continue;
-
-			vector along = Vector(-toward[2], 0, toward[0]);
-
-			for (int side = -1; side <= 1; side += 2)
-			{
-				for (int step = 1; step <= 4; step++)
-				{
-					vector shifted = seed + (along * (COVER_SPACING * step * side));
-					shifted[1] = seed[1];
-					if (FlatDistance(shifted, m_vTarget) > limit)
-						break;
-
-					vector place = OnNavmesh(shifted);
-					if (FlatDistance(place, m_vTarget) > limit)
-						break;
-
-					if (NearPointCover(place))
-						break;
-
-					if (CoverDistanceAny(place) < 0)
-						break;
-
-					m_aPointCovers.Insert(place);
-				}
-			}
-		}
-	}
-
-	// Cover ran out before the squad did. The rest stand on the ring,
-	// still at the same spacing, instead of on a man already in cover.
-	protected void FillOpenCovers(vector axis, vector right)
-	{
-		int wanted = FightingCount();
-		if (m_aPointCovers.Count() >= wanted)
-			return;
-
-		float radius = CoverRadius();
-
-		for (int step = 0; step < 8; step++)
-		{
-			if (m_aPointCovers.Count() >= wanted)
-				return;
-
-			float angle = (Math.PI2 * step) / 8;
-			vector dir = (right * Math.Sin(angle)) + (axis * Math.Cos(angle));
-			vector place = OnNavmesh(m_vTarget + (dir * radius));
-			if (FlatDistance(place, m_vTarget) > radius)
-				continue;
-
-			if (NearPointCover(place))
-				continue;
-
-			m_aPointCovers.Insert(place);
-		}
-	}
-
-	protected int FightingCount()
-	{
-		int count = 0;
-
-		foreach (KK_AttackPair pair : m_aPairs)
-		{
-			if (!pair)
-				continue;
-
-			foreach (AIAgent agent : pair.m_aAgents)
-			{
-				if (agent && agent.GetControlledEntity())
-					count++;
-			}
-		}
-
-		if (count < 1)
-			return 1;
-
-		return count;
-	}
-
-	protected bool ReadCover(
-		vector candidate,
-		float limit,
-		out vector place,
-		out float hit)
-	{
-		place = OnNavmesh(candidate);
-		hit = -1;
-
-		if (FlatDistance(place, m_vTarget) > limit)
-			return false;
-
-		hit = CoverDistanceAny(place);
-		return hit >= 0;
-	}
-
-	// A wall on any side of the sample. The lane check missed covers
-	// that do not sit left or right of the push.
-	protected float CoverDistanceAny(vector feet)
-	{
-		vector toward;
-		float hit;
-		if (!CoverDirection(feet, toward, hit))
-			return -1;
-
-		return hit;
-	}
-
-	// Nearest solid thing between an arm's length and a short step.
-	// toward points at that thing.
-	protected bool CoverDirection(vector feet, out vector toward, out float hit)
-	{
-		hit = -1;
-		toward = vector.Zero;
-
-		for (int step = 0; step < 8; step++)
-		{
-			float angle = (Math.PI2 * step) / 8;
-			vector dir = Vector(Math.Sin(angle), 0, Math.Cos(angle));
-			float distance = RayCover(feet, dir);
-			if (distance <= 0.6 || distance >= 3.5)
-				continue;
-
-			if (hit >= 0 && distance >= hit)
-				continue;
-
-			hit = distance;
-			toward = dir;
-		}
-
-		return hit >= 0;
-	}
-
-	protected bool NearPointCover(vector place)
-	{
-		foreach (vector kept : m_aPointCovers)
-		{
-			if (FlatDistance(kept, place) < COVER_SPACING)
-				return true;
-		}
-
-		return false;
-	}
-
-	// More men than covers. The next man stands along that same cover
-	// instead of on the first man. A step the navmesh pulls back onto
-	// the first man is tried the other way, then out on the ring.
-	protected vector SpreadCover(vector spot, int lap)
-	{
-		if (lap <= 0)
-			return spot;
-
-		vector flat = spot - m_vTarget;
-		flat[1] = 0;
-		if (flat.Length() < 0.2)
-			flat = "0 0 1";
-		else
-			flat.Normalize();
-
-		vector side = Vector(-flat[2], 0, flat[0]);
-		float limit = CoverRadius();
-		float step = COVER_SPACING * lap;
-
-		vector placed = PlaceSpread(spot, side, step, limit);
-		if (FlatDistance(placed, spot) >= COVER_SPACING * 0.75)
-			return placed;
-
-		placed = PlaceSpread(spot, side * -1, step, limit);
-		if (FlatDistance(placed, spot) >= COVER_SPACING * 0.75)
-			return placed;
-
-		float angle = (Math.PI2 * lap) / 8;
-		vector dir = (side * Math.Sin(angle)) + (flat * Math.Cos(angle));
-		float reach = step + COVER_SPACING;
-		if (reach > limit)
-			reach = limit;
-
-		placed = OnNavmesh(m_vTarget + (dir * reach));
-		placed[1] = spot[1];
-		if (
-			FlatDistance(placed, m_vTarget) <= limit &&
-			FlatDistance(placed, spot) >= COVER_SPACING * 0.75
-		)
-			return placed;
-
-		return spot;
-	}
-
-	protected vector PlaceSpread(vector spot, vector side, float step, float limit)
-	{
-		vector shifted = spot + (side * step);
-		shifted[1] = spot[1];
-
-		if (FlatDistance(shifted, m_vTarget) > limit)
-		{
-			vector fromPoint = shifted - m_vTarget;
-			fromPoint[1] = 0;
-			if (fromPoint.Length() < 0.2)
-				return spot;
-
-			fromPoint.Normalize();
-			shifted = m_vTarget + (fromPoint * limit);
-			shifted[1] = spot[1];
-		}
-
-		vector placed = OnNavmesh(shifted);
-		if (FlatDistance(placed, m_vTarget) > limit)
-			return spot;
-
-		return placed;
-	}
 
 	protected bool RunnerIsLive()
 	{
@@ -4041,16 +3666,12 @@ class KK_AttackActivity : SCR_AIActivityBase
 		m_Released.Clear();
 		m_mReturnAt.Clear();
 		m_mCoverAt.Clear();
-		m_aPointCovers.Clear();
-		m_bPointCovers = false;
-		m_mCoverSlot.Clear();
 		m_mCoverHold.Clear();
 		m_mContactCover.Clear();
 		m_mContactWall.Clear();
 		m_mContactOrder.Clear();
 		m_WasContact.Clear();
 		m_mRegroupAt.Clear();
-		m_iCoverAssign = 0;
 		m_bCoverFought = false;
 		m_fFightClearSince = 0;
 

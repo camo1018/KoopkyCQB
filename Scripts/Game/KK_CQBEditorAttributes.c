@@ -85,6 +85,7 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 37: return mode.KK_GetTakeCoverReturn();
 			case 47: return mode.KK_GetCoverRotate();
 			case 48: return mode.KK_GetCoverRadius();
+			case 62: return mode.KK_GetCoverRotateGap();
 			case 50: return mode.KK_GetAttackEngageInitial();
 			case 51: return mode.KK_GetAttackEngageInterval();
 			case 52: return mode.KK_GetAttackEngageRepeat();
@@ -143,6 +144,7 @@ class KK_CQBFloatEditorAttribute : SCR_BaseValueListEditorAttribute
 			case 37: mode.KK_SetTakeCoverReturn(value); break;
 			case 47: mode.KK_SetCoverRotate(value); break;
 			case 48: mode.KK_SetCoverRadius(value); break;
+			case 62: mode.KK_SetCoverRotateGap(value); break;
 			case 50: mode.KK_SetAttackEngageInitial(value); break;
 			case 51: mode.KK_SetAttackEngageInterval(value); break;
 			case 52: mode.KK_SetAttackEngageRepeat(value); break;
@@ -549,6 +551,8 @@ class KK_CQBAttrCoverHandoff : KK_CQBFloatEditorAttribute {}
 class KK_CQBAttrCoverRotate : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrCoverRadius : KK_CQBFloatEditorAttribute {}
+[BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
+class KK_CQBAttrCoverRotateGap : KK_CQBFloatEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]
 class KK_CQBAttrAttackEngage : KK_CQBBoolEditorAttribute {}
 [BaseContainerProps(), SCR_BaseEditorAttributeCustomTitle()]

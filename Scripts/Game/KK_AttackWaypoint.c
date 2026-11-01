@@ -35,6 +35,9 @@ class KK_AttackWaypoint : SCR_AIWaypoint
 	[Attribute("25", UIWidgets.EditBox, "How far from the point he looks for cover (m).")]
 	protected float m_fCoverRadius;
 
+	[Attribute("6", UIWidgets.EditBox, "How far he must move from the cover he leaves when he rotates (m). 0 lets him pick the same spot.")]
+	protected float m_fCoverRotateGap;
+
 	protected bool m_bReplaced;
 
 	KK_EAttackPace GetPace()
@@ -91,6 +94,11 @@ class KK_AttackWaypoint : SCR_AIWaypoint
 		return Math.Max(m_fCoverRadius, 5);
 	}
 
+	float GetCoverRotateGap()
+	{
+		return Math.Max(m_fCoverRotateGap, 0);
+	}
+
 	void ApplyScenarioSettings()
 	{
 		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
@@ -104,6 +112,7 @@ class KK_AttackWaypoint : SCR_AIWaypoint
 		m_fArrivalRadius = mode.KK_GetAttackArrivalRadius();
 		m_fCoverRotate = mode.KK_GetCoverRotate();
 		m_fCoverRadius = mode.KK_GetCoverRadius();
+		m_fCoverRotateGap = mode.KK_GetCoverRotateGap();
 	}
 
 	void MarkReplaced()
