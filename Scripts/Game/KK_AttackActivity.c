@@ -2353,7 +2353,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 	// keeps its own plant and does not come through here.
 	protected bool SoldierContact(AIAgent agent)
 	{
-		if (!agent || IsTakeCover())
+		if (!agent || IsTakeCover() || !KK_GarrisonHold.AttackEngageEnabled())
 			return false;
 
 		if (HasCombatTarget(agent))
@@ -2995,7 +2995,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 						m_mReturnAt.Remove(agent);
 						if (fight)
 						{
-							if (!IsTakeCover())
+							if (!IsTakeCover() && KK_GarrisonHold.AttackEngageEnabled())
 							{
 								m_Released.RemoveItem(agent);
 								HoldContactCover(agent, now);
@@ -3010,7 +3010,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 					}
 					else if (fight)
 					{
-						if (!IsTakeCover())
+						if (!IsTakeCover() && KK_GarrisonHold.AttackEngageEnabled())
 						{
 							m_Released.RemoveItem(agent);
 							HoldContactCover(agent, now);
@@ -3045,13 +3045,18 @@ class KK_AttackActivity : SCR_AIActivityBase
 				// freeze them there.
 				if (fight)
 				{
-					if (!IsTakeCover() && HoldContactCover(agent, now))
-						continue;
-
-					if (IsTakeCover())
+					// Engage off is the base attack. It owns the fight, including
+					// a man who has no contact of his own while the squad does.
+					if (KK_GarrisonHold.AttackEngageEnabled())
 					{
-						SeekPointCover(agent, pair, now);
-						continue;
+						if (!IsTakeCover() && HoldContactCover(agent, now))
+							continue;
+
+						if (IsTakeCover())
+						{
+							SeekPointCover(agent, pair, now);
+							continue;
+						}
 					}
 
 					YieldSoldier(agent);
@@ -3304,7 +3309,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 	// An open ring slot has nothing to lean around.
 	protected void LeanAtPoint(IEntity body)
 	{
-		if (!body)
+		if (!body || !KK_GarrisonHold.AttackEngageEnabled())
 			return;
 
 		vector toward;

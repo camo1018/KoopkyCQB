@@ -6271,7 +6271,7 @@ class KK_GarrisonHold
 			s_LaneBlockedAt.Set(body, WorldTime());
 	}
 
-	protected static bool AttackEngageEnabled()
+	static bool AttackEngageEnabled()
 	{
 		SCR_BaseGameMode mode = SCR_BaseGameMode.Get();
 		if (!mode)
