@@ -43,6 +43,8 @@ class KK_AttackMover
 	float m_fProgressBoost;
 	// This step is the one on the point. He holds his own lane there.
 	bool m_bFinal;
+	// Waiting because the next step would leave an engaging pair behind.
+	bool m_bDeviationHold;
 
 	void KK_AttackMover()
 	{
@@ -353,16 +355,21 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (ServingTreatment(agent))
 			return;
 
-		if (HoldContactCover(agent, now))
-			return;
-
-		if (SquadHasContact())
+		// Only this pair. Another pair in the fight does not stop his step.
+		if (PairEngaging(pair))
 		{
-			UseCoverHold(agent, now);
+			if (!HoldContactCover(agent, now))
+				UseCoverHold(agent, now);
 			return;
 		}
 
+		HoldContactCover(agent, now);
+		DropPairCover(agent);
+
 		if (pair.m_bRegroup)
+			return;
+
+		if (DeviationHolds(agent, mover))
 			return;
 
 		if (mover.m_bArrived)
@@ -451,6 +458,14 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (!body)
 			return;
 
+		if (mover.m_bDeviationHold)
+		{
+			if (BeyondHeld(body.GetOrigin()))
+				return;
+
+			mover.m_bDeviationHold = false;
+		}
+
 		KK_GarrisonHold.SetPinned(body, false);
 		KK_GarrisonHold.SetReturnFire(agent, false);
 		mover.m_bPaused = false;
@@ -465,6 +480,15 @@ class KK_AttackActivity : SCR_AIActivityBase
 			mover.m_fProgressBoost = mover.m_fProgressBoost + StepLength();
 			mover.m_vGoal = PlanGoal(from, mover.m_fProgressBoost, pair.m_iIndex, body);
 		}
+
+		vector stepped = mover.m_vGoal;
+		if (!ClampStep(from, stepped))
+		{
+			DeviationStop(agent, mover);
+			return;
+		}
+
+		mover.m_vGoal = stepped;
 
 		mover.m_bFinal = m_bLastPlanFinal;
 
@@ -485,6 +509,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 	{
 		IEntity body = agent.GetControlledEntity();
 		if (!body)
+			return;
+
+		if (DeviationHolds(agent, mover))
 			return;
 
 		if (EngagePlantHolds(agent))
@@ -729,12 +756,31 @@ class KK_AttackActivity : SCR_AIActivityBase
 	{
 		if (!RunnerIsLive())
 		{
-			int next = NextRunner(m_iRunner);
-			if (next < 0)
-				return;
-
-			m_iRunner = next;
+			int next = NextBoundRunner(m_iRunner);
+			if (next >= 0)
+				m_iRunner = next;
 		}
+
+		// Every pair is engaging. Nobody bounds until one of them is clear.
+		if (EngagingPairsHold(now))
+			return;
+
+		// The runner is already as far ahead as the gap allows. A pair
+		// still short of that line takes the bound. If none is, they wait.
+		if (!IsTakeCover() && PairBeyondHeld(PairAt(m_iRunner)))
+		{
+			int closer = NextFreeRunner(m_iRunner);
+			if (closer >= 0)
+				m_iRunner = closer;
+			else
+			{
+				HoldGap(now);
+				return;
+			}
+		}
+
+		if (!RunnerIsLive())
+			return;
 
 		foreach (KK_AttackPair pair : m_aPairs)
 		{
@@ -743,6 +789,15 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 			if (pair.m_iIndex == m_iRunner)
 				continue;
+
+			if (!IsTakeCover() && PairEngaging(pair))
+			{
+				HoldEngagingPair(pair, now);
+				continue;
+			}
+
+			if (!IsTakeCover())
+				ReleaseEngagingPair(pair);
 
 			if (FormPair(pair, now))
 				continue;
@@ -753,27 +808,6 @@ class KK_AttackActivity : SCR_AIActivityBase
 				continue;
 			}
 
-			if (SquadHasContact())
-			{
-				foreach (AIAgent agent : pair.m_aAgents)
-				{
-					if (!agent || !agent.GetControlledEntity() || IsReleased(agent))
-						continue;
-
-					if (ServingTreatment(agent))
-						continue;
-
-					ReleaseCoverHold(agent);
-
-					if (HoldContactCover(agent, now))
-						continue;
-
-					UseCoverHold(agent, now);
-				}
-
-				continue;
-			}
-
 			HoldForOverwatch(pair, now);
 			LookDownLane(pair);
 		}
@@ -781,6 +815,15 @@ class KK_AttackActivity : SCR_AIActivityBase
 		KK_AttackPair runner = PairAt(m_iRunner);
 		if (!runner)
 			return;
+
+		if (!IsTakeCover() && PairEngaging(runner))
+		{
+			HoldEngagingPair(runner, now);
+			return;
+		}
+
+		if (!IsTakeCover())
+			ReleaseEngagingPair(runner);
 
 		if (FormPair(runner, now))
 			return;
@@ -796,7 +839,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 			}
 
 			runner.m_bPaused = false;
-			int nextRunner = NextRunner(m_iRunner);
+			int nextRunner = NextBoundRunner(m_iRunner);
 			if (nextRunner >= 0)
 			{
 				m_iRunner = nextRunner;
@@ -830,7 +873,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 				return;
 			}
 
-			int next = NextRunner(m_iRunner);
+			int next = NextBoundRunner(m_iRunner);
 			if (next >= 0)
 			{
 				m_iRunner = next;
@@ -866,6 +909,16 @@ class KK_AttackActivity : SCR_AIActivityBase
 		}
 
 		if (!pair)
+			return;
+
+		if (PairEngaging(pair))
+		{
+			HoldEngagingPair(pair, now);
+			return;
+		}
+
+		ReleaseEngagingPair(pair);
+		if (FormPair(pair, now))
 			return;
 
 		if (pair.m_bArrived)
@@ -1394,14 +1447,15 @@ class KK_AttackActivity : SCR_AIActivityBase
 			if (ServingTreatment(agent))
 				continue;
 
-			if (HoldContactCover(agent, now))
-				continue;
-
-			if (SquadHasContact())
+			if (PairEngaging(pair))
 			{
-				UseCoverHold(agent, now);
+				if (!HoldContactCover(agent, now))
+					UseCoverHold(agent, now);
 				continue;
 			}
+
+			HoldContactCover(agent, now);
+			DropPairCover(agent);
 
 			// A new order, a stance change, or a look snap drops him off
 			// the wall onto the side he climbed from.
@@ -2076,8 +2130,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (arrived == fighters)
 			return true;
 
-		// Advance and bound stop the leapfrog while someone is in contact.
-		// He is walking to cover or fighting from it, not finishing the step.
+		// This pair is engaging, so the bound does not finish under them.
+		// Another pair's fight does not hold this handoff.
 		if (!IsTakeCover())
 		{
 			foreach (AIAgent agent : pair.m_aAgents)
@@ -2406,26 +2460,272 @@ class KK_AttackActivity : SCR_AIActivityBase
 		return KK_GarrisonHold.EngageContactOpen(agent);
 	}
 
-	// Any advance or bound man in contact. Take cover never counts.
-	// The rest of the squad takes cover with him.
-	protected bool SquadHasContact()
+	// Someone in this pair is engaging. The other pairs keep their lanes.
+	protected bool PairEngaging(KK_AttackPair pair)
+	{
+		if (!pair)
+			return false;
+
+		foreach (AIAgent agent : pair.m_aAgents)
+		{
+			if (SoldierContact(agent))
+				return true;
+		}
+
+		return false;
+	}
+
+	// True when every pair still short of the point is engaging. They hold.
+	// A pair that is clear is handed the bound instead.
+	protected bool EngagingPairsHold(float now)
 	{
 		if (IsTakeCover() || !KK_GarrisonHold.AttackEngageEnabled())
 			return false;
 
+		bool any = false;
+
 		foreach (KK_AttackPair pair : m_aPairs)
 		{
-			if (!pair)
+			if (!pair || !PairAlive(pair) || PairAtTarget(pair))
 				continue;
 
-			foreach (AIAgent agent : pair.m_aAgents)
+			any = true;
+			if (PairEngaging(pair))
+				continue;
+
+			KK_AttackPair current = PairAt(m_iRunner);
+			if (!current || !PairAlive(current) || PairAtTarget(current) || PairEngaging(current))
 			{
-				if (SoldierContact(agent))
-					return true;
+				int free = NextFreeRunner(m_iRunner);
+				if (free >= 0)
+					m_iRunner = free;
 			}
+
+			return false;
 		}
 
-		return false;
+		if (!any)
+			return false;
+
+		foreach (KK_AttackPair pair : m_aPairs)
+		{
+			if (!pair || !PairAlive(pair) || PairAtTarget(pair))
+				continue;
+
+			HoldEngagingPair(pair, now);
+		}
+
+		return true;
+	}
+
+	protected void HoldEngagingPair(notnull KK_AttackPair pair, float now)
+	{
+		foreach (AIAgent agent : pair.m_aAgents)
+		{
+			if (!agent || !agent.GetControlledEntity() || IsReleased(agent))
+				continue;
+
+			if (ServingTreatment(agent))
+				continue;
+
+			ReleaseCoverHold(agent);
+			if (HoldContactCover(agent, now))
+				continue;
+
+			UseCoverHold(agent, now);
+		}
+	}
+
+	// The pair stopped engaging. Drop the cover plant once.
+	protected void ReleaseEngagingPair(notnull KK_AttackPair pair)
+	{
+		foreach (AIAgent agent : pair.m_aAgents)
+		{
+			HoldContactCover(agent, 0);
+			DropPairCover(agent);
+		}
+	}
+
+	protected void DropPairCover(AIAgent agent)
+	{
+		if (!agent || SoldierContact(agent) || !m_mContactCover.Contains(agent))
+			return;
+
+		m_mContactCover.Remove(agent);
+		m_mContactWall.Remove(agent);
+		m_mContactOrder.Remove(agent);
+		KK_GarrisonHold.LeanToward(agent, vector.Zero);
+		KK_AttackMover mover = MoverFor(agent);
+		mover.m_bHasGoal = false;
+		mover.m_bPaused = false;
+	}
+
+	// Along the push, the front of the rearmost pair that is engaging.
+	// No engaging pair means the gap is not in force.
+	protected bool HeldCap(out float cap)
+	{
+		cap = 0;
+		if (IsTakeCover() || !KK_GarrisonHold.AttackEngageEnabled())
+			return false;
+
+		vector axis = AdvanceAxis();
+		bool any = false;
+		float rear = 0;
+
+		foreach (KK_AttackPair pair : m_aPairs)
+		{
+			if (!PairEngaging(pair))
+				continue;
+
+			float front;
+			if (!PairFront(pair, axis, front))
+				continue;
+
+			if (!any || front < rear)
+				rear = front;
+
+			any = true;
+		}
+
+		if (!any)
+			return false;
+
+		cap = rear + DeviationLimit();
+		return true;
+	}
+
+	protected float DeviationLimit()
+	{
+		float gap = 40;
+		if (m_AttackWaypoint)
+			gap = m_AttackWaypoint.GetPairGap();
+
+		return Math.Max(gap, StepLength());
+	}
+
+	protected bool PairFront(notnull KK_AttackPair pair, vector axis, out float front)
+	{
+		front = 0;
+		bool any = false;
+
+		foreach (AIAgent agent : pair.m_aAgents)
+		{
+			if (!CanFight(agent) || !agent.GetControlledEntity())
+				continue;
+
+			float along = vector.Dot(agent.GetControlledEntity().GetOrigin() - m_vOrigin, axis);
+			if (!any || along > front)
+				front = along;
+
+			any = true;
+		}
+
+		return any;
+	}
+
+	protected bool BeyondHeld(vector position)
+	{
+		float cap;
+		if (!HeldCap(cap))
+			return false;
+
+		vector axis = AdvanceAxis();
+		return vector.Dot(position - m_vOrigin, axis) >= cap - STEP_REACH;
+	}
+
+	// True when every man who can still fight is already at the gap.
+	protected bool PairBeyondHeld(KK_AttackPair pair)
+	{
+		if (!pair)
+			return false;
+
+		bool any = false;
+
+		foreach (AIAgent agent : pair.m_aAgents)
+		{
+			if (!CanFight(agent) || !agent.GetControlledEntity())
+				continue;
+
+			any = true;
+			if (!BeyondHeld(agent.GetControlledEntity().GetOrigin()))
+				return false;
+		}
+
+		return any;
+	}
+
+	// Pull a step back onto the gap. False when he is already there.
+	protected bool ClampStep(vector from, out vector goal)
+	{
+		float cap;
+		if (!HeldCap(cap))
+			return true;
+
+		vector axis;
+		vector right;
+		if (!BuildAxis(axis, right))
+			return true;
+
+		float goalAlong = vector.Dot(goal - m_vOrigin, axis);
+		if (goalAlong > cap)
+			goal = goal + (axis * (cap - goalAlong));
+
+		if (vector.Dot(from - m_vOrigin, axis) >= cap - STEP_REACH)
+			return false;
+
+		return FlatDistance(from, goal) > STEP_REACH;
+	}
+
+	protected bool DeviationHolds(notnull AIAgent agent, notnull KK_AttackMover mover)
+	{
+		IEntity body = agent.GetControlledEntity();
+		if (!body)
+			return false;
+
+		if (!BeyondHeld(body.GetOrigin()))
+		{
+			if (mover.m_bDeviationHold)
+			{
+				mover.m_bDeviationHold = false;
+				mover.m_bPaused = false;
+				mover.m_bHasGoal = false;
+			}
+
+			return false;
+		}
+
+		DeviationStop(agent, mover);
+		return true;
+	}
+
+	protected void DeviationStop(notnull AIAgent agent, notnull KK_AttackMover mover)
+	{
+		if (mover.m_bDeviationHold)
+			return;
+
+		StopAdvanceAgent(agent);
+		mover.m_bDeviationHold = true;
+		mover.m_bHasGoal = false;
+		mover.m_bPaused = true;
+	}
+
+	// Engaging pairs keep the fight. Pairs at the gap wait on their lane.
+	protected void HoldGap(float now)
+	{
+		foreach (KK_AttackPair pair : m_aPairs)
+		{
+			if (!pair || !PairAlive(pair) || PairAtTarget(pair))
+				continue;
+
+			if (PairEngaging(pair))
+			{
+				HoldEngagingPair(pair, now);
+				continue;
+			}
+
+			HoldForOverwatch(pair, now);
+			LookDownLane(pair);
+		}
 	}
 
 	// Advance and bound. While he has contact, the waypoint step waits.
@@ -3422,6 +3722,52 @@ class KK_AttackActivity : SCR_AIActivityBase
 		}
 
 		return -1;
+	}
+
+	// While some pair is engaging, the sprint stays with a pair that is not.
+	protected int NextBoundRunner(int from)
+	{
+		if (IsTakeCover() || !KK_GarrisonHold.AttackEngageEnabled() || !AnyIdlePair())
+			return NextRunner(from);
+
+		return NextFreeRunner(from);
+	}
+
+	protected int NextFreeRunner(int from)
+	{
+		int count = m_aPairs.Count();
+
+		for (int step = 1; step <= count; step++)
+		{
+			int index = Math.Mod(from + step, count);
+			KK_AttackPair pair = PairAt(index);
+			if (!pair || !PairAlive(pair) || PairAtTarget(pair))
+				continue;
+
+			if (PairEngaging(pair))
+				continue;
+
+			if (PairBeyondHeld(pair))
+				continue;
+
+			return index;
+		}
+
+		return -1;
+	}
+
+	protected bool AnyIdlePair()
+	{
+		foreach (KK_AttackPair pair : m_aPairs)
+		{
+			if (!pair || !PairAlive(pair) || PairAtTarget(pair))
+				continue;
+
+			if (!PairEngaging(pair))
+				return true;
+		}
+
+		return false;
 	}
 
 	protected int LivePairCount()

@@ -9800,7 +9800,7 @@ class KK_GarrisonHold
 	// Along the wall, toward the side that is open one step away. towardWall
 	// points from him at the wall. A side that is still wall is not a corner.
 	// interest is only used when both sides are open, like a post.
-	// No trace toward the threat.
+	// A clear 5 m in the look direction means this cover is not in the way.
 	static void LeanAlongWall(IEntity soldier, vector towardWall, vector interest)
 	{
 		IEntity body = CharacterBody(soldier);
@@ -9825,6 +9825,14 @@ class KK_GarrisonHold
 			return;
 		}
 
+		// Best effort. Blocked by the cover in front of him, he leans to the
+		// open side. The lean is not checked again.
+		if (!CoverAheadBlocked(body, interest))
+		{
+			RememberLean(body, 0);
+			return;
+		}
+
 		if (leftOpen && rightOpen)
 		{
 			vector to = interest - body.GetOrigin();
@@ -9844,6 +9852,36 @@ class KK_GarrisonHold
 			lean = -1;
 
 		RememberLean(body, lean);
+	}
+
+	// Five metres along the look. A hit is this cover in his face. A man
+	// standing there is not cover. Farther than that is the next obstacle.
+	protected static bool CoverAheadBlocked(IEntity body, vector interest)
+	{
+		BaseWorld world = GetGame().GetWorld();
+		if (!world)
+			world = body.GetWorld();
+		if (!world)
+			return false;
+
+		vector flat = interest - body.GetOrigin();
+		flat[1] = 0;
+		if (flat.Length() < 0.5)
+			return false;
+
+		flat.Normalize();
+		vector eye = body.GetOrigin() + Vector(0, 1.6, 0);
+
+		if (!s_ReloadCoverTrace)
+			s_ReloadCoverTrace = new TraceParam();
+
+		s_ReloadCoverTrace.Flags = TraceFlags.ENTS | TraceFlags.WORLD;
+		s_ReloadCoverTrace.Start = eye;
+		s_ReloadCoverTrace.End = eye + (flat * 5);
+		s_ReloadCoverTrace.Exclude = body;
+		s_ReloadCoverTrace.TraceEnt = null;
+		float fraction = world.TraceMove(s_ReloadCoverTrace, FilterReloadCover);
+		return fraction < 0.98;
 	}
 
 	// The spot one step along the wall. A hit means the wall is still there,

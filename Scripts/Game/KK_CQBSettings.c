@@ -131,6 +131,9 @@ modded class SCR_BaseGameMode
 	[Attribute("20", UIWidgets.EditBox, "Distance of one attack step (m)", category: "Koopky CQB/Attack")]
 	protected float m_fKK_AttackStepLength;
 
+	[Attribute("40", UIWidgets.EditBox, "How far a pair that is not engaging may get ahead of a pair that is, along the push (m). A value shorter than one step is raised to one step, so a bound can finish.", category: "Koopky CQB/Attack")]
+	protected float m_fKK_AttackPairGap;
+
 	[Attribute("2", UIWidgets.EditBox, "Seconds a pair holds after a step. Advance scans. Take cover lets the normal attack shoot. One pair and several pairs use the same pause. 0 goes straight on.", category: "Koopky CQB/Attack")]
 	protected float m_fKK_AttackPause;
 
@@ -428,6 +431,7 @@ modded class SCR_BaseGameMode
 		{
 			KK_ReadFloat(context, "LaneOffset", m_fKK_AttackLaneOffset);
 			KK_ReadFloat(context, "StepLength", m_fKK_AttackStepLength);
+			KK_ReadFloat(context, "PairGap", m_fKK_AttackPairGap);
 			KK_ReadFloat(context, "Pause", m_fKK_AttackPause);
 			KK_ReadFloat(context, "CoverHandoff", m_fKK_CoverHandoff);
 			KK_ReadBool(context, "AttackEngage", m_bKK_AttackEngage);
@@ -646,6 +650,7 @@ modded class SCR_BaseGameMode
 		context.StartObject("Attack");
 		context.WriteValue("LaneOffset", m_fKK_AttackLaneOffset);
 		context.WriteValue("StepLength", m_fKK_AttackStepLength);
+		context.WriteValue("PairGap", m_fKK_AttackPairGap);
 		context.WriteValue("Pause", m_fKK_AttackPause);
 		context.WriteValue("CoverHandoff", m_fKK_CoverHandoff);
 		context.WriteValue("AttackEngage", m_bKK_AttackEngage);
@@ -819,6 +824,11 @@ modded class SCR_BaseGameMode
 	float KK_GetAttackStepLength()
 	{
 		return Math.Max(m_fKK_AttackStepLength, 8);
+	}
+
+	float KK_GetAttackPairGap()
+	{
+		return Math.Max(m_fKK_AttackPairGap, 8);
 	}
 
 	float KK_GetAttackPause()
@@ -1205,6 +1215,7 @@ modded class SCR_BaseGameMode
 	}
 	void KK_SetAttackLaneOffset(float value) { m_fKK_AttackLaneOffset = value; }
 	void KK_SetAttackStepLength(float value) { m_fKK_AttackStepLength = value; }
+	void KK_SetAttackPairGap(float value) { m_fKK_AttackPairGap = value; }
 	void KK_SetAttackPause(float value) { m_fKK_AttackPause = value; }
 	void KK_SetCoverHandoff(float value) { m_fKK_CoverHandoff = value; }
 	void KK_SetAttackEngage(bool value) { m_bKK_AttackEngage = value; }

@@ -17,6 +17,9 @@ class KK_AttackWaypoint : SCR_AIWaypoint
 	[Attribute("20", UIWidgets.EditBox, "Distance of one bound (m)")]
 	protected float m_fStepLength;
 
+	[Attribute("40", UIWidgets.EditBox, "How far a pair that is not engaging may get ahead of a pair that is (m).")]
+	protected float m_fPairGap;
+
 	[Attribute("2", UIWidgets.EditBox, "Seconds to hold after a step. 0 goes straight on.")]
 	protected float m_fPause;
 
@@ -64,6 +67,11 @@ class KK_AttackWaypoint : SCR_AIWaypoint
 		return Math.Max(m_fStepLength, 8);
 	}
 
+	float GetPairGap()
+	{
+		return Math.Max(m_fPairGap, 8);
+	}
+
 	float GetPause()
 	{
 		return Math.Max(m_fPause, 0);
@@ -106,6 +114,7 @@ class KK_AttackWaypoint : SCR_AIWaypoint
 			return;
 
 		m_fStepLength = mode.KK_GetAttackStepLength();
+		m_fPairGap = mode.KK_GetAttackPairGap();
 		m_fPause = mode.KK_GetAttackPause();
 		m_fCoverHandoff = mode.KK_GetCoverHandoff();
 		m_fLaneOffset = mode.KK_GetAttackLaneOffset();
