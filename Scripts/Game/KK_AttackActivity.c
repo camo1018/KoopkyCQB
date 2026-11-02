@@ -18,6 +18,9 @@ class KK_AttackPair
 	float m_fProgressBoost;
 	// Contact ended. The lead waits. The pair forms on him before the next step.
 	bool m_bRegroup;
+	// This pair was engaging. The resume clock runs once that stops.
+	bool m_bWasEngaging;
+	float m_fResumeAt;
 
 	void KK_AttackPair()
 	{
@@ -322,6 +325,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 		// Leapfrog may have pinned a soldier who arrived ahead of his partner.
 		// This path moves every soldier, so that pin has to come off.
 		ReleaseSettled();
+		NotePairResume(now);
 
 		foreach (KK_AttackPair forming : m_aPairs)
 			FormPair(forming, now);
@@ -356,10 +360,17 @@ class KK_AttackActivity : SCR_AIActivityBase
 			return;
 
 		// Only this pair. Another pair in the fight does not stop his step.
+		// After his own fight he waits out the resume time before the step.
 		if (PairEngaging(pair))
 		{
 			if (!HoldContactCover(agent, now))
 				UseCoverHold(agent, now);
+			return;
+		}
+
+		if (PairResumeWait(pair))
+		{
+			UseCoverHold(agent, now);
 			return;
 		}
 
@@ -754,6 +765,8 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 	protected void UpdateBound(float now)
 	{
+		NotePairResume(now);
+
 		if (!RunnerIsLive())
 		{
 			int next = NextBoundRunner(m_iRunner);
@@ -796,6 +809,12 @@ class KK_AttackActivity : SCR_AIActivityBase
 				continue;
 			}
 
+			if (!IsTakeCover() && PairResumeWait(pair))
+			{
+				HoldResumePair(pair, now);
+				continue;
+			}
+
 			if (!IsTakeCover())
 				ReleaseEngagingPair(pair);
 
@@ -819,6 +838,12 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (!IsTakeCover() && PairEngaging(runner))
 		{
 			HoldEngagingPair(runner, now);
+			return;
+		}
+
+		if (!IsTakeCover() && PairResumeWait(runner))
+		{
+			HoldResumePair(runner, now);
 			return;
 		}
 
@@ -911,9 +936,17 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (!pair)
 			return;
 
+		NotePairResume(now);
+
 		if (PairEngaging(pair))
 		{
 			HoldEngagingPair(pair, now);
+			return;
+		}
+
+		if (PairResumeWait(pair))
+		{
+			HoldResumePair(pair, now);
 			return;
 		}
 
@@ -1451,6 +1484,12 @@ class KK_AttackActivity : SCR_AIActivityBase
 			{
 				if (!HoldContactCover(agent, now))
 					UseCoverHold(agent, now);
+				continue;
+			}
+
+			if (PairResumeWait(pair))
+			{
+				UseCoverHold(agent, now);
 				continue;
 			}
 
@@ -2475,6 +2514,81 @@ class KK_AttackActivity : SCR_AIActivityBase
 		return false;
 	}
 
+	// Engaging, or still inside the pause after that fight ended.
+	protected bool PairStays(KK_AttackPair pair)
+	{
+		return PairEngaging(pair) || PairResumeWait(pair);
+	}
+
+	protected bool PairResumeWait(KK_AttackPair pair)
+	{
+		return pair && pair.m_bWasEngaging && pair.m_fResumeAt > 0;
+	}
+
+	// Starts the resume clock on the frame a pair stops engaging.
+	// A pair that was never in the fight is not held.
+	protected void NotePairResume(float now)
+	{
+		if (IsTakeCover() || !KK_GarrisonHold.AttackEngageEnabled())
+			return;
+
+		float wait = ResumeMs();
+
+		foreach (KK_AttackPair pair : m_aPairs)
+		{
+			if (!pair)
+				continue;
+
+			if (PairEngaging(pair))
+			{
+				pair.m_bWasEngaging = true;
+				pair.m_fResumeAt = 0;
+				continue;
+			}
+
+			if (!pair.m_bWasEngaging)
+				continue;
+
+			if (wait <= 0)
+			{
+				pair.m_bWasEngaging = false;
+				pair.m_fResumeAt = 0;
+				continue;
+			}
+
+			if (pair.m_fResumeAt <= 0)
+				pair.m_fResumeAt = now;
+
+			if (now - pair.m_fResumeAt >= wait)
+			{
+				pair.m_bWasEngaging = false;
+				pair.m_fResumeAt = 0;
+			}
+		}
+	}
+
+	protected float ResumeMs()
+	{
+		if (!m_AttackWaypoint)
+			return 2000;
+
+		return m_AttackWaypoint.GetPairResume() * 1000;
+	}
+
+	protected void HoldResumePair(notnull KK_AttackPair pair, float now)
+	{
+		foreach (AIAgent agent : pair.m_aAgents)
+		{
+			if (!agent || !agent.GetControlledEntity() || IsReleased(agent))
+				continue;
+
+			if (ServingTreatment(agent))
+				continue;
+
+			UseCoverHold(agent, now);
+		}
+	}
+
 	// True when every pair still short of the point is engaging. They hold.
 	// A pair that is clear is handed the bound instead.
 	protected bool EngagingPairsHold(float now)
@@ -2490,11 +2604,11 @@ class KK_AttackActivity : SCR_AIActivityBase
 				continue;
 
 			any = true;
-			if (PairEngaging(pair))
+			if (PairStays(pair))
 				continue;
 
 			KK_AttackPair current = PairAt(m_iRunner);
-			if (!current || !PairAlive(current) || PairAtTarget(current) || PairEngaging(current))
+			if (!current || !PairAlive(current) || PairAtTarget(current) || PairStays(current))
 			{
 				int free = NextFreeRunner(m_iRunner);
 				if (free >= 0)
@@ -3744,7 +3858,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 			if (!pair || !PairAlive(pair) || PairAtTarget(pair))
 				continue;
 
-			if (PairEngaging(pair))
+			if (PairEngaging(pair) || PairResumeWait(pair))
 				continue;
 
 			if (PairBeyondHeld(pair))
