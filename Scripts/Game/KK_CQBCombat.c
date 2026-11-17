@@ -4125,14 +4125,12 @@ class KK_GarrisonHold
 		// Attack engage waits until the rifle reports up. A clear or a
 		// garrison already decided this shot, and holding the trigger off
 		// for that report is what kept snap fire from leaving the barrel.
-		if (IsAttackSearch(body))
-		{
-			if (fire)
-				MakeWeaponReady(body);
+		// Low ready still has to come off, or the round leaves a lowered rifle.
+		if (fire)
+			MakeWeaponReady(body);
 
-			if (fire && (!WeaponIsRaised(body) || !WeaponCanAcceptFire(body)))
-				fire = false;
-		}
+		if (IsAttackSearch(body) && fire && (!WeaponIsRaised(body) || !WeaponCanAcceptFire(body)))
+			fire = false;
 
 		bool wasFiring = s_MoveFiring.Contains(body);
 		if (fire)
