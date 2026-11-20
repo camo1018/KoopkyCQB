@@ -90,6 +90,9 @@ class KK_AttackActivity : SCR_AIActivityBase
 	protected ref set<AIAgent> m_WasContact = new set<AIAgent>();
 	protected ref map<AIAgent, float> m_mRegroupAt = new map<AIAgent, float>();
 	protected ref map<AIAgent, float> m_mCoverHold = new map<AIAgent, float>();
+	// When this man's contact started, if he is the one who returns fire.
+	// The rest of the pair do not get a stamp and go straight to cover.
+	protected ref map<AIAgent, float> m_mReturnFireSince = new map<AIAgent, float>();
 	protected bool m_bSkipCover;
 	protected vector m_vSkipCover;
 	protected bool m_bCoverFought;
@@ -128,6 +131,10 @@ class KK_AttackActivity : SCR_AIActivityBase
 	// Close enough to the cover spot to plant. Looser than this and he
 	// stops short of the wall and stands in the open.
 	protected static const float COVER_REACH = 1.25;
+	// How long the designated man shoots in the open before he runs for cover.
+	protected static const float RETURN_FIRE_MS = 1200;
+	// Inside this, cover loses. He has to shoot.
+	protected static const float CLOSE_THREAT = 12;
 	// Men at the point stand this far apart. Closer than this and the
 	// squad stacks on one corner.
 	// After the last target drops, keep the attack in charge this long
@@ -2855,6 +2862,12 @@ class KK_AttackActivity : SCR_AIActivityBase
 				m_mContactCover.Remove(agent);
 				m_mContactWall.Remove(agent);
 				m_mContactOrder.Remove(agent);
+				m_mReturnFireSince.Remove(agent);
+				if (agent.GetControlledEntity())
+				{
+					KK_GarrisonHold.SetCoverScramble(agent.GetControlledEntity(), false);
+					KK_GarrisonHold.ReleaseEngageFeet(agent);
+				}
 				KK_GarrisonHold.LeanToward(agent, vector.Zero);
 				KK_AttackMover mover = MoverFor(agent);
 				mover.m_bHasGoal = false;
@@ -2905,6 +2918,10 @@ class KK_AttackActivity : SCR_AIActivityBase
 		}
 
 		bool planted = !have || FlatDistance(body.GetOrigin(), spot) <= COVER_REACH;
+		// In the open, cover outranks the attack unless he still owes a
+		// short burst or the enemy is on top of him. At the spot, the
+		// attack can have him again.
+		bool shootFirst = !planted && ShotBeforeCover(agent, body, now);
 		if (have && planted && CoverRotateDue(agent, now))
 		{
 			vector leftSpot = spot;
@@ -2948,6 +2965,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 			// A wall gets a crouch. Open ground gets prone, unless that
 			// low line cannot reach the threat and a standing one can.
+			KK_GarrisonHold.SetCoverScramble(body, false);
 			KK_GarrisonHold.SetCoverApproach(body, false);
 			KK_GarrisonHold.SetPinned(body, true);
 			if (have)
@@ -2971,6 +2989,18 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 		KK_GarrisonHold.LeanToward(body, vector.Zero);
 		m_mCoverHold.Remove(agent);
+
+		// He shoots where he stands for this pass. The attack stays above
+		// the cover order, and engage keeps his feet.
+		if (shootFirst)
+		{
+			KK_GarrisonHold.SetCoverScramble(body, false);
+			KK_GarrisonHold.SetCoverApproach(body, false);
+			KK_GarrisonHold.PlantForContact(body);
+			return true;
+		}
+
+		KK_GarrisonHold.SetCoverScramble(body, true);
 		KK_GarrisonHold.ReleaseEngageFeet(agent);
 		KK_GarrisonHold.SetPinned(body, false);
 		KK_GarrisonHold.SetCoverApproach(body, true);
@@ -2981,17 +3011,57 @@ class KK_AttackActivity : SCR_AIActivityBase
 		if (!due)
 			return true;
 
+		// Above the attack, so the run to the wall is the behavior.
 		KK_AgentMove.Issue(
 			this,
 			m_Group,
 			agent,
 			spot,
 			m_mSoloHandlers,
-			KK_AgentMove.PRIORITY_LEVEL,
+			KK_AgentMove.SprintPriorityLevel(),
 			EMovementType.RUN
 		);
 		ApplyWeaponForSpeed(agent, EMovementType.RUN);
 		m_mContactOrder.Set(agent, now);
+		return true;
+	}
+
+	// True while he should shoot before he moves. One man in the pair
+	// does that for a short beat after contact. Anyone does it when the
+	// enemy is close enough that running would be the worse choice.
+	protected bool ShotBeforeCover(AIAgent agent, IEntity body, float now)
+	{
+		if (!agent || !body)
+			return false;
+
+		vector threat;
+		if (ContactThreat(body, threat) && FlatDistance(body.GetOrigin(), threat) <= CLOSE_THREAT)
+			return true;
+
+		if (!IsReturnFireMan(agent))
+			return false;
+
+		if (!m_mReturnFireSince.Contains(agent))
+			m_mReturnFireSince.Set(agent, now);
+
+		return now - m_mReturnFireSince.Get(agent) < RETURN_FIRE_MS;
+	}
+
+	// The first man in the pair who can still fight. The others go to cover.
+	protected bool IsReturnFireMan(AIAgent agent)
+	{
+		KK_AttackPair pair = PairOf(agent);
+		if (!pair)
+			return true;
+
+		foreach (AIAgent other : pair.m_aAgents)
+		{
+			if (!CanFight(other))
+				continue;
+
+			return other == agent;
+		}
+
 		return true;
 	}
 
@@ -3476,6 +3546,13 @@ class KK_AttackActivity : SCR_AIActivityBase
 
 		if (m_mCoverHold.Contains(agent))
 			m_mCoverHold.Remove(agent);
+
+		m_mReturnFireSince.Remove(agent);
+		if (body)
+		{
+			KK_GarrisonHold.SetCoverScramble(body, false);
+			KK_GarrisonHold.ReleaseEngageFeet(agent);
+		}
 
 		ApplyWeaponForSpeed(agent, EMovementType.IDLE);
 		SetCrouch(agent, false);
@@ -4152,6 +4229,7 @@ class KK_AttackActivity : SCR_AIActivityBase
 		m_mReturnAt.Clear();
 		m_mCoverAt.Clear();
 		m_mCoverHold.Clear();
+		m_mReturnFireSince.Clear();
 		m_mContactCover.Clear();
 		m_mContactWall.Clear();
 		m_mContactOrder.Clear();

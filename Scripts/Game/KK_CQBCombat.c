@@ -894,10 +894,16 @@ class KK_GarrisonHold
 	protected static ref array<BaseTarget> s_EngageScan = new array<BaseTarget>();
 	// Feet locked for a forced engage stop. A cover pin is a different set.
 	protected static ref set<IEntity> s_EngageStop = new set<IEntity>();
+	// The attack order asked him to shoot before he moves. The engage
+	// timer must not put his speed back while this is set.
+	protected static ref set<IEntity> s_ContactPlant = new set<IEntity>();
 	// Walking to another cover at the point. The shot from this spot cannot
 	// reach the man who is shooting, so the engage stop stays off until he
 	// is planted or that lane opens.
 	protected static ref set<IEntity> s_CoverShift = new set<IEntity>();
+	// Running to contact cover. Engage does not plant him in the open.
+	// A clear lane does not end this. Reaching the spot does.
+	protected static ref set<IEntity> s_CoverScramble = new set<IEntity>();
 	// World time the projectile lane to that man first failed. Cleared when
 	// a round can get there, or when he leaves the spot.
 	protected static ref map<IEntity, float> s_LaneBlockedAt =
@@ -5438,6 +5444,8 @@ class KK_GarrisonHold
 		s_AttackGatherAt.Remove(body);
 		s_AttackGather.Remove(body);
 		s_CoverShift.RemoveItem(body);
+		s_CoverScramble.RemoveItem(body);
+		s_ContactPlant.RemoveItem(body);
 		s_LaneBlockedAt.Remove(body);
 		s_HitBy.Remove(body);
 		s_HitByKind.Remove(body);
@@ -5544,7 +5552,7 @@ class KK_GarrisonHold
 
 		if (EngageHoldActive(body, now))
 		{
-			SetEngageStop(body, !IsCoverShift(body));
+			SetEngageStop(body, !IsCoverShift(body) && !IsCoverScramble(body));
 			HoldEngageShot(body, enemy, aim);
 			return;
 		}
@@ -5554,12 +5562,13 @@ class KK_GarrisonHold
 		if (EngagePeriodicDue(body, now))
 		{
 			BeginEngageHold(body, now, EngageRepeatMs());
-			SetEngageStop(body, !IsCoverShift(body));
+			SetEngageStop(body, !IsCoverShift(body) && !IsCoverScramble(body));
 			HoldEngageShot(body, enemy, aim);
 			return;
 		}
 
-		SetEngageStop(body, false);
+		if (!s_ContactPlant.Contains(body))
+			SetEngageStop(body, false);
 
 		// A step that wants him moving owns the body until that plant.
 		// Writing the enemy look here lasts the whole contact, and the
@@ -6243,7 +6252,22 @@ class KK_GarrisonHold
 	// The cover walk at the point. Engage had locked his feet on the threat.
 	static void ReleaseEngageFeet(IEntity soldier)
 	{
-		SetEngageStop(CharacterBody(soldier), false);
+		IEntity body = CharacterBody(soldier);
+		if (body)
+			s_ContactPlant.RemoveItem(body);
+
+		SetEngageStop(body, false);
+	}
+
+	// Stand and shoot. Used when cover is the wrong move: the first
+	// return-fire beat, and an enemy who is already close.
+	static void PlantForContact(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (body)
+			s_ContactPlant.Insert(body);
+
+		SetEngageStop(body, true);
 	}
 
 	static void SetCoverShift(IEntity soldier, bool shifting)
@@ -6262,6 +6286,24 @@ class KK_GarrisonHold
 	{
 		IEntity body = CharacterBody(soldier);
 		return body && s_CoverShift.Contains(body);
+	}
+
+	static void SetCoverScramble(IEntity soldier, bool scrambling)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		if (scrambling)
+			s_CoverScramble.Insert(body);
+		else
+			s_CoverScramble.RemoveItem(body);
+	}
+
+	static bool IsCoverScramble(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		return body && s_CoverScramble.Contains(body);
 	}
 
 	// True once the shot at this spot has failed for that long. A clear
