@@ -211,6 +211,8 @@ class KK_AgentMove
 		if (!movement)
 			return;
 
+		KK_GarrisonHold.NoteOrderedSpeed(agent, movementType);
+
 		if (movement.GetMovementTypeWanted() == movementType)
 			return;
 

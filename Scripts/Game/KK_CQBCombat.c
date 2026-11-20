@@ -1452,12 +1452,47 @@ class KK_GarrisonHold
 		if (!body)
 			return;
 
+		s_OrderedSpeed.Remove(body);
+
 		AICharacterMovementComponent movement =
 			AICharacterMovementComponent.Cast(
 				body.FindComponent(AICharacterMovementComponent)
 			);
 		if (movement)
 			movement.SetMovementTypeWanted(EMovementType.RUN);
+	}
+
+	static void NoteOrderedSpeed(IEntity soldier, EMovementType movementType)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body)
+			return;
+
+		s_OrderedSpeed.Set(body, movementType);
+	}
+
+	// The speed node runs after the order and aims a live target into a walk.
+	// A stop, a bandage, and a sprint already own the feet.
+	static void RestoreOrderedSpeed(IEntity soldier)
+	{
+		IEntity body = CharacterBody(soldier);
+		if (!body || !s_OrderedSpeed.Contains(body) || !OnCqbOrder(body))
+			return;
+
+		if (HealingNow(body) || IsPinned(body) || IsEngageStopped(body) || IsBoundSprint(body))
+			return;
+
+		AICharacterMovementComponent movement = AICharacterMovementComponent.Cast(
+			body.FindComponent(AICharacterMovementComponent)
+		);
+		if (!movement)
+			return;
+
+		EMovementType ordered = s_OrderedSpeed.Get(body);
+		if (movement.GetMovementTypeWanted() == ordered)
+			return;
+
+		movement.SetMovementTypeWanted(ordered);
 	}
 
 	// A new clear or garrison. The last fight in this house is over unless
@@ -4210,6 +4245,10 @@ class KK_GarrisonHold
 	protected static ref set<IEntity> s_HealGestureSeen = new set<IEntity>();
 
 	protected static ref set<IEntity> s_HealFootLock = new set<IEntity>();
+
+	// Speed the order last asked for. The movement-speed node writes a walk
+	// onto any step that still has a target, after this was set.
+	protected static ref map<IEntity, EMovementType> s_OrderedSpeed = new map<IEntity, EMovementType>();
 
 	// No usable item. He is not held in the heal pose until this time.
 	protected static ref map<IEntity, float> s_HealEmptyUntil = new map<IEntity, float>();
@@ -15137,6 +15176,33 @@ modded class SCR_MuzzleEffectComponent
 		super.OnFired(effectEntity, muzzle, projectileEntity);
 		KK_GarrisonHold.LogSnapShot(effectEntity, muzzle, projectileEntity);
 		KK_GarrisonHold.QueueSnapShot(effectEntity, muzzle, projectileEntity);
+	}
+}
+
+// Runs after the order has set a speed. A target still on him turns that
+// step into a walk, rifle down, whether or not a leg is hurt.
+modded class SCR_AICharacterSetMovementSpeed
+{
+	override ENodeResult EOnTaskSimulate(AIAgent owner, float dt)
+	{
+		ENodeResult result = super.EOnTaskSimulate(owner, dt);
+
+		IEntity body;
+		if (owner)
+			body = owner.GetControlledEntity();
+
+		if (KK_GarrisonHold.HealingNow(body) || KK_GarrisonHold.HealingNow(owner))
+		{
+			IEntity healer = body;
+			if (!healer)
+				healer = owner;
+			KK_GarrisonHold.HoldForHeal(healer);
+			return result;
+		}
+
+		KK_GarrisonHold.RestoreOrderedSpeed(body);
+		KK_GarrisonHold.RestoreOrderedSpeed(owner);
+		return result;
 	}
 }
 
